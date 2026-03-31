@@ -17,12 +17,10 @@ def get_db(write: bool = False):
     if write:
         conn = sqlite3.connect(db_path, timeout=30)
     else:
-        conn = sqlite3.connect(
-            f"file:{db_path}?mode=ro",
-            timeout=30,
-            uri=True,
-        )
+        conn = sqlite3.connect(db_path, timeout=30)
     conn.row_factory = sqlite3.Row
+    if not write:
+        conn.execute("PRAGMA query_only = 1")
     try:
         yield conn
         if write:

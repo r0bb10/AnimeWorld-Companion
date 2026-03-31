@@ -10,6 +10,13 @@ from ..services.catalog_service import (
     build_show_snapshot,
 )
 from ..services.background_service import runtime_state, update_rss_cache
+from ..services.automap_service import (
+    automap_movie,
+    automap_show,
+    automap_status,
+    start_automap_all,
+    start_automap_all_movies,
+)
 from ..services.dashboard_service import build_dashboard_html, build_dashboard_snapshot
 from ..services.download_service import (
     build_download_snapshot,
@@ -125,6 +132,36 @@ def api_delete_show(show_id: int, _: str = Depends(require_api_key)) -> dict:
     return result
 
 
+@api_router.post("/automap", tags=["Automap"])
+def api_automap_all(force: bool = False, _: str = Depends(require_api_key)) -> dict:
+    return start_automap_all(force=force)
+
+
+@api_router.post("/automap/movies", tags=["Automap"])
+def api_automap_all_movies(force: bool = False, _: str = Depends(require_api_key)) -> dict:
+    return start_automap_all_movies(force=force)
+
+
+@api_router.post("/automap/movie/{movie_id}", tags=["Automap"])
+def api_automap_movie(movie_id: int, force: bool = False, _: str = Depends(require_api_key)) -> dict:
+    return automap_movie(movie_id, force=force)
+
+
+@api_router.post("/automap/{show_id}", tags=["Automap"])
+def api_automap_show(show_id: int, force: bool = False, _: str = Depends(require_api_key)) -> dict:
+    return automap_show(show_id, force=force)
+
+
+@api_router.post("/automap/{show_id}/{season_number}", tags=["Automap"])
+def api_automap_show_season(
+    show_id: int,
+    season_number: int,
+    force: bool = False,
+    _: str = Depends(require_api_key),
+) -> dict:
+    return automap_show(show_id, season_number=season_number, force=force)
+
+
 @api_router.post("/map/movie/{movie_id}", tags=["Mutation"])
 def api_map_movie(
     movie_id: int,
@@ -159,6 +196,7 @@ def rebuild_status() -> dict:
         "radarr_configured": bool(settings.radarr_url and settings.radarr_api_key),
         "sync": sync_status(),
         "runtime": runtime_state(),
+        "automap": automap_status(),
     }
 
 

@@ -101,6 +101,38 @@ class AnimeWorldClient:
             )
         return episodes
 
+    def get_info_and_episodes(self, slug_or_url: str) -> tuple[dict, list[dict]]:
+        target = slug_or_url if slug_or_url.startswith("http") else self.slug_to_url(slug_or_url)
+        try:
+            response = self.session.get(target, timeout=15)
+            response.raise_for_status()
+        except requests.RequestException:
+            return {}, []
+
+        soup = BeautifulSoup(response.text, "html.parser")
+        info: dict[str, object] = {}
+        info_div = soup.find("div", class_="info")
+        if info_div:
+            for dt, dd in zip(info_div.find_all("dt"), info_div.find_all("dd")):
+                key = dt.get_text(" ", strip=True).rstrip(":")
+                links = dd.find_all("a")
+                if links:
+                    values = [anchor.get_text(" ", strip=True) for anchor in links]
+                    info[key] = values[0] if len(values) == 1 else values
+                else:
+                    info[key] = dd.get_text(" ", strip=True)
+
+        episodes = []
+        for anchor in soup.select("li.episode a[data-episode-num]"):
+            episodes.append(
+                {
+                    "number": anchor.get("data-episode-num") or anchor.get("data-num") or "",
+                    "episode_id": anchor.get("data-episode-id") or anchor.get("data-id") or "",
+                    "href": anchor.get("href", ""),
+                }
+            )
+        return info, episodes
+
     def get_file_info(self, episode_id: str) -> list[dict]:
         if not episode_id:
             return []

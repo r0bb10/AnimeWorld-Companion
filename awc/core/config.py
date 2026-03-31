@@ -90,6 +90,8 @@ class Settings:
     rss_poll_interval: int
     rss_cache_retention_days: int
     rss_cache_limit: int
+    automap_confidence_threshold: float
+    automap_movie_confidence_threshold: float
     sonarr_url: str
     sonarr_api_key: str
     sonarr_anime_tag: str
@@ -117,6 +119,8 @@ def load_settings() -> Settings:
         rss_poll_interval=_int("RSS_POLL_INTERVAL", 300),
         rss_cache_retention_days=_int("RSS_CACHE_RETENTION_DAYS", 30),
         rss_cache_limit=_int("RSS_CACHE_LIMIT", 100),
+        automap_confidence_threshold=float(_get("AUTOMAP_CONFIDENCE_THRESHOLD", "85")) / 100,
+        automap_movie_confidence_threshold=float(_get("AUTOMAP_MOVIE_CONFIDENCE_THRESHOLD", "75")) / 100,
         sonarr_url=_normalize_manager_url(_get("SONARR_URL")),
         sonarr_api_key=_get("SONARR_API_KEY"),
         sonarr_anime_tag=_get("SONARR_ANIME_TAG", _get("ANIME_TAG", "anime")),

@@ -212,3 +212,19 @@ def find_show_by_manager_identity(sonarr_id: int | None = None, tvdb_id: int | N
                 return dict(row)
 
     return find_show_by_title(title)
+
+
+def find_show_by_tvdb_id(tvdb_id: int | None) -> dict | None:
+    if tvdb_id is None:
+        return None
+    with get_db() as conn:
+        row = conn.execute(
+            """
+            SELECT *
+            FROM shows
+            WHERE tvdb_id = ?
+            LIMIT 1
+            """,
+            (tvdb_id,),
+        ).fetchone()
+    return dict(row) if row else None

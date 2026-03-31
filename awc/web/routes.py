@@ -131,6 +131,10 @@ def torznab_api(
     q: str = Query(default=""),
     season: int | None = Query(default=None),
     ep: int | None = Query(default=None),
+    cat: str = Query(default=""),
+    imdbid: str = Query(default=""),
+    tmdbid: int | None = Query(default=None),
+    tvdbid: int | None = Query(default=None),
 ) -> Response:
     request_type = (t or "caps").strip().lower()
     if request_type == "caps":
@@ -142,12 +146,22 @@ def torznab_api(
                 media="search",
                 season=season,
                 episode=ep,
+                category=cat,
+                tvdb_id=tvdbid,
+                tmdb_id=tmdbid,
+                imdb_id=imdbid,
             ),
             media_type="application/xml",
         )
     if request_type == "movie":
         return Response(
-            content=build_search_xml(query=q, media="movie"),
+            content=build_search_xml(
+                query=q,
+                media="movie",
+                category=cat,
+                tmdb_id=tmdbid,
+                imdb_id=imdbid,
+            ),
             media_type="application/xml",
         )
     raise HTTPException(status_code=400, detail=f"Unsupported Torznab operation: {t}")

@@ -5,8 +5,8 @@ from xml.etree.ElementTree import Element, SubElement, register_namespace, tostr
 
 from ..core.config import settings
 from ..domain.media import MediaKind, MediaManager, NamingContext
-from ..repositories.movies import find_movie_by_title
-from ..repositories.shows import find_show_by_title
+from ..repositories.movies import find_movie_by_external_ids, find_movie_by_title
+from ..repositories.shows import find_show_by_title, find_show_by_tvdb_id
 from .query_service import parse_query
 from .naming_service import build_release_name
 
@@ -120,11 +120,23 @@ def build_search_xml(
     media: str = "search",
     season: int | None = None,
     episode: int | None = None,
+    category: str = "",
+    tvdb_id: int | None = None,
+    tmdb_id: int | None = None,
+    imdb_id: str = "",
 ) -> bytes:
     root, channel = _build_rss_root()
 
-    if media == "movie":
-        match = find_movie_by_title(query)
+    effective_media = media
+    if media == "search":
+        category_ids = {part.strip() for part in category.split(",") if part.strip()}
+        if "2000" in category_ids:
+            effective_media = "movie"
+        elif "5070" in category_ids:
+            effective_media = "show"
+
+    if effective_media == "movie":
+        match = find_movie_by_external_ids(tmdb_id=tmdb_id, imdb_id=imdb_id) or find_movie_by_title(query)
         if match:
             title = build_release_name(
                 NamingContext(
@@ -149,7 +161,7 @@ def build_search_xml(
     effective_episode = episode if episode is not None else parsed.get("episode")
     title_query = parsed.get("title") or query
 
-    match = find_show_by_title(title_query)
+    match = find_show_by_tvdb_id(tvdb_id) or find_show_by_title(title_query)
     if not match:
         return _xml_bytes(root)
 

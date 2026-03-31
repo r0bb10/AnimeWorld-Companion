@@ -194,3 +194,34 @@ def find_movie_by_manager_identity(
                 return dict(row)
 
     return find_movie_by_title(title)
+
+
+def find_movie_by_external_ids(tmdb_id: int | None = None, imdb_id: str = "") -> dict | None:
+    with get_db() as conn:
+        if tmdb_id is not None:
+            row = conn.execute(
+                """
+                SELECT *
+                FROM movies
+                WHERE tmdb_id = ?
+                LIMIT 1
+                """,
+                (tmdb_id,),
+            ).fetchone()
+            if row:
+                return dict(row)
+
+        if imdb_id:
+            row = conn.execute(
+                """
+                SELECT *
+                FROM movies
+                WHERE imdb_id = ?
+                LIMIT 1
+                """,
+                (imdb_id,),
+            ).fetchone()
+            if row:
+                return dict(row)
+
+    return None

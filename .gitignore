@@ -1,0 +1,15 @@
+.env
+*.md
+!README.md
+data/
+config/
+app/
+AnimeWorld-Companion.wiki/
+*.db
+*.db-journal
+*.db-wal
+*.part
+__pycache__/
+*.pyc
+*.pyo
+docker-compose-stack.yml

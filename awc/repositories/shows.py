@@ -1,0 +1,183 @@
+"""Show repository for the clean rebuild."""
+
+import re
+
+from .db import get_db
+
+
+def _normalize_title(title: str) -> str:
+    if not title:
+        return ""
+    title = title.lower().strip()
+    title = re.sub(r"[^\w\s]", " ", title)
+    title = re.sub(r"\s+", " ", title)
+    return title.strip()
+
+
+def count_shows() -> int:
+    with get_db() as conn:
+        row = conn.execute("SELECT COUNT(*) AS count FROM shows").fetchone()
+    return int(row["count"]) if row else 0
+
+
+def list_show_summaries(limit: int = 25) -> list[dict]:
+    with get_db() as conn:
+        rows = conn.execute(
+            """
+            SELECT
+                s.id,
+                s.sonarr_id,
+                s.title,
+                s.year,
+                s.status,
+                s.series_type,
+                COUNT(DISTINCT ss.id) AS season_count,
+                COUNT(DISTINCT asm.id) AS mapping_count
+            FROM shows s
+            LEFT JOIN show_seasons ss ON ss.show_id = s.id
+            LEFT JOIN aw_show_mappings asm ON asm.show_id = s.id
+            GROUP BY s.id
+            ORDER BY s.title COLLATE NOCASE
+            LIMIT ?
+            """,
+            (limit,),
+        ).fetchall()
+    return [dict(row) for row in rows]
+
+
+def get_show_detail(show_id: int) -> dict | None:
+    with get_db() as conn:
+        show_row = conn.execute(
+            """
+            SELECT
+                id,
+                sonarr_id,
+                tvdb_id,
+                title,
+                sort_title,
+                series_type,
+                monitored,
+                status,
+                year,
+                original_language,
+                first_aired,
+                genres
+            FROM shows
+            WHERE id = ?
+            """,
+            (show_id,),
+        ).fetchone()
+        if not show_row:
+            return None
+
+        alt_rows = conn.execute(
+            """
+            SELECT title, source, title_type, language, scene_season_number, title_year
+            FROM show_alternate_titles
+            WHERE show_id = ?
+            ORDER BY title COLLATE NOCASE
+            """,
+            (show_id,),
+        ).fetchall()
+
+        season_rows = conn.execute(
+            """
+            SELECT
+                id,
+                season_number,
+                monitored,
+                episode_count,
+                air_date_start,
+                air_date_end
+            FROM show_seasons
+            WHERE show_id = ?
+            ORDER BY season_number
+            """,
+            (show_id,),
+        ).fetchall()
+
+        mapping_rows = conn.execute(
+            """
+            SELECT
+                id,
+                season_number,
+                part,
+                aw_link,
+                aw_title,
+                aw_episode_count,
+                aw_total_episodes,
+                aw_status,
+                aw_category,
+                mapping_type,
+                confidence_score,
+                confidence_factors,
+                linked_with_season,
+                last_verified,
+                updated_at
+            FROM aw_show_mappings
+            WHERE show_id = ?
+            ORDER BY season_number, part, id
+            """,
+            (show_id,),
+        ).fetchall()
+
+    show = dict(show_row)
+    show["alternate_titles"] = [dict(row) for row in alt_rows]
+
+    mappings_by_season: dict[int, list[dict]] = {}
+    for row in mapping_rows:
+        item = dict(row)
+        mappings_by_season.setdefault(item["season_number"], []).append(item)
+
+    seasons = []
+    for row in season_rows:
+        season = dict(row)
+        season["mappings"] = mappings_by_season.get(season["season_number"], [])
+        seasons.append(season)
+
+    show["seasons"] = seasons
+    return show
+
+
+def find_show_by_title(title: str) -> dict | None:
+    normalized = _normalize_title(title)
+    if not normalized:
+        return None
+
+    with get_db() as conn:
+        row = conn.execute(
+            """
+            SELECT s.*
+            FROM shows s
+            WHERE lower(trim(s.title)) = ?
+            LIMIT 1
+            """,
+            (title.lower().strip(),),
+        ).fetchone()
+        if row:
+            return dict(row)
+
+        row = conn.execute(
+            """
+            SELECT s.*
+            FROM shows s
+            JOIN show_alternate_titles sat ON sat.show_id = s.id
+            WHERE sat.title_normalized = ?
+            LIMIT 1
+            """,
+            (normalized,),
+        ).fetchone()
+        if row:
+            return dict(row)
+
+        row = conn.execute(
+            """
+            SELECT s.*
+            FROM shows s
+            WHERE lower(s.title) LIKE ?
+            ORDER BY length(s.title) ASC
+            LIMIT 1
+            """,
+            (f"%{title.lower().strip()}%",),
+        ).fetchone()
+        return dict(row) if row else None

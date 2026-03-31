@@ -1,0 +1,156 @@
+name: Build & Publish Docker Image
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch: {}
+
+# ---------------------------------------------------------------------------
+# Why the matrix + manifest pattern?
+# A single docker/build-push-action with platforms: linux/amd64,linux/arm64
+# generates provenance attestations that confuse the registry, producing
+# "unknown/unknown" in the image list. The fix: each platform builds and
+# pushes independently (provenance disabled), then a manifest job stitches
+# the two digests into a single multi-arch tag.
+# ---------------------------------------------------------------------------
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE: ${{ github.repository_owner }}/animeworld-companion
+
+jobs:
+  # -------------------------------------------------------------------------
+  # 1. Build one platform — runs twice in parallel (amd64 + arm64)
+  # -------------------------------------------------------------------------
+  build:
+    name: Build ${{ matrix.platform }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        platform:
+          - linux/amd64
+          - linux/arm64
+        include:
+          - platform: linux/amd64
+            slug: amd64
+          - platform: linux/arm64
+            slug: arm64
+
+    permissions:
+      packages: write
+      contents: read
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - id: meta
+        run: |
+          TAG="${GITHUB_REF_NAME}"
+          if [[ "${TAG}" == v* ]]; then
+            VERSION="${TAG#v}"
+            APP_VERSION="${TAG}"
+          else
+            VERSION="dev-${GITHUB_SHA::7}"
+            APP_VERSION="${VERSION}"
+          fi
+          echo "version=${VERSION}" >> $GITHUB_OUTPUT
+          echo "app_version=${APP_VERSION}" >> $GITHUB_OUTPUT
+        shell: bash
+
+      - uses: docker/setup-qemu-action@v3
+
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - id: push
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: ${{ matrix.platform }}
+          push: true
+          provenance: false
+          build-args: |
+            VERSION=${{ steps.meta.outputs.version }}
+            APP_VERSION=${{ steps.meta.outputs.app_version }}
+            COMMIT_SHA=${{ github.sha }}
+          tags: |
+            ${{ env.REGISTRY }}/${{ env.IMAGE }}:${{ steps.meta.outputs.version }}-${{ matrix.slug }}
+
+      - run: echo -n "${{ steps.push.outputs.digest }}" > /tmp/digest
+        shell: bash
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: digest-${{ matrix.slug }}
+          path: /tmp/digest
+
+  # -------------------------------------------------------------------------
+  # 2. Assemble the multi-arch manifest from the two per-platform digests
+  # -------------------------------------------------------------------------
+  manifest:
+    name: Publish multi-arch manifest
+    runs-on: ubuntu-latest
+    needs: build
+
+    permissions:
+      packages: write
+      contents: read
+
+    steps:
+      - id: meta
+        run: |
+          TAG="${GITHUB_REF_NAME}"
+          if [[ "${TAG}" == v* ]]; then
+            VERSION="${TAG#v}"
+          else
+            VERSION="dev-${GITHUB_SHA::7}"
+          fi
+          echo "version=${VERSION}" >> $GITHUB_OUTPUT
+        shell: bash
+
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: digest-amd64
+          path: /tmp/digests/amd64
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: digest-arm64
+          path: /tmp/digests/arm64
+
+      - run: |
+          set -euo pipefail
+          REPO="${{ env.REGISTRY }}/${{ env.IMAGE }}"
+          VERSION="${{ steps.meta.outputs.version }}"
+          AMD64=$(cat /tmp/digests/amd64/digest)
+          ARM64=$(cat /tmp/digests/arm64/digest)
+          docker buildx imagetools create \
+            -t "${REPO}:${VERSION}" \
+            -t "${REPO}:latest" \
+            "${REPO}@${AMD64}" \
+            "${REPO}@${ARM64}"
+        shell: bash
+
+      - name: Verify published image
+        run: |
+          set -euo pipefail
+          REPO="${{ env.REGISTRY }}/${{ env.IMAGE }}"
+          VERSION="${{ steps.meta.outputs.version }}"
+          echo "Verifying ${REPO}:${VERSION}"
+          docker pull "${REPO}:${VERSION}"
+        shell: bash

@@ -15,8 +15,10 @@ from ..services.mapping_service import (
     resolve_absolute_episode,
     resolve_scene_episode,
 )
+from ..services.manager_service import build_manager_snapshot
 from ..services.preview_service import build_naming_preview
 from ..services.query_service import parse_query, resolve_local_query
+from ..services.sync_service import build_sync_overview
 from ..services.torznab_service import build_caps_xml, build_search_xml
 from ..services.webhook_service import normalize_webhook
 from .auth import require_api_key
@@ -36,6 +38,16 @@ def rebuild_status() -> dict:
 @api_router.get("/api/rebuild/health", tags=["System"])
 def rebuild_health() -> dict:
     return build_health_report()
+
+
+@api_router.get("/api/rebuild/managers", tags=["System"])
+def rebuild_managers() -> dict:
+    return build_manager_snapshot()
+
+
+@api_router.get("/api/rebuild/sync-overview", tags=["System"])
+def rebuild_sync_overview() -> dict:
+    return build_sync_overview()
 
 
 @api_router.get("/api/rebuild/catalog", tags=["System"])

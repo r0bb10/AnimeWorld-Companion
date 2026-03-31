@@ -9,6 +9,14 @@ from ..services.catalog_service import (
     build_movie_snapshot,
     build_show_snapshot,
 )
+from ..services.download_service import (
+    build_download_snapshot,
+    cancel_download,
+    clear_download_history,
+    create_fake_torrent,
+    remove_download,
+    resume_download,
+)
 from ..services.health_service import build_health_report
 from ..services.mapping_service import (
     build_show_mapping_snapshot,
@@ -111,6 +119,67 @@ def rebuild_placeholder(item_id: str) -> dict:
         "status": "placeholder",
         "detail": "Search contract is wired, download execution is not rebuilt yet.",
     }
+
+
+@api_router.get("/download", tags=["Download"])
+def download_handoff(
+    manager: str,
+    title: str,
+    season: int | None = None,
+    episode: int | None = None,
+    year: int | None = None,
+    manager_id: int | None = None,
+    source: str = "",
+    _: str = Depends(require_api_key),
+) -> Response:
+    download, torrent_bytes, torrent_name = create_fake_torrent(
+        manager=manager,
+        title=title,
+        season=season,
+        episode=episode,
+        year=year,
+        source=source,
+        manager_id=manager_id,
+    )
+    headers = {
+        "Content-Disposition": f'attachment; filename="{torrent_name}"',
+        "X-AWC-Download-Id": str(download.get("id", "")),
+    }
+    return Response(content=torrent_bytes, media_type="application/x-bittorrent", headers=headers)
+
+
+@api_router.get("/api/downloads", tags=["Download"])
+def api_downloads(limit: int = 100, _: str = Depends(require_api_key)) -> dict:
+    return build_download_snapshot(limit=limit)
+
+
+@api_router.post("/api/downloads/{download_id}/cancel", tags=["Download"])
+def api_cancel_download(download_id: str, _: str = Depends(require_api_key)) -> dict:
+    download = cancel_download(download_id)
+    if not download:
+        raise HTTPException(status_code=404, detail="Download not found")
+    return download
+
+
+@api_router.post("/api/downloads/{download_id}/resume", tags=["Download"])
+def api_resume_download(download_id: str, _: str = Depends(require_api_key)) -> dict:
+    download = resume_download(download_id)
+    if not download:
+        raise HTTPException(status_code=404, detail="Download not found")
+    return download
+
+
+@api_router.post("/api/downloads/{download_id}/remove", tags=["Download"])
+def api_remove_download(download_id: str, _: str = Depends(require_api_key)) -> dict:
+    removed = remove_download(download_id)
+    if not removed:
+        raise HTTPException(status_code=404, detail="Download not found")
+    return {"removed": True, "download_id": download_id}
+
+
+@api_router.post("/api/downloads/clear", tags=["Download"])
+def api_clear_downloads(_: str = Depends(require_api_key)) -> dict:
+    return {"removed": clear_download_history()}
 
 
 @api_router.post("/api/webhook", tags=["Integration"])

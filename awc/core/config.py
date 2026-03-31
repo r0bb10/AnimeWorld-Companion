@@ -40,8 +40,11 @@ class Settings:
     awc_port: int
     awc_url: str
     log_level: str
+    data_path: str
     database_path: str
     sync_interval_minutes: int
+    max_concurrent_downloads: int
+    download_history_days: int
     sonarr_url: str
     sonarr_api_key: str
     radarr_url: str
@@ -55,8 +58,11 @@ def load_settings() -> Settings:
         awc_port=_int("AWC_PORT", 7004),
         awc_url=_get("AWC_URL"),
         log_level=_get("LOG_LEVEL", "INFO").upper(),
+        data_path=_get("AWC_DATA_PATH", "/data"),
         database_path=_resolve_database_path(),
         sync_interval_minutes=_int("SYNC_INTERVAL", _int("SONARR_SYNC_INTERVAL", 30)),
+        max_concurrent_downloads=_int("MAX_CONCURRENT_DOWNLOADS", 10),
+        download_history_days=_int("DOWNLOAD_HISTORY_DAYS", 7),
         sonarr_url=_get("SONARR_URL"),
         sonarr_api_key=_get("SONARR_API_KEY"),
         radarr_url=_get("RADARR_URL"),

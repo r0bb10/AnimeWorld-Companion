@@ -7,6 +7,7 @@ from ..core.config import settings
 from ..domain.media import MediaKind, MediaManager, NamingContext
 from ..repositories.movies import find_movie_by_external_ids, find_movie_by_title
 from ..repositories.shows import find_show_by_title, find_show_by_tvdb_id
+from .download_service import build_download_url
 from .query_service import parse_query
 from .naming_service import build_release_name
 
@@ -85,15 +86,25 @@ def _add_item(
     *,
     guid: str,
     title: str,
+    source_title: str,
     category_id: int,
     kind: MediaKind,
     season: int | None = None,
     episode: int | None = None,
     year: int | None = None,
+    manager_id: int | None = None,
 ) -> None:
     item = SubElement(channel, "item")
     SubElement(item, "title").text = title
-    link = _item_url(guid)
+    link = build_download_url(
+        manager="sonarr" if kind is MediaKind.SERIES else "radarr",
+        title=source_title,
+        season=season,
+        episode=episode,
+        year=year,
+        manager_id=manager_id,
+        source=_item_url(guid),
+    )
     SubElement(item, "guid").text = guid
     SubElement(item, "link").text = link
     SubElement(item, "comments").text = link
@@ -150,9 +161,11 @@ def build_search_xml(
                 channel,
                 guid=f"movie-{match['id']}",
                 title=title,
+                source_title=match["title"],
                 category_id=2000,
                 kind=MediaKind.MOVIE,
                 year=match.get("year"),
+                manager_id=match.get("radarr_id"),
             )
         return _xml_bytes(root)
 
@@ -183,9 +196,11 @@ def build_search_xml(
         channel,
         guid=f"show-{match['id']}-s{effective_season}e{effective_episode}",
         title=title,
+        source_title=match["title"],
         category_id=5070,
         kind=MediaKind.SERIES,
         season=effective_season,
         episode=effective_episode,
+        manager_id=match.get("sonarr_id"),
     )
     return _xml_bytes(root)

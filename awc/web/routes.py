@@ -1,6 +1,6 @@
 """Minimal route surface for the clean rebuild."""
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Body, Depends, HTTPException, Query
 from fastapi.responses import Response
 
 from ..core.config import settings
@@ -18,6 +18,7 @@ from ..services.mapping_service import (
 from ..services.preview_service import build_naming_preview
 from ..services.query_service import parse_query, resolve_local_query
 from ..services.torznab_service import build_caps_xml, build_search_xml
+from ..services.webhook_service import normalize_webhook
 from .auth import require_api_key
 
 api_router = APIRouter()
@@ -98,6 +99,17 @@ def rebuild_placeholder(item_id: str) -> dict:
         "status": "placeholder",
         "detail": "Search contract is wired, download execution is not rebuilt yet.",
     }
+
+
+@api_router.post("/api/webhook", tags=["Integration"])
+def manager_webhook(
+    payload: dict = Body(default_factory=dict),
+    _: str = Depends(require_api_key),
+) -> dict:
+    normalized = normalize_webhook(payload)
+    if not normalized["accepted"]:
+        raise HTTPException(status_code=400, detail="Unsupported webhook payload")
+    return normalized
 
 
 @api_router.api_route("/api", methods=["GET", "POST"], tags=["Indexer"])

@@ -145,3 +145,52 @@ def find_movie_by_title(title: str) -> dict | None:
             (f"%{title.lower().strip()}%",),
         ).fetchone()
         return dict(row) if row else None
+
+
+def find_movie_by_manager_identity(
+    radarr_id: int | None = None,
+    tmdb_id: int | None = None,
+    imdb_id: str = "",
+    title: str = "",
+) -> dict | None:
+    with get_db() as conn:
+        if radarr_id is not None:
+            row = conn.execute(
+                """
+                SELECT *
+                FROM movies
+                WHERE radarr_id = ?
+                LIMIT 1
+                """,
+                (radarr_id,),
+            ).fetchone()
+            if row:
+                return dict(row)
+
+        if tmdb_id is not None:
+            row = conn.execute(
+                """
+                SELECT *
+                FROM movies
+                WHERE tmdb_id = ?
+                LIMIT 1
+                """,
+                (tmdb_id,),
+            ).fetchone()
+            if row:
+                return dict(row)
+
+        if imdb_id:
+            row = conn.execute(
+                """
+                SELECT *
+                FROM movies
+                WHERE imdb_id = ?
+                LIMIT 1
+                """,
+                (imdb_id,),
+            ).fetchone()
+            if row:
+                return dict(row)
+
+    return find_movie_by_title(title)

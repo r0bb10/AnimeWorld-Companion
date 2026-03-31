@@ -181,3 +181,34 @@ def find_show_by_title(title: str) -> dict | None:
             (f"%{title.lower().strip()}%",),
         ).fetchone()
         return dict(row) if row else None
+
+
+def find_show_by_manager_identity(sonarr_id: int | None = None, tvdb_id: int | None = None, title: str = "") -> dict | None:
+    with get_db() as conn:
+        if sonarr_id is not None:
+            row = conn.execute(
+                """
+                SELECT *
+                FROM shows
+                WHERE sonarr_id = ?
+                LIMIT 1
+                """,
+                (sonarr_id,),
+            ).fetchone()
+            if row:
+                return dict(row)
+
+        if tvdb_id is not None:
+            row = conn.execute(
+                """
+                SELECT *
+                FROM shows
+                WHERE tvdb_id = ?
+                LIMIT 1
+                """,
+                (tvdb_id,),
+            ).fetchone()
+            if row:
+                return dict(row)
+
+    return find_show_by_title(title)

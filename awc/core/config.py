@@ -24,11 +24,16 @@ def _resolve_database_path() -> str:
     configured = _get("AWC_DATABASE_PATH", "/config/database.db")
     repo_root = Path(__file__).resolve().parents[2]
     repo_candidate = repo_root / "config" / "database.db"
-    if os.path.exists(configured):
+    in_container = Path("/.dockerenv").exists()
+
+    if in_container and os.path.exists(configured):
         return configured
 
     if repo_candidate.exists():
         return str(repo_candidate)
+
+    if os.path.exists(configured):
+        return configured
 
     return configured
 

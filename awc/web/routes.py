@@ -1,7 +1,7 @@
 """Minimal route surface for the clean rebuild."""
 
 from fastapi import APIRouter, Body, Depends, HTTPException, Query
-from fastapi.responses import HTMLResponse, Response
+from fastapi.responses import HTMLResponse, Response, StreamingResponse
 
 from ..core.config import settings
 from ..services.catalog_service import (
@@ -18,6 +18,7 @@ from ..services.download_service import (
     remove_download,
     resume_download,
 )
+from ..services.events_service import stream_events
 from ..services.health_service import build_health_report
 from ..services.mapping_service import (
     build_show_mapping_snapshot,
@@ -27,6 +28,7 @@ from ..services.mapping_service import (
 from ..services.manager_service import build_manager_snapshot
 from ..services.preview_service import build_naming_preview
 from ..services.query_service import parse_query, resolve_local_query
+from ..services.rss_service import build_rss_snapshot, clear_rss_cache
 from ..services.sync_service import build_sync_overview
 from ..services.torznab_service import build_caps_xml, build_search_xml
 from ..services.webhook_service import normalize_webhook
@@ -74,6 +76,11 @@ def rebuild_catalog(show_limit: int = 10, movie_limit: int = 10) -> dict:
     return build_catalog_snapshot(show_limit=show_limit, movie_limit=movie_limit)
 
 
+@api_router.get("/api/shows", tags=["Catalog"])
+def api_shows(limit: int = 100, _: str = Depends(require_api_key)) -> list[dict]:
+    return build_catalog_snapshot(show_limit=limit, movie_limit=0)["shows"]
+
+
 @api_router.get("/api/rebuild/shows/{show_id}", tags=["System"])
 def rebuild_show_detail(show_id: int) -> dict:
     show = build_show_snapshot(show_id)
@@ -82,12 +89,32 @@ def rebuild_show_detail(show_id: int) -> dict:
     return show
 
 
+@api_router.get("/api/shows/{show_id}", tags=["Catalog"])
+def api_show_detail(show_id: int, _: str = Depends(require_api_key)) -> dict:
+    return rebuild_show_detail(show_id)
+
+
+@api_router.get("/api/movies", tags=["Catalog"])
+def api_movies(limit: int = 100, _: str = Depends(require_api_key)) -> list[dict]:
+    return build_catalog_snapshot(show_limit=0, movie_limit=limit)["movies"]
+
+
 @api_router.get("/api/rebuild/movies/{movie_id}", tags=["System"])
 def rebuild_movie_detail(movie_id: int) -> dict:
     movie = build_movie_snapshot(movie_id)
     if not movie:
         raise HTTPException(status_code=404, detail="Movie not found")
     return movie
+
+
+@api_router.get("/api/movies/{movie_id}", tags=["Catalog"])
+def api_movie_detail(movie_id: int, _: str = Depends(require_api_key)) -> dict:
+    return rebuild_movie_detail(movie_id)
+
+
+@api_router.get("/api/rss/cache", tags=["System"])
+def api_rss_cache(limit: int = 100, _: str = Depends(require_api_key)) -> dict:
+    return build_rss_snapshot(limit=limit)
 
 
 @api_router.get("/api/rebuild/shows/{show_id}/mappings", tags=["System"])
@@ -191,6 +218,16 @@ def api_remove_download(download_id: str, _: str = Depends(require_api_key)) -> 
 @api_router.post("/api/downloads/clear", tags=["Download"])
 def api_clear_downloads(_: str = Depends(require_api_key)) -> dict:
     return {"removed": clear_download_history()}
+
+
+@api_router.get("/api/events", tags=["System"])
+def api_events(_: str = Depends(require_api_key)) -> StreamingResponse:
+    return StreamingResponse(stream_events(), media_type="text/event-stream")
+
+
+@api_router.post("/api/rss/cache/clear", tags=["System"])
+def api_clear_rss_cache(_: str = Depends(require_api_key)) -> dict:
+    return clear_rss_cache()
 
 
 @api_router.post("/api/webhook", tags=["Integration"])

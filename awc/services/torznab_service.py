@@ -6,6 +6,7 @@ from xml.etree.ElementTree import Element, SubElement, register_namespace, tostr
 from ..core.config import settings
 from ..domain.media import MediaKind, MediaManager, NamingContext
 from ..repositories.movies import find_movie_by_external_ids, find_movie_by_title
+from ..repositories.rss_cache import list_rss_items
 from ..repositories.shows import find_show_by_title, find_show_by_tvdb_id
 from .download_service import build_download_url
 from .query_service import parse_query
@@ -137,6 +138,20 @@ def build_search_xml(
     imdb_id: str = "",
 ) -> bytes:
     root, channel = _build_rss_root()
+
+    if not (query or tvdb_id or tmdb_id or imdb_id):
+        for item in list_rss_items(limit=100):
+            _add_item(
+                channel,
+                guid=item["guid"],
+                title=item["title"],
+                source_title=item["title"],
+                category_id=5070,
+                kind=MediaKind.SERIES,
+                season=item.get("season_number"),
+                episode=item.get("episode_number"),
+            )
+        return _xml_bytes(root)
 
     effective_media = media
     if media == "search":

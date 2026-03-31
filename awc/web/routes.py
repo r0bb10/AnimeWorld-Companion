@@ -1,7 +1,7 @@
 """Minimal route surface for the clean rebuild."""
 
 from fastapi import APIRouter, Body, Depends, HTTPException, Query
-from fastapi.responses import Response
+from fastapi.responses import HTMLResponse, Response
 
 from ..core.config import settings
 from ..services.catalog_service import (
@@ -9,6 +9,7 @@ from ..services.catalog_service import (
     build_movie_snapshot,
     build_show_snapshot,
 )
+from ..services.dashboard_service import build_dashboard_html, build_dashboard_snapshot
 from ..services.download_service import (
     build_download_snapshot,
     cancel_download,
@@ -34,6 +35,11 @@ from .auth import require_api_key
 api_router = APIRouter()
 
 
+@api_router.get("/", tags=["UI"])
+def dashboard() -> HTMLResponse:
+    return HTMLResponse(build_dashboard_html())
+
+
 @api_router.get("/api/rebuild/status", tags=["System"])
 def rebuild_status() -> dict:
     return {
@@ -46,6 +52,11 @@ def rebuild_status() -> dict:
 @api_router.get("/api/rebuild/health", tags=["System"])
 def rebuild_health() -> dict:
     return build_health_report()
+
+
+@api_router.get("/api/heartbeat", tags=["System"])
+def api_heartbeat() -> dict:
+    return build_dashboard_snapshot()
 
 
 @api_router.get("/api/rebuild/managers", tags=["System"])

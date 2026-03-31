@@ -113,6 +113,7 @@ def normalize_webhook(payload: dict) -> dict:
         "event_family": _classify_event(event_type) if event_type else None,
         "entity": entity,
         "local_match": local_match,
+        "manager_entity_id": entity.get("id") if entity else None,
         "series": payload.get("series") if manager is MediaManager.SONARR else None,
         "movie": payload.get("movie") if manager is MediaManager.RADARR else None,
     }

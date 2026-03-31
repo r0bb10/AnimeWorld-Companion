@@ -7,7 +7,15 @@ from ..integrations.sonarr_client import SonarrClient
 from ..domain.media import MediaKind, MediaManager, NamingContext
 
 
-def _apply_colon_replacement(title: str, colon_format: int) -> str:
+def _apply_colon_replacement(title: str, colon_format: int | str) -> str:
+    if isinstance(colon_format, str):
+        value = colon_format.strip().lower()
+        if value == "smart":
+            return title.replace(": ", " ").replace(":", "")
+        if value == "dash":
+            return title.replace(":", "-")
+        if value == "space-dash":
+            return title.replace(":", " - ")
     if colon_format == 0:
         return title.replace(":", "")
     if colon_format == 1:
@@ -17,6 +25,14 @@ def _apply_colon_replacement(title: str, colon_format: int) -> str:
     if colon_format == 3:
         return title.replace(":", " - ")
     return title.replace(": ", " ").replace(":", "")
+
+
+def _cleanup_filename(value: str) -> str:
+    cleaned = re.sub(r"\{[^{}]+\}", "", value)
+    cleaned = re.sub(r"\s+", ".", cleaned.strip())
+    cleaned = re.sub(r"\.+", ".", cleaned)
+    cleaned = cleaned.strip(". -_")
+    return cleaned
 
 
 def _format_series_name(context: NamingContext) -> str:
@@ -49,6 +65,7 @@ def _format_series_name(context: NamingContext) -> str:
     )
     result = re.sub(r"\{episode\}", str(episode), result, flags=re.IGNORECASE)
 
+    result = _cleanup_filename(result)
     if not result.endswith(".mp4"):
         result += ".mp4"
     return result
@@ -65,13 +82,21 @@ def _format_movie_name(context: NamingContext) -> str:
     title_with_dots = title_cleaned.replace(" ", ".")
     year = context.year or ""
 
-    result = re.sub(r"\{Movie\.Title\}", title_with_dots, format_string, flags=re.IGNORECASE)
-    result = re.sub(r"\{Movie\s+Title\}", title_cleaned, result, flags=re.IGNORECASE)
-    result = re.sub(r"\{Release\.Year\}", str(year), result, flags=re.IGNORECASE)
-    result = re.sub(r"\{Release\s+Year\}", str(year), result, flags=re.IGNORECASE)
-    result = re.sub(r"\{Year\}", str(year), result, flags=re.IGNORECASE)
+    replacements = {
+        r"\{Movie\.CleanTitle\}": title_with_dots,
+        r"\{Movie\.Title\}": title_with_dots,
+        r"\{Movie\s+Title\}": title_cleaned,
+        r"\{\(Release\s+Year\)\}": str(year),
+        r"\{Release\.Year\}": str(year),
+        r"\{Release\s+Year\}": str(year),
+        r"\{Year\}": str(year),
+        r"\{ImdbId\}": "",
+    }
+    result = format_string
+    for pattern, replacement in replacements.items():
+        result = re.sub(pattern, replacement, result, flags=re.IGNORECASE)
 
-    result = re.sub(r"\.+", ".", result).strip(". ")
+    result = _cleanup_filename(result)
     if not result.endswith(".mp4"):
         result += ".mp4"
     return result

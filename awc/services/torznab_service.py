@@ -4,13 +4,8 @@ from html import escape
 from xml.etree.ElementTree import Element, SubElement, register_namespace, tostring
 
 from ..core.config import settings
-from ..domain.media import MediaKind, MediaManager, NamingContext
-from ..repositories.movies import find_movie_by_external_ids, find_movie_by_title
 from ..repositories.rss_cache import list_rss_items
-from ..repositories.shows import find_show_by_title, find_show_by_tvdb_id
-from .download_service import build_download_url
-from .query_service import parse_query
-from .naming_service import build_release_name
+from .search_service import build_movie_search_items, build_show_search_items
 
 TORZNAB_NS = "http://torznab.com/schemas/2015/feed"
 register_namespace("torznab", TORZNAB_NS)
@@ -77,47 +72,34 @@ def _add_attr(item: Element, name: str, value: str | int) -> None:
     attr.set("value", str(value))
 
 
-def _item_url(item_id: str) -> str:
-    base = settings.awc_url or f"http://localhost:{settings.awc_port}"
-    return f"{base.rstrip('/')}/api/rebuild/placeholder/{escape(item_id)}"
-
-
 def _add_item(
     channel: Element,
     *,
     guid: str,
     title: str,
-    source_title: str,
     category_id: int,
-    kind: MediaKind,
+    download_url: str,
     season: int | None = None,
     episode: int | None = None,
     year: int | None = None,
-    manager_id: int | None = None,
+    size: int | str = 1,
+    pub_date: str | None = None,
 ) -> None:
     item = SubElement(channel, "item")
     SubElement(item, "title").text = title
-    link = build_download_url(
-        manager="sonarr" if kind is MediaKind.SERIES else "radarr",
-        title=source_title,
-        season=season,
-        episode=episode,
-        year=year,
-        manager_id=manager_id,
-        source=_item_url(guid),
-    )
+    link = download_url
     SubElement(item, "guid").text = guid
     SubElement(item, "link").text = link
     SubElement(item, "comments").text = link
-    SubElement(item, "pubDate").text = format_datetime(datetime.now(UTC))
+    SubElement(item, "pubDate").text = pub_date or format_datetime(datetime.now(UTC))
     SubElement(item, "category").text = "Anime" if category_id == 5070 else "Movies"
-    SubElement(item, "size").text = "1"
+    SubElement(item, "size").text = str(size)
 
     _add_attr(item, "category", category_id)
     _add_attr(item, "downloadvolumefactor", 0)
     _add_attr(item, "uploadvolumefactor", 1)
 
-    if kind is MediaKind.SERIES:
+    if category_id == 5070:
         if season is not None:
             _add_attr(item, "season", season)
         if episode is not None:
@@ -145,11 +127,12 @@ def build_search_xml(
                 channel,
                 guid=item["guid"],
                 title=item["title"],
-                source_title=item["title"],
                 category_id=5070,
-                kind=MediaKind.SERIES,
+                download_url="",
                 season=item.get("season_number"),
                 episode=item.get("episode_number"),
+                size=item.get("size", 0),
+                pub_date=item.get("pub_date"),
             )
         return _xml_bytes(root)
 
@@ -158,64 +141,23 @@ def build_search_xml(
         category_ids = {part.strip() for part in category.split(",") if part.strip()}
         if "2000" in category_ids:
             effective_media = "movie"
-        elif "5070" in category_ids:
-            effective_media = "show"
-
-    if effective_media == "movie":
-        match = find_movie_by_external_ids(tmdb_id=tmdb_id, imdb_id=imdb_id) or find_movie_by_title(query)
-        if match:
-            title = build_release_name(
-                NamingContext(
-                    manager=MediaManager.RADARR,
-                    kind=MediaKind.MOVIE,
-                    title=match["title"],
-                    year=match.get("year"),
-                )
-            )
-            _add_item(
-                channel,
-                guid=f"movie-{match['id']}",
-                title=title,
-                source_title=match["title"],
-                category_id=2000,
-                kind=MediaKind.MOVIE,
-                year=match.get("year"),
-                manager_id=match.get("radarr_id"),
-            )
-        return _xml_bytes(root)
-
-    parsed = parse_query(query)
-    effective_season = season if season is not None else parsed.get("season")
-    effective_episode = episode if episode is not None else parsed.get("episode")
-    title_query = parsed.get("title") or query
-
-    match = find_show_by_tvdb_id(tvdb_id) or find_show_by_title(title_query)
-    if not match:
-        return _xml_bytes(root)
-
-    if effective_season is None:
-        effective_season = 1
-    if effective_episode is None:
-        effective_episode = 1
-
-    title = build_release_name(
-        NamingContext(
-            manager=MediaManager.SONARR,
-            kind=MediaKind.SERIES,
-            title=match["title"],
-            season_number=effective_season,
-            episode_number=effective_episode,
+    items = (
+        build_movie_search_items(query, tmdb_id=tmdb_id, imdb_id=imdb_id)
+        if effective_media == "movie"
+        else build_show_search_items(query, season, episode, tvdb_id=tvdb_id)
+    )
+    for item in items:
+        category_id = 2000 if "2000" in item.get("categories", []) else 5070
+        _add_item(
+            channel,
+            guid=item["guid"],
+            title=item["title"],
+            category_id=category_id,
+            download_url=item.get("download_url", ""),
+            season=season,
+            episode=episode,
+            year=None,
+            size=item.get("size", 0),
+            pub_date=item.get("pubDate"),
         )
-    )
-    _add_item(
-        channel,
-        guid=f"show-{match['id']}-s{effective_season}e{effective_episode}",
-        title=title,
-        source_title=match["title"],
-        category_id=5070,
-        kind=MediaKind.SERIES,
-        season=effective_season,
-        episode=effective_episode,
-        manager_id=match.get("sonarr_id"),
-    )
     return _xml_bytes(root)

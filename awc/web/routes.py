@@ -9,6 +9,7 @@ from ..services.catalog_service import (
     build_movie_snapshot,
     build_show_snapshot,
 )
+from ..services.background_service import runtime_state, update_rss_cache
 from ..services.dashboard_service import build_dashboard_html, build_dashboard_snapshot
 from ..services.download_service import (
     build_download_snapshot,
@@ -27,8 +28,10 @@ from ..services.mapping_service import (
     resolve_scene_episode,
 )
 from ..services.mutation_service import (
+    ignore_show_season,
     map_movie,
     map_show_season,
+    remove_show,
     unmap_movie,
     unmap_show_season,
 )
@@ -39,6 +42,7 @@ from ..services.rss_service import build_rss_snapshot, clear_rss_cache
 from ..services.sync_service import build_sync_overview
 from ..services.torznab_service import build_caps_xml, build_search_xml
 from ..services.webhook_service import normalize_webhook
+from ..services.sync_runner_service import sync_all, sync_single_movie, sync_single_show, sync_status
 from .auth import require_api_key
 
 api_router = APIRouter()
@@ -89,6 +93,38 @@ def api_unmap_show_season(
     return unmap_show_season(show_id, season_number)
 
 
+@api_router.post("/ignore-season", tags=["Mutation"])
+def api_ignore_show_season(
+    show_id: int,
+    season_number: int,
+    _: str = Depends(require_api_key),
+) -> dict:
+    result = ignore_show_season(show_id, season_number, True)
+    if not result["updated"]:
+        raise HTTPException(status_code=404, detail="Season not found")
+    return result
+
+
+@api_router.post("/unignore-season", tags=["Mutation"])
+def api_unignore_show_season(
+    show_id: int,
+    season_number: int,
+    _: str = Depends(require_api_key),
+) -> dict:
+    result = ignore_show_season(show_id, season_number, False)
+    if not result["updated"]:
+        raise HTTPException(status_code=404, detail="Season not found")
+    return result
+
+
+@api_router.post("/delete-show", tags=["Mutation"])
+def api_delete_show(show_id: int, _: str = Depends(require_api_key)) -> dict:
+    result = remove_show(show_id)
+    if not result["removed"]:
+        raise HTTPException(status_code=404, detail="Show not found")
+    return result
+
+
 @api_router.post("/map/movie/{movie_id}", tags=["Mutation"])
 def api_map_movie(
     movie_id: int,
@@ -121,6 +157,8 @@ def rebuild_status() -> dict:
         "phase": "foundation",
         "sonarr_configured": bool(settings.sonarr_url and settings.sonarr_api_key),
         "radarr_configured": bool(settings.radarr_url and settings.radarr_api_key),
+        "sync": sync_status(),
+        "runtime": runtime_state(),
     }
 
 
@@ -324,6 +362,11 @@ def api_clear_rss_cache(_: str = Depends(require_api_key)) -> dict:
     return clear_rss_cache()
 
 
+@api_router.post("/api/rss/update", tags=["System"])
+def api_update_rss_cache(_: str = Depends(require_api_key)) -> dict:
+    return update_rss_cache()
+
+
 @api_router.post("/api/webhook", tags=["Integration"])
 def manager_webhook(
     payload: dict = Body(default_factory=dict),
@@ -332,7 +375,17 @@ def manager_webhook(
     normalized = normalize_webhook(payload)
     if not normalized["accepted"]:
         raise HTTPException(status_code=400, detail="Unsupported webhook payload")
+    if normalized["event_family"] == "add" and normalized.get("manager_entity_id"):
+        if normalized["manager"] == "sonarr":
+            sync_single_show(int(normalized["manager_entity_id"]))
+        elif normalized["manager"] == "radarr":
+            sync_single_movie(int(normalized["manager_entity_id"]))
     return normalized
+
+
+@api_router.post("/sync", tags=["Integration"])
+def manual_sync(_: str = Depends(require_api_key)) -> dict:
+    return {"status": "ok", "result": sync_all()}
 
 
 @api_router.api_route("/api", methods=["GET", "POST"], tags=["Indexer"])

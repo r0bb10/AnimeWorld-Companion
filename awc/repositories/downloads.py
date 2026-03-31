@@ -32,6 +32,30 @@ def list_downloads(limit: int = 100) -> list[dict]:
     return [dict(row) for row in rows]
 
 
+def list_all_downloads() -> list[dict]:
+    with get_db() as conn:
+        rows = conn.execute(
+            """
+            SELECT
+                id,
+                url,
+                filename,
+                status,
+                total_bytes,
+                downloaded_bytes,
+                part_path,
+                error,
+                started_at,
+                finished_at,
+                created_at,
+                sonarr_id
+            FROM downloads
+            ORDER BY created_at DESC
+            """
+        ).fetchall()
+    return [dict(row) for row in rows]
+
+
 def get_download(download_id: str) -> dict | None:
     with get_db() as conn:
         row = conn.execute(
@@ -105,6 +129,48 @@ def update_download_status(download_id: str, status: str, error: str | None = No
     return get_download(download_id)
 
 
+def update_download_progress(
+    download_id: str,
+    *,
+    status: str | None = None,
+    total_bytes: int | None = None,
+    downloaded_bytes: int | None = None,
+    part_path: str | None = None,
+    error: str | None = None,
+    started_at: float | None = None,
+    finished_at: float | None = None,
+) -> dict | None:
+    current = get_download(download_id)
+    if not current:
+        return None
+    with get_db(write=True) as conn:
+        conn.execute(
+            """
+            UPDATE downloads
+            SET
+                status = ?,
+                total_bytes = ?,
+                downloaded_bytes = ?,
+                part_path = ?,
+                error = ?,
+                started_at = ?,
+                finished_at = ?
+            WHERE id = ?
+            """,
+            (
+                status if status is not None else current["status"],
+                total_bytes if total_bytes is not None else current["total_bytes"],
+                downloaded_bytes if downloaded_bytes is not None else current["downloaded_bytes"],
+                part_path if part_path is not None else current["part_path"],
+                error if error is not None else current["error"],
+                started_at if started_at is not None else current["started_at"],
+                finished_at if finished_at is not None else current["finished_at"],
+                download_id,
+            ),
+        )
+    return get_download(download_id)
+
+
 def delete_download(download_id: str) -> bool:
     with get_db(write=True) as conn:
         cursor = conn.execute("DELETE FROM downloads WHERE id = ?", (download_id,))
@@ -120,3 +186,28 @@ def clear_finished_downloads() -> int:
             """
         )
     return int(cursor.rowcount or 0)
+
+
+def list_completed_downloads() -> list[dict]:
+    with get_db() as conn:
+        rows = conn.execute(
+            """
+            SELECT
+                id,
+                url,
+                filename,
+                status,
+                total_bytes,
+                downloaded_bytes,
+                part_path,
+                error,
+                started_at,
+                finished_at,
+                created_at,
+                sonarr_id
+            FROM downloads
+            WHERE status = 'completed'
+            ORDER BY created_at DESC
+            """
+        ).fetchall()
+    return [dict(row) for row in rows]

@@ -228,3 +228,22 @@ def find_show_by_tvdb_id(tvdb_id: int | None) -> dict | None:
             (tvdb_id,),
         ).fetchone()
     return dict(row) if row else None
+
+
+def set_season_ignored(show_id: int, season_number: int, ignored: bool) -> bool:
+    with get_db(write=True) as conn:
+        cursor = conn.execute(
+            """
+            UPDATE show_seasons
+            SET ignored = ?, updated_at = CURRENT_TIMESTAMP
+            WHERE show_id = ? AND season_number = ?
+            """,
+            (1 if ignored else 0, show_id, season_number),
+        )
+    return bool(cursor.rowcount)
+
+
+def delete_show(show_id: int) -> bool:
+    with get_db(write=True) as conn:
+        cursor = conn.execute("DELETE FROM shows WHERE id = ?", (show_id,))
+    return bool(cursor.rowcount)

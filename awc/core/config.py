@@ -3,6 +3,8 @@
 from dataclasses import dataclass
 import os
 from pathlib import Path
+import socket
+from urllib.parse import urlsplit, urlunsplit
 
 from dotenv import load_dotenv
 
@@ -38,6 +40,40 @@ def _resolve_database_path() -> str:
     return configured
 
 
+def _host_resolves(hostname: str) -> bool:
+    try:
+        socket.getaddrinfo(hostname, None)
+        return True
+    except OSError:
+        return False
+
+
+def _normalize_manager_url(raw_url: str) -> str:
+    value = (raw_url or "").strip()
+    if not value:
+        return ""
+
+    parsed = urlsplit(value)
+    hostname = parsed.hostname or ""
+    if not hostname or _host_resolves(hostname):
+        return value
+
+    in_container = Path("/.dockerenv").exists()
+    fallback_host = "host.docker.internal" if in_container else "127.0.0.1"
+    if hostname in {"sonarr-dev", "radarr-dev", "localhost"}:
+        netloc = fallback_host
+        if parsed.port:
+            netloc = f"{netloc}:{parsed.port}"
+        if parsed.username:
+            auth = parsed.username
+            if parsed.password:
+                auth = f"{auth}:{parsed.password}"
+            netloc = f"{auth}@{netloc}"
+        return urlunsplit((parsed.scheme, netloc, parsed.path, parsed.query, parsed.fragment))
+
+    return value
+
+
 @dataclass(frozen=True)
 class Settings:
     aw_base_url: str
@@ -50,10 +86,19 @@ class Settings:
     sync_interval_minutes: int
     max_concurrent_downloads: int
     download_history_days: int
+    rss_enabled: bool
+    rss_poll_interval: int
+    rss_cache_retention_days: int
+    rss_cache_limit: int
     sonarr_url: str
     sonarr_api_key: str
+    sonarr_anime_tag: str
+    sonarr_dub_tag: str
+    sonarr_import_poll_interval: int
+    sonarr_unmonitor_imported: bool
     radarr_url: str
     radarr_api_key: str
+    anime_tag: str
 
 
 def load_settings() -> Settings:
@@ -68,10 +113,19 @@ def load_settings() -> Settings:
         sync_interval_minutes=_int("SYNC_INTERVAL", _int("SONARR_SYNC_INTERVAL", 30)),
         max_concurrent_downloads=_int("MAX_CONCURRENT_DOWNLOADS", 10),
         download_history_days=_int("DOWNLOAD_HISTORY_DAYS", 7),
-        sonarr_url=_get("SONARR_URL"),
+        rss_enabled=_get("RSS_ENABLED", "false").lower() == "true",
+        rss_poll_interval=_int("RSS_POLL_INTERVAL", 300),
+        rss_cache_retention_days=_int("RSS_CACHE_RETENTION_DAYS", 30),
+        rss_cache_limit=_int("RSS_CACHE_LIMIT", 100),
+        sonarr_url=_normalize_manager_url(_get("SONARR_URL")),
         sonarr_api_key=_get("SONARR_API_KEY"),
-        radarr_url=_get("RADARR_URL"),
+        sonarr_anime_tag=_get("SONARR_ANIME_TAG", _get("ANIME_TAG", "anime")),
+        sonarr_dub_tag=_get("SONARR_DUB_TAG", _get("DUB_TAG", "ita")),
+        sonarr_import_poll_interval=_int("SONARR_IMPORT_POLL_INTERVAL", 60),
+        sonarr_unmonitor_imported=_get("SONARR_UNMONITOR_IMPORTED", "false").lower() == "true",
+        radarr_url=_normalize_manager_url(_get("RADARR_URL")),
         radarr_api_key=_get("RADARR_API_KEY"),
+        anime_tag=_get("ANIME_TAG", _get("SONARR_ANIME_TAG", "anime")),
     )
 
 

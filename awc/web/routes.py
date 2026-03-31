@@ -18,12 +18,19 @@ from ..services.download_service import (
     remove_download,
     resume_download,
 )
+from ..services.discovery_service import discover_movie, discover_show, search_animeworld
 from ..services.events_service import stream_events
 from ..services.health_service import build_health_report
 from ..services.mapping_service import (
     build_show_mapping_snapshot,
     resolve_absolute_episode,
     resolve_scene_episode,
+)
+from ..services.mutation_service import (
+    map_movie,
+    map_show_season,
+    unmap_movie,
+    unmap_show_season,
 )
 from ..services.manager_service import build_manager_snapshot
 from ..services.preview_service import build_naming_preview
@@ -40,6 +47,72 @@ api_router = APIRouter()
 @api_router.get("/", tags=["UI"])
 def dashboard() -> HTMLResponse:
     return HTMLResponse(build_dashboard_html())
+
+
+@api_router.post("/map", tags=["Mutation"])
+def api_map_show_season(
+    show_id: int,
+    season_number: int,
+    aw_link: str,
+    aw_title: str = "",
+    part: int = 1,
+    aw_episode_count: int = 0,
+    aw_total_episodes: int = 0,
+    aw_status: str = "",
+    aw_category: str = "",
+    linked_with_season: int | None = None,
+    _: str = Depends(require_api_key),
+) -> dict:
+    result = map_show_season(
+        show_id=show_id,
+        season_number=season_number,
+        aw_link=aw_link,
+        aw_title=aw_title,
+        part=part,
+        aw_episode_count=aw_episode_count,
+        aw_total_episodes=aw_total_episodes,
+        aw_status=aw_status,
+        aw_category=aw_category,
+        linked_with_season=linked_with_season,
+    )
+    if not result["updated"]:
+        raise HTTPException(status_code=404, detail=result["reason"])
+    return result
+
+
+@api_router.post("/unmap", tags=["Mutation"])
+def api_unmap_show_season(
+    show_id: int,
+    season_number: int,
+    _: str = Depends(require_api_key),
+) -> dict:
+    return unmap_show_season(show_id, season_number)
+
+
+@api_router.post("/map/movie/{movie_id}", tags=["Mutation"])
+def api_map_movie(
+    movie_id: int,
+    aw_link: str,
+    aw_title: str = "",
+    aw_status: str = "",
+    aw_category: str = "",
+    _: str = Depends(require_api_key),
+) -> dict:
+    result = map_movie(
+        movie_id=movie_id,
+        aw_link=aw_link,
+        aw_title=aw_title,
+        aw_status=aw_status,
+        aw_category=aw_category,
+    )
+    if not result["updated"]:
+        raise HTTPException(status_code=404, detail=result["reason"])
+    return result
+
+
+@api_router.post("/unmap/movie/{movie_id}", tags=["Mutation"])
+def api_unmap_movie(movie_id: int, _: str = Depends(require_api_key)) -> dict:
+    return unmap_movie(movie_id)
 
 
 @api_router.get("/api/rebuild/status", tags=["System"])
@@ -110,6 +183,27 @@ def rebuild_movie_detail(movie_id: int) -> dict:
 @api_router.get("/api/movies/{movie_id}", tags=["Catalog"])
 def api_movie_detail(movie_id: int, _: str = Depends(require_api_key)) -> dict:
     return rebuild_movie_detail(movie_id)
+
+
+@api_router.get("/api/search/aw", tags=["Discovery"])
+def api_search_aw(q: str, limit: int = 10, _: str = Depends(require_api_key)) -> dict:
+    return search_animeworld(q, limit=limit)
+
+
+@api_router.get("/api/discover/{show_id}", tags=["Discovery"])
+def api_discover_show(show_id: int, limit: int = 10, _: str = Depends(require_api_key)) -> dict:
+    result = discover_show(show_id, limit=limit)
+    if not result:
+        raise HTTPException(status_code=404, detail="Show not found")
+    return result
+
+
+@api_router.get("/api/discover/movie/{movie_id}", tags=["Discovery"])
+def api_discover_movie(movie_id: int, limit: int = 10, _: str = Depends(require_api_key)) -> dict:
+    result = discover_movie(movie_id, limit=limit)
+    if not result:
+        raise HTTPException(status_code=404, detail="Movie not found")
+    return result
 
 
 @api_router.get("/api/rss/cache", tags=["System"])

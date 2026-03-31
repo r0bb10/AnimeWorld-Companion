@@ -1,5 +1,7 @@
 """Mapping repository for the clean rebuild."""
 
+from datetime import UTC, datetime
+
 from .db import get_db
 
 
@@ -112,3 +114,133 @@ def get_episode_by_absolute(show_id: int, absolute_episode: int) -> tuple[int, i
     if not row:
         return None
     return row["internal_season"], row["internal_episode"]
+
+
+def replace_show_mapping(
+    *,
+    show_id: int,
+    season_number: int,
+    aw_link: str,
+    aw_title: str = "",
+    part: int = 1,
+    aw_episode_count: int = 0,
+    aw_total_episodes: int = 0,
+    aw_status: str = "",
+    aw_category: str = "",
+    linked_with_season: int | None = None,
+) -> list[dict]:
+    now = datetime.now(UTC).isoformat()
+    with get_db(write=True) as conn:
+        conn.execute(
+            "DELETE FROM aw_show_mappings WHERE show_id = ? AND season_number = ?",
+            (show_id, season_number),
+        )
+        conn.execute(
+            """
+            INSERT INTO aw_show_mappings (
+                show_id,
+                season_number,
+                part,
+                aw_link,
+                aw_title,
+                aw_episode_count,
+                aw_total_episodes,
+                aw_status,
+                aw_category,
+                mapping_type,
+                confidence_score,
+                confidence_factors,
+                last_verified,
+                created_at,
+                updated_at,
+                linked_with_season
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'manual', 1.0, NULL, ?, ?, ?, ?)
+            """,
+            (
+                show_id,
+                season_number,
+                part,
+                aw_link,
+                aw_title,
+                aw_episode_count,
+                aw_total_episodes,
+                aw_status,
+                aw_category,
+                now,
+                now,
+                now,
+                linked_with_season,
+            ),
+        )
+    return list_show_mappings(show_id, season_number)
+
+
+def remove_show_mapping(show_id: int, season_number: int) -> int:
+    with get_db(write=True) as conn:
+        cursor = conn.execute(
+            "DELETE FROM aw_show_mappings WHERE show_id = ? AND season_number = ?",
+            (show_id, season_number),
+        )
+    return int(cursor.rowcount or 0)
+
+
+def replace_movie_mapping(
+    *,
+    movie_id: int,
+    aw_link: str,
+    aw_title: str = "",
+    aw_status: str = "",
+    aw_category: str = "",
+) -> dict | None:
+    now = datetime.now(UTC).isoformat()
+    with get_db(write=True) as conn:
+        conn.execute("DELETE FROM aw_movie_mappings WHERE movie_id = ?", (movie_id,))
+        conn.execute(
+            """
+            INSERT INTO aw_movie_mappings (
+                movie_id,
+                aw_link,
+                aw_title,
+                aw_status,
+                aw_category,
+                mapping_type,
+                confidence_score,
+                confidence_factors,
+                link_check_failures,
+                last_verified,
+                created_at,
+                updated_at
+            )
+            VALUES (?, ?, ?, ?, ?, 'manual', 1.0, NULL, 0, ?, ?, ?)
+            """,
+            (movie_id, aw_link, aw_title, aw_status, aw_category, now, now, now),
+        )
+        row = conn.execute(
+            """
+            SELECT
+                id,
+                movie_id,
+                aw_link,
+                aw_title,
+                aw_status,
+                aw_category,
+                mapping_type,
+                confidence_score,
+                confidence_factors,
+                last_verified,
+                updated_at
+            FROM aw_movie_mappings
+            WHERE movie_id = ?
+            ORDER BY id DESC
+            LIMIT 1
+            """,
+            (movie_id,),
+        ).fetchone()
+    return dict(row) if row else None
+
+
+def remove_movie_mapping(movie_id: int) -> int:
+    with get_db(write=True) as conn:
+        cursor = conn.execute("DELETE FROM aw_movie_mappings WHERE movie_id = ?", (movie_id,))
+    return int(cursor.rowcount or 0)

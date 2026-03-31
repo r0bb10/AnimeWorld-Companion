@@ -88,7 +88,8 @@ def get_show_detail(show_id: int) -> dict | None:
                 monitored,
                 episode_count,
                 air_date_start,
-                air_date_end
+                air_date_end,
+                ignored
             FROM show_seasons
             WHERE show_id = ?
             ORDER BY season_number

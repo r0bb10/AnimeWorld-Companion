@@ -21,7 +21,7 @@ from ..services.automap_service import (
     start_automap_all,
     start_automap_all_movies,
 )
-from ..services.dashboard_service import build_dashboard_html, build_dashboard_snapshot
+from ..services.dashboard_service import build_dashboard_html, build_dashboard_snapshot, build_heartbeat_snapshot
 from ..services.download_service import (
     build_download_snapshot,
     cancel_download,
@@ -213,7 +213,7 @@ def rebuild_health() -> dict:
 
 @api_router.get("/api/heartbeat", tags=["System"])
 def api_heartbeat() -> dict:
-    return build_dashboard_snapshot()
+    return build_heartbeat_snapshot()
 
 
 @api_router.get("/api/rebuild/managers", tags=["System"])

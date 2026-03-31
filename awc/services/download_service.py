@@ -322,13 +322,29 @@ def restore_on_startup() -> dict:
 def build_download_snapshot(limit: int = 100) -> dict:
     downloads = list_downloads(limit=limit)
     active_statuses = {"queued", "downloading", "resuming", "importing"}
+    now = datetime.now(UTC).timestamp()
+    enriched = []
+    for item in downloads:
+        entry = dict(item)
+        total = int(entry.get("total_bytes") or 0)
+        downloaded = int(entry.get("downloaded_bytes") or 0)
+        started_at = entry.get("started_at") or entry.get("created_at") or now
+        finished_at = entry.get("finished_at")
+        end_time = finished_at or now
+        elapsed = max(float(end_time) - float(started_at), 0.0)
+        entry["elapsed"] = round(elapsed, 1)
+        entry["percent"] = round((downloaded / total) * 100, 1) if total > 0 else 0.0
+        entry["speed"] = round(downloaded / elapsed, 1) if elapsed > 0 and entry.get("status") == "downloading" else 0.0
+        part_path = entry.get("part_path") or ""
+        entry["resumable"] = entry.get("status") in {"paused", "cancelled", "failed"} and bool(part_path) and os.path.exists(part_path)
+        enriched.append(entry)
     return {
         "counts": {
-            "total": len(downloads),
-            "active": sum(1 for item in downloads if item["status"] in active_statuses),
-            "finished": sum(1 for item in downloads if item["status"] not in active_statuses),
+            "total": len(enriched),
+            "active": sum(1 for item in enriched if item["status"] in active_statuses),
+            "finished": sum(1 for item in enriched if item["status"] not in active_statuses),
         },
-        "downloads": downloads,
+        "downloads": enriched,
     }
 
 

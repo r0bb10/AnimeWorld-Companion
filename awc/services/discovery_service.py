@@ -48,11 +48,21 @@ def discover_show(show_id: int, limit: int = 10) -> dict | None:
         if len(results) >= limit:
             break
 
+    legacy_links = [
+        {
+            "link": item.get("url", ""),
+            "name": item.get("title", ""),
+            "eps": 0,
+        }
+        for item in _dedupe_results(results)[:limit]
+    ]
+
     return {
         "show_id": show_id,
         "title": show["title"],
         "queries": used_queries,
         "results": _dedupe_results(results)[:limit],
+        "links": legacy_links,
     }
 
 
@@ -78,9 +88,19 @@ def discover_movie(movie_id: int, limit: int = 10) -> dict | None:
         if len(results) >= limit:
             break
 
+    legacy_links = [
+        {
+            "link": item.get("url", ""),
+            "name": item.get("title", ""),
+            "eps": 0,
+        }
+        for item in _dedupe_results(results)[:limit]
+    ]
+
     return {
         "movie_id": movie_id,
         "title": movie["title"],
         "queries": used_queries,
         "results": _dedupe_results(results)[:limit],
+        "links": legacy_links,
     }

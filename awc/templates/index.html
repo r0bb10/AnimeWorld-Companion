@@ -1,0 +1,1126 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>AnimeWorld Companion</title>
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Ccircle cx='16' cy='16' r='15' fill='%230d1117' stroke='%2358a6ff' stroke-width='2'/%3E%3Cpolygon points='12,9 25,16 12,23' fill='%2358a6ff'/%3E%3C/svg%3E">
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;background:#0d1117;color:#c9d1d9;margin:0;height:100vh;overflow:hidden}
+a{color:#58a6ff;text-decoration:none}a:hover{text-decoration:underline} 
+
+.header{display:flex;justify-content:space-between;align-items:center;margin-bottom:16px;padding-bottom:12px;border-bottom:1px solid #21262d}
+.header h1{font-size:20px;color:#f0f6fc}
+.header-actions{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+
+.heartbeat{display:flex;gap:12px;font-size:12px;margin-bottom:12px;padding:8px 12px;background:#161b22;border:1px solid #21262d;border-radius:6px}
+.hb-item{display:flex;align-items:center;gap:4px}
+.hb-dot{width:8px;height:8px;border-radius:50%;display:inline-block}
+.hb-ok{background:#3fb950}.hb-err{background:#da3633}.hb-wait{background:#8b949e}.hb-warn{background:#d29922}
+
+.stats{font-size:13px;color:#8b949e;margin-bottom:16px}
+.stats span{color:#58a6ff;font-weight:600}
+
+.filter-bar{display:flex;gap:8px;margin-bottom:16px;align-items:center}
+.filter-bar input{flex:1;padding:6px 10px;background:#161b22;border:1px solid #30363d;border-radius:6px;color:#c9d1d9;font-size:14px}
+.filter-bar select{padding:6px 10px;background:#161b22;border:1px solid #30363d;border-radius:6px;color:#c9d1d9;font-size:14px}
+
+.card{background:#161b22;border:1px solid #21262d;border-radius:8px;margin-bottom:8px;overflow:hidden}
+.card-header{display:flex;justify-content:space-between;align-items:center;padding:10px 14px;cursor:pointer;user-select:none}
+.card-header:hover{background:#1c2128}
+.card-title{font-size:15px;font-weight:600;color:#f0f6fc}
+.card-meta{display:flex;gap:8px;align-items:center;font-size:12px;color:#8b949e}
+.badge{display:inline-block;padding:2px 6px;border-radius:10px;font-size:11px;font-weight:600;line-height:1.2;vertical-align:middle}
+.badge-mapped{background:#238636;color:#fff}
+.badge-partial{background:#9e6a03;color:#fff}
+.badge-unmapped{background:#da3633;color:#fff}
+.badge-auto{background:#1f6feb;color:#fff}
+.badge-manual{background:#9e6a03;color:#fff}
+.badge-prerelease{background:#6e40c9;color:#fff}
+.badge-ignored{background:#30363d;color:#8b949e}
+.badge-tv{background:#1f6feb;color:#fff}
+.badge-movie{background:#6e40c9;color:#fff}
+
+.card-body{display:none;padding:0 14px 12px;border-top:1px solid #21262d}
+.card.open .card-body{display:block}
+
+.season-row{display:flex;align-items:center;gap:10px;padding:8px 0;border-bottom:1px solid #21262d;font-size:13px}
+.season-row:last-child{border-bottom:none}
+.season-label{width:50px;font-weight:600;color:#f0f6fc}
+.season-status{width:70px}
+.season-link{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.season-actions{display:flex;gap:4px;flex-shrink:0}
+
+.btn{padding:4px 10px;border:1px solid #30363d;border-radius:6px;background:#21262d;color:#c9d1d9;font-size:12px;cursor:pointer}
+.btn:hover{background:#30363d;border-color:#8b949e}
+.btn-primary{background:#238636;border-color:#238636;color:#fff}
+.btn-primary:hover{background:#2ea043}
+.btn-danger{background:#da3633;border-color:#da3633;color:#fff}
+.btn-danger:hover{background:#f85149}
+.btn-warning{background:#d29922;border-color:#d29922;color:#fff}
+.btn-warning:hover{background:#e29a3a}
+.btn-sync{background:#1f6feb;border-color:#1f6feb;color:#fff}
+.btn-sync:hover{background:#388bfd}
+.btn-warn{background:#9e6a03;border-color:#9e6a03;color:#fff}
+.btn-warn:hover{background:#bb8009}
+
+.map-form{display:flex;gap:4px;flex:1}
+.map-form input{flex:1;padding:4px 8px;background:#0d1117;border:1px solid #30363d;border-radius:6px;color:#c9d1d9;font-size:12px}
+
+.discover-panel{margin-top:8px;padding:8px;background:#0d1117;border-radius:6px}
+.discover-item{display:flex;justify-content:space-between;align-items:center;padding:4px 0;font-size:12px}
+.discover-item+.discover-item{border-top:1px solid #21262d}
+
+.dl-box{margin-bottom:12px;background:#161b22;border:1px solid #21262d;border-radius:8px;overflow:hidden}
+.dl-header{display:flex;justify-content:space-between;align-items:center;padding:10px 14px;border-bottom:1px solid #21262d}
+.dl-header h3{font-size:13px;color:#8b949e;font-weight:600;margin:0}
+.dl-table{width:100%;border-collapse:collapse;font-size:12px}
+.dl-table th{text-align:left;padding:6px 10px;color:#8b949e;font-weight:600;border-bottom:1px solid #21262d;font-size:11px}
+.dl-table td{padding:6px 10px;border-bottom:1px solid #161b22}
+.dl-table tr:last-child td{border-bottom:none}
+.dl-table .dl-name{max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:#f0f6fc;font-weight:500}
+.dl-bar-wrap{height:6px;background:#21262d;border-radius:3px;overflow:hidden;display:block;width:100%}
+.dl-bar{height:100%;background:#238636;border-radius:3px;transition:width .3s}
+.dl-s-ok{color:#3fb950}.dl-s-err{color:#f85149}.dl-s-run{color:#58a6ff}.dl-s-cancel{color:#d29922}.dl-s-queue{color:#8b949e}.dl-s-imported{color:#a371f7}
+.dl-table th,.dl-table td{border-right:1px solid #21262d}
+.dl-table th:last-child,.dl-table td:last-child{border-right:none}
+.dl-pct{font-variant-numeric:tabular-nums;text-align:center;color:#58a6ff;font-weight:600}
+
+.alt-titles{font-size:11px;color:#8b949e;margin-top:2px}
+.season-unaired{opacity:0.4}
+.badge-unaired{background:#30363d;color:#8b949e}
+.arrow{transition:transform .2s;display:inline-block}
+.card.open .arrow{transform:rotate(90deg)}
+
+.card-footer{display:flex;justify-content:space-between;align-items:center;margin-top:8px;gap:4px}
+
+/* Layout: sticky topbar + scrollable content */
+.app{display:flex;flex-direction:column;height:100%;padding:16px}
+.topbar{position:sticky;top:0;z-index:60;background:#0d1117;box-shadow:0 2px 6px rgba(0,0,0,0.35);padding-top:8px;padding-bottom:8px}
+.content{flex:1 1 auto;overflow-y:auto;-webkit-overflow-scrolling:touch;padding:12px 0;scrollbar-width:thin;scrollbar-color:#21262d #0d1117}
+/* Custom scrollbar for WebKit browsers */
+.content::-webkit-scrollbar{width:10px}
+.content::-webkit-scrollbar-track{background:transparent}
+.content::-webkit-scrollbar-thumb{background:#21262d;border-radius:6px}
+.content::-webkit-scrollbar-thumb:hover{background:#30363d}
+/* Use dynamic viewport height on browsers that support it (fixes iOS toolbar overlap) */
+@supports(height:100dvh){body{height:100dvh}}
+
+/* ===== MOBILE RESPONSIVE ===== */
+@media(max-width:768px){
+  .app{padding:10px}
+
+  /* Header */
+  .header{flex-direction:column;align-items:flex-start;gap:8px}
+  .header h1{font-size:17px}
+  .header-actions{width:100%;flex-wrap:wrap}
+
+  /* Heartbeat: 2-column grid */
+  .heartbeat{display:grid;grid-template-columns:1fr 1fr;gap:6px;font-size:11px}
+
+  /* Stats */
+  .stats{font-size:12px}
+
+  /* Card header: allow title+meta to wrap */
+  .card-header{flex-wrap:wrap;gap:4px}
+  .card-title{font-size:14px}
+  .card-meta{flex-wrap:wrap;justify-content:flex-start;max-width:100%}
+
+  /* Season rows: stack label/status on top, link full-width below */
+  .season-row{flex-wrap:wrap;row-gap:6px}
+  .season-label{flex-shrink:0}
+  .season-status{flex-shrink:0}
+  .season-link{order:3;flex:0 0 100%;white-space:normal;overflow:visible;text-overflow:clip}
+  .season-actions{order:4;flex-shrink:0}
+  .map-form{flex-direction:column;width:100%}
+  .map-form input{width:100%}
+
+  /* Card footer */
+  .card-footer{flex-wrap:wrap;gap:6px}
+
+  /* Downloads box */
+  .dl-header{flex-wrap:wrap;gap:6px}
+  .dl-header>div{flex-wrap:wrap}
+  /* Hide low-priority columns on small screens */
+  .dl-col-speed,.dl-col-size,.dl-col-completed,.dl-col-actions{display:none}
+}
+
+@media(max-width:480px){
+  /* Extra-small: tighten up more */
+  .btn{font-size:11px;padding:4px 8px}
+  .heartbeat{font-size:10px}
+  .dl-table{font-size:11px}
+  .dl-table th,.dl-table td{padding:5px 6px}
+}
+</style>
+</head>
+<body>
+
+<div class="app">
+  <div class="topbar">
+    <div class="header">
+  <h1>AnimeWorld Companion</h1>
+  <div class="header-actions">
+    <button class="btn btn-sync" id="sync-btn" onclick="syncNow(this)">Sync Sonarr</button>
+    <button class="btn btn-primary" id="automap-all-btn" onclick="automapAll(this)" {% if automap_running %}disabled{% endif %}>
+      {{ "Auto-mapping..." if automap_running else "Automap Library" }}
+    </button>
+    <button class="btn btn-danger" onclick="restartCompanion(this)">Restart</button>
+  </div>
+</div>
+
+<div class="heartbeat" id="heartbeat">
+  <div class="hb-item"><a href="/health" target="_blank" style="color:inherit;text-decoration:none">Companion</a>: <span class="hb-dot hb-wait" id="hb-companion"></span> <span id="hb-companion-txt">{% if app_version and app_version.lower() not in ('local','unspecified') %}{{ app_version }}{% else %}local{% endif %}</span></div>
+  <div class="hb-item" id="hb-sonarr-item">Sonarr: <span class="hb-dot hb-wait" id="hb-sonarr"></span> <span id="hb-sonarr-txt">{% if sonarr_sync_in_progress %}syncing...{% else %}checking...{% endif %}</span></div>
+  <div class="hb-item" id="hb-radarr-item" style="display:none">Radarr: <span class="hb-dot hb-wait" id="hb-radarr"></span> <span id="hb-radarr-txt">checking...</span></div>
+  <div class="hb-item">AnimeWorld: <span class="hb-dot hb-wait" id="hb-aw"></span> <span id="hb-aw-txt">checking...</span></div>
+  <div class="hb-item">RSS: <span class="hb-dot hb-wait" id="hb-rss"></span> <span id="hb-rss-txt">checking...</span></div>
+</div>
+
+<div class="dl-box" id="dl-box" style="display:none">
+  <div class="dl-header">
+    <h3>Downloads</h3>
+    <div style="display:flex;gap:8px;align-items:center">
+      <button class="btn" id="dl-prev-btn" style="font-size:11px;padding:2px 8px" onclick="dlPrevPage()">← Prev</button>
+      <span id="dl-page-info" style="font-size:12px;color:#8b949e;min-width:40px;text-align:center"></span>
+      <button class="btn" id="dl-next-btn" style="font-size:11px;padding:2px 8px" onclick="dlNextPage()">Next →</button>
+      <button class="btn" id="dl-clear-btn" style="font-size:11px;padding:2px 8px" onclick="clearDownloads()">Clear History</button>
+    </div>
+  </div>
+  <table class="dl-table">
+    <thead><tr><th style="text-align:center;width:22%">File</th><th style="text-align:center;width:28%">Progress</th><th style="text-align:center;width:6%">%</th><th class="dl-col-speed" style="text-align:center;width:6%">Speed</th><th class="dl-col-size" style="text-align:center;width:8%">Size</th><th style="text-align:center;width:8%">Status</th><th class="dl-col-completed" style="text-align:center;width:10%">Completed</th><th class="dl-col-actions" style="text-align:center;width:12%">Actions</th></tr></thead>
+    <tbody id="dl-list"></tbody>
+  </table>
+</div>
+
+<div class="stats">
+  <span>{{ shows|length }}</span> shows{% if movies is defined and movies|length > 0 %} &middot; <span>{{ movies|length }}</span> movies{% endif %} &middot;
+  mapped <span id="stat-mapped">{{ mapped_count + (movies|selectattr('mapping')|list|length if movies is defined else 0) }}</span>/<span id="stat-total">{{ mapped_count + unmapped_count + (movies|length if movies is defined else 0) }}</span>
+</div>
+  
+  <div class="filter-bar">
+    <input type="text" id="search" placeholder="Filter shows..." oninput="filterShows()">
+    <select id="status-filter" onchange="filterShows()">
+      <option value="all">All</option>
+      <option value="mapped">Mapped</option>
+      <option value="unmapped">Unmapped</option>
+      <option value="partial">Partial</option>
+      <option value="unaired">Has Unaired</option>
+    </select>
+  </div>
+  </div> <!-- /.topbar -->
+
+  <main class="content">
+
+
+
+{% if shows|length == 0 %}
+<div style="text-align:center;padding:48px;color:#8b949e">
+  <p style="font-size:16px">No shows in database yet.</p>
+  <p>Configure Sonarr and click "Sync Sonarr" to populate.</p>
+</div>
+{% endif %}
+
+{% for show in shows %}
+{% set mappings = show.mappings %}
+{% set ns = namespace(total=0, mapped=0, ignored=0, unaired=0) %}
+{% for s in show.seasons if s.season_number > 0 %}
+  {% if season_has_aired(s) %}
+    {% set ns.total = ns.total + 1 %}
+    {% if s.season_number in mappings %}{% set ns.mapped = ns.mapped + 1 %}
+    {% elif s.ignored %}{% set ns.ignored = ns.ignored + 1 %}{% endif %}
+  {% else %}
+    {% set ns.unaired = ns.unaired + 1 %}
+    {% if s.season_number in mappings %}
+      {% set ns.total = ns.total + 1 %}
+      {% set ns.mapped = ns.mapped + 1 %}
+    {% elif s.ignored %}
+      {% set ns.ignored = ns.ignored + 1 %}
+    {% endif %}
+  {% endif %}
+{% endfor %}
+{% set total_seasons = ns.total %}
+{% set effective_total = ns.total - ns.ignored %}
+<div class="card" data-title="{{ show.title|lower }}" data-status="{{ 'mapped' if ns.mapped == effective_total and effective_total > 0 else ('partial' if ns.mapped > 0 else 'unmapped') }}" data-has-unaired="{{ 'true' if ns.unaired > 0 else 'false' }}">
+  <div class="card-header" onclick="toggle(this)">
+    <div>
+      <span class="card-title">{{ show.title }}</span>
+      {% if show.alternate_titles %}
+      <div class="alt-titles">{{ show.alternate_titles[:3]|join(' / ') }}{% if show.alternate_titles|length > 3 %} +{{ show.alternate_titles|length - 3 }} more{% endif %}</div>
+      {% endif %}
+    </div>
+    <div class="card-meta">
+      <span class="badge badge-tv">TV</span>
+      {% if show.series_type == 'standard' %}<span class="badge" style="background:#1f6feb">standard</span>{% endif %}
+      <span>{{ total_seasons }} seasons</span>
+      {% if ns.mapped == effective_total and effective_total > 0 %}
+      <span class="badge badge-mapped card-status-badge">all mapped</span>
+      {% elif ns.mapped > 0 %}
+      <span class="badge badge-partial card-status-badge">{{ ns.mapped }}/{{ effective_total }}</span>
+      {% else %}
+      <span class="badge badge-unmapped card-status-badge">unmapped</span>
+      {% endif %}
+      <span class="arrow">&#9654;</span>
+    </div>
+  </div>
+  <div class="card-body">
+    {% for s in show.seasons|sort(attribute='season_number') if s.season_number > 0 %}
+    {% set aired = season_has_aired(s) %}
+    {% set ignored = s.ignored %}
+    {% set mlist = mappings.get(s.season_number) %}
+    {% set m = mlist[0] if mlist else None %}
+    <div class="season-row{% if (not aired and not m) or ignored %} season-unaired{% endif %}"
+         data-showid="{{ show.id }}" data-season="{{ s.season_number }}"
+         data-mapped="{{ 'true' if m else 'false' }}"
+         data-ignored="{{ 'true' if ignored else 'false' }}"
+         data-aired="{{ 'true' if aired else 'false' }}">
+      <div class="season-label">S{{ '%02d'|format(s.season_number) }}</div>
+      <div class="season-status">
+        {% if ignored %}
+          <span class="badge badge-ignored">ignored</span>
+        {% elif m %}
+          {% if not aired %}
+          <span class="badge badge-prerelease">pre{% if m.mapping_type == 'auto' and m.confidence_score %} {{ (m.confidence_score * 100) | int }}%{% endif %}</span>
+          {% else %}
+          <span class="badge badge-{{ m.mapping_type }}">{{ m.mapping_type }}{% if m.mapping_type == 'auto' and m.confidence_score %} {{ (m.confidence_score * 100) | int }}%{% endif %}</span>
+          {% endif %}
+        {% elif not aired %}
+          <span class="badge badge-unaired">unaired</span>
+        {% else %}
+          <span style="color:#8b949e">--</span>
+        {% endif %}
+      </div>
+      <div class="season-link">
+        {% if mlist %}
+          {% for p in mlist %}
+            <div style="margin-left:8px;margin-top:4px">
+              {% if mlist|length > 1 %}
+                <span style="font-weight:600;margin-right:6px">P{{ p.part }}</span>
+              {% endif %}
+              <a href="{{ slug_to_url(p.aw_link) }}" target="_blank">{{ slug_to_url(p.aw_link) }}</a>
+              {% if p.aw_episode_count %}
+                <span style="font-size:11px;color:#8b949e;margin-left:8px">{{ p.aw_episode_count }} eps{% if p.aw_total_episodes and (p.aw_total_episodes|int) > (p.aw_episode_count|int) %} (+{{ (p.aw_total_episodes|int) - (p.aw_episode_count|int) }} specials){% endif %}</span>
+              {% endif %}
+            </div>
+          {% endfor %}
+        {% elif not ignored %}
+          <form class="map-form" onsubmit="mapSeason(event,{{ show.id }},{{ s.season_number }})">
+            <input type="text" name="aw_link" placeholder="Paste AW link(s) (separate with newline/comma)...">
+            <button type="submit" class="btn btn-primary">Map</button>
+          </form>
+        {% endif %}
+      </div>
+      <div class="season-actions">
+        {% if m %}
+          <button class="btn btn-danger" onclick="unmapSeason({{ show.id }},{{ s.season_number }},this)">Remove</button>
+        {% elif not ignored %}
+          <button class="btn" style="color:#8b949e;border-color:#30363d" onclick="ignoreSeason({{ show.id }},{{ s.season_number }},this)">Ignore</button>
+        {% else %}
+          <button class="btn" style="color:#8b949e;border-color:#30363d" onclick="unignoreSeason({{ show.id }},{{ s.season_number }},this)">Unignore</button>
+        {% endif %}
+      </div>
+    </div>
+    {% endfor %}
+
+    <div class="card-footer">
+      <div style="display:flex;gap:4px">
+        <button class="btn discover-btn" data-showid="{{ show.id }}">Discover AW Links</button>
+        <button class="btn btn-primary automap-btn" data-showid="{{ show.id }}" style="font-size:12px">Automap This Show</button>
+      </div>
+      <button class="btn btn-danger" style="font-size:12px" onclick="deleteShow({{ show.id }},{{ show.title|tojson }},this)">Delete Show</button>
+    </div>
+    <div id="disc-{{ show.id }}" class="discover-panel" style="display:none"></div>
+  </div>
+</div>
+{% endfor %}
+
+{% if movies is defined and movies|length > 0 %}
+{% for movie in movies %}
+{% set mapping = movie.mapping %}
+<div class="card" data-title="{{ movie.title|lower }}" data-status="{{ 'mapped' if mapping else 'unmapped' }}" data-type="movie">
+  <div class="card-header" onclick="toggle(this)">
+    <div>
+      <span class="card-title">{{ movie.title }}</span>
+      {% if movie.alternate_titles %}
+      <div class="alt-titles">{{ movie.alternate_titles[:3]|join(' / ') }}{% if movie.alternate_titles|length > 3 %} +{{ movie.alternate_titles|length - 3 }} more{% endif %}</div>
+      {% endif %}
+    </div>
+    <div class="card-meta">
+      <span class="badge badge-movie">Movie</span>
+      {% if movie.year %}<span>{{ movie.year }}</span>{% endif %}
+      {% if mapping %}
+      <span class="badge badge-{{ mapping.mapping_type }} card-status-badge">{{ mapping.mapping_type }}{% if mapping.mapping_type == 'auto' and mapping.confidence_score %} {{ (mapping.confidence_score * 100) | int }}%{% endif %}</span>
+      {% else %}
+      <span class="badge badge-unmapped card-status-badge">unmapped</span>
+      {% endif %}
+      <span class="arrow">&#9654;</span>
+    </div>
+  </div>
+  <div class="card-body">
+    <div class="season-row" style="flex-wrap:wrap;gap:10px;padding:8px 0">
+      <div style="width:50px;font-weight:600;color:#f0f6fc">Film</div>
+      <div style="width:70px">
+        {% if mapping %}
+        <span class="badge badge-{{ mapping.mapping_type }}">{{ mapping.mapping_type }}{% if mapping.mapping_type == 'auto' and mapping.confidence_score %} {{ (mapping.confidence_score * 100) | int }}%{% endif %}</span>
+        {% else %}
+        <span style="color:#8b949e">--</span>
+        {% endif %}
+      </div>
+      <div style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">
+        {% if mapping %}
+        <a href="{{ slug_to_url(mapping.aw_link) }}" target="_blank">{{ slug_to_url(mapping.aw_link) }}</a>
+        {% else %}
+        <form class="map-form" onsubmit="mapMovie(event,{{ movie.id }})">
+          <input type="text" name="aw_link" placeholder="Paste AW movie link...">
+          <button type="submit" class="btn btn-primary">Map</button>
+        </form>
+        {% endif %}
+      </div>
+      <div style="display:flex;gap:4px;flex-shrink:0">
+        {% if mapping %}
+        <button class="btn btn-danger" onclick="unmapMovie({{ movie.id }},this)">Remove</button>
+        {% endif %}
+      </div>
+    </div>
+    <div class="card-footer">
+      <div style="display:flex;gap:4px">
+        <button class="btn movie-discover-btn" data-movieid="{{ movie.id }}" style="font-size:12px">Discover AW Links</button>
+        <button class="btn btn-primary" onclick="automapMovie({{ movie.id }},this)" style="font-size:12px">Automap</button>
+      </div>
+      <div></div>
+    </div>
+    <div id="movie-disc-{{ movie.id }}" class="discover-panel" style="display:none"></div>
+  </div>
+</div>
+{% endfor %}
+{% endif %}
+
+<script>
+const AWC_KEY={{ api_key|tojson }};
+const AWC_AW_BASE={{ aw_base_url|tojson }};
+function _kp(){return AWC_KEY?'?apikey='+encodeURIComponent(AWC_KEY):'';}
+function _kh(){return AWC_KEY?{'X-Api-Key':AWC_KEY}:{};}
+function _slugToUrl(slug){return AWC_AW_BASE+'/play/'+slug+'/';}
+
+function toggle(el){el.closest('.card').classList.toggle('open')}
+
+function filterShows(){
+  const q=document.getElementById('search').value.toLowerCase();
+  const st=document.getElementById('status-filter').value;
+  document.querySelectorAll('.card').forEach(c=>{
+    const t=c.dataset.title||'';
+    const s=c.dataset.status||'';
+    const matchText=!q||t.includes(q);
+    const matchStatus=st==='all'||(st==='unaired'?c.dataset.hasUnaired==='true':s===st);
+    c.style.display=(matchText&&matchStatus)?'':'none';
+  });
+}
+
+function _refreshCardBadge(card){
+  const rows=card.querySelectorAll('.season-row');
+  let total=0,mapped=0,ignored=0;
+  rows.forEach(r=>{
+    const aired=r.dataset.aired==='true';
+    const isMapped=r.dataset.mapped==='true';
+    const isIgnored=r.dataset.ignored==='true';
+    if(aired){
+      total++;
+      if(isMapped)mapped++;
+      else if(isIgnored)ignored++;
+    }else if(isMapped){
+      // unaired but already mapped to a pre-release placeholder
+      total++;mapped++;
+    }else if(isIgnored){
+      ignored++;
+    }
+  });
+  const effective=total-ignored;
+  const badge=card.querySelector('.card-status-badge');
+  if(!badge)return;
+  if(mapped===effective&&effective>0){
+    badge.className='badge badge-mapped card-status-badge';badge.textContent='all mapped';card.dataset.status='mapped';
+  }else if(mapped>0){
+    badge.className='badge badge-partial card-status-badge';badge.textContent=mapped+'/'+effective;card.dataset.status='partial';
+  }else{
+    badge.className='badge badge-unmapped card-status-badge';badge.textContent='unmapped';card.dataset.status='unmapped';
+  }
+}
+
+function _refreshGlobalStats(){
+  let mapped=0,total=0;
+  document.querySelectorAll('.season-row').forEach(r=>{
+    if(r.dataset.ignored==='true')return;
+    const aired=r.dataset.aired==='true';
+    const isMapped=r.dataset.mapped==='true';
+    if(aired){total++;if(isMapped)mapped++;}
+    else if(isMapped){total++;mapped++;}
+  });
+  // Count movie cards
+  document.querySelectorAll('.card[data-type="movie"]').forEach(c=>{
+    total++;
+    if(c.dataset.status==='mapped')mapped++;
+  });
+  const sm=document.getElementById('stat-mapped');
+  const st=document.getElementById('stat-total');
+  if(sm)sm.textContent=mapped;
+  if(st)st.textContent=total;
+}
+
+function _btnErr(btn,label){
+  btn.textContent='Error';btn.style.background='#da3633';
+  setTimeout(()=>{btn.textContent=label;btn.style.background='';btn.disabled=false;},2000);
+}
+
+function _fd(obj){const f=new FormData();Object.entries(obj).forEach(([k,v])=>f.append(k,v));return f;}
+
+async function syncNow(btn){
+  btn.disabled=true;btn.textContent='Syncing...';
+  try{await fetch('/sync',{method:'POST',headers:_kh()});}catch(e){_btnErr(btn,'Sync Sonarr');return;}
+  btn.textContent='Sync Sonarr';btn.disabled=false;
+}
+
+let _automapLaunched=false;
+async function automapAll(btn){
+  if(!confirm('This will search AnimeWorld for ALL unmapped seasons.\nIt may take several minutes. Continue?'))return;
+  btn.disabled=true;btn.textContent='Auto-mapping...';
+  _automapLaunched=true;
+  try{
+    const r=await fetch('/automap',{method:'POST',headers:_kh()});
+    const d=await r.json();
+    if(d.status==='already_running'){btn.textContent='Already running...';}
+    // Button re-enabled by heartbeat when automap_running goes false
+  }catch(e){_automapLaunched=false;_btnErr(btn,'Automap Library');}
+}
+
+async function unmapSeason(showId,seasonNum,btn){
+  btn.disabled=true;
+  try{
+    const r=await fetch('/unmap?show_id='+showId+'&season_number='+seasonNum,{method:'POST',headers:_kh()});
+    if(!r.ok)throw new Error('unmap failed');
+    const row=btn.closest('.season-row');
+    row.dataset.mapped='false';
+    row.querySelector('.season-status').innerHTML='<span style="color:#8b949e">--</span>';
+    row.querySelector('.season-link').innerHTML=
+      '<form class="map-form" onsubmit="mapSeason(event,'+showId+','+seasonNum+')">'
+      +'<input type="text" name="aw_link" placeholder="Paste AW link(s) (separate with newline/comma)...">'
+      +'<button type="submit" class="btn btn-primary">Map</button></form>';
+    row.querySelector('.season-actions').innerHTML=
+      '<button class="btn" style="color:#8b949e;border-color:#30363d" onclick="ignoreSeason('+showId+','+seasonNum+',this)">Ignore</button>';
+    _refreshCardBadge(row.closest('.card'));
+    _refreshGlobalStats();
+  }catch(e){_btnErr(btn,'Remove');}
+}
+
+async function ignoreSeason(showId,seasonNum,btn){
+  btn.disabled=true;
+  try{
+    const r=await fetch('/ignore-season?show_id='+showId+'&season_number='+seasonNum,{method:'POST',headers:_kh()});
+    if(!r.ok)throw new Error('ignore failed');
+    const row=btn.closest('.season-row');
+    row.dataset.ignored='true';
+    row.classList.add('season-unaired');
+    row.querySelector('.season-status').innerHTML='<span class="badge badge-ignored">ignored</span>';
+    row.querySelector('.season-link').innerHTML='';
+    row.querySelector('.season-actions').innerHTML=
+      '<button class="btn" style="color:#8b949e;border-color:#30363d" onclick="unignoreSeason('+showId+','+seasonNum+',this)">Unignore</button>';
+    _refreshCardBadge(row.closest('.card'));
+    _refreshGlobalStats();
+  }catch(e){_btnErr(btn,'Ignore');}
+}
+
+async function unignoreSeason(showId,seasonNum,btn){
+  btn.disabled=true;
+  try{
+    const r=await fetch('/unignore-season?show_id='+showId+'&season_number='+seasonNum,{method:'POST',headers:_kh()});
+    if(!r.ok)throw new Error('unignore failed');
+    const row=btn.closest('.season-row');
+    row.dataset.ignored='false';
+    row.classList.remove('season-unaired');
+    row.querySelector('.season-status').innerHTML='<span style="color:#8b949e">--</span>';
+    row.querySelector('.season-link').innerHTML=
+      '<form class="map-form" onsubmit="mapSeason(event,'+showId+','+seasonNum+')">'
+      +'<input type="text" name="aw_link" placeholder="Paste AW link(s) (separate with newline/comma)...">'
+      +'<button type="submit" class="btn btn-primary">Map</button></form>';
+    row.querySelector('.season-actions').innerHTML=
+      '<button class="btn" style="color:#8b949e;border-color:#30363d" onclick="ignoreSeason('+showId+','+seasonNum+',this)">Ignore</button>';
+    _refreshCardBadge(row.closest('.card'));
+    _refreshGlobalStats();
+  }catch(e){_btnErr(btn,'Unignore');}
+}
+
+async function mapSeason(evt,showId,seasonNum){
+  evt.preventDefault();
+  const form=evt.target;
+  const input=form.querySelector('input[name="aw_link"]');
+  const submitBtn=form.querySelector('button[type="submit"]');
+  const link=input.value.trim();
+  if(!link)return;
+  submitBtn.disabled=true;submitBtn.textContent='Mapping...';
+  try{
+    const fd=new FormData();
+    fd.append('show_id',showId);fd.append('season_number',seasonNum);fd.append('aw_link',link);
+    const r=await fetch('/map?show_id='+showId+'&season_number='+seasonNum+'&aw_link='+encodeURIComponent(link),{method:'POST',headers:_kh()});
+    const d=await r.json();
+    if(!(d.updated||d.status==='ok')){_btnErr(submitBtn,'Map');return;}
+    const row=form.closest('.season-row');
+    row.dataset.mapped='true';
+    row.classList.remove('season-unaired');
+    const _aired=row.dataset.aired==='true';
+    row.querySelector('.season-status').innerHTML=_aired
+      ?'<span class="badge badge-manual">manual</span>'
+      :'<span class="badge badge-prerelease">pre</span>';
+    const mappings=d.mappings||[];
+    let linksHtml='';
+    mappings.forEach((p,i)=>{
+      const url=_slugToUrl(p.aw_link);
+      linksHtml+='<div style="margin-left:8px;margin-top:4px">';
+      if(mappings.length>1)linksHtml+='<span style="font-weight:600;margin-right:6px">P'+(p.part||i+1)+'</span>';
+      linksHtml+='<a href="'+url+'" target="_blank">'+url+'</a>';
+      if(p.aw_episode_count)linksHtml+='<span style="font-size:11px;color:#8b949e;margin-left:8px">'+p.aw_episode_count+' eps</span>';
+      linksHtml+='</div>';
+    });
+    row.querySelector('.season-link').innerHTML=linksHtml||'<span style="color:#8b949e">mapped</span>';
+    row.querySelector('.season-actions').innerHTML=
+      '<button class="btn btn-danger" onclick="unmapSeason('+showId+','+seasonNum+',this)">Remove</button>';
+    _refreshCardBadge(row.closest('.card'));
+    _refreshGlobalStats();
+  }catch(e){_btnErr(submitBtn,'Map');}
+}
+
+async function deleteShow(showId,title,btn){
+  if(!confirm('Delete '+title+'? Sonarr sync will re-add it.'))return;
+  btn.disabled=true;
+  try{
+    const r=await fetch('/delete-show?show_id='+showId,{method:'POST',headers:_kh()});
+    if(!r.ok)throw new Error('delete failed');
+    btn.closest('.card').remove();
+  }catch(e){_btnErr(btn,'Delete Show');}
+}
+
+async function mapMovie(evt,movieId){
+  evt.preventDefault();
+  const form=evt.target;
+  const input=form.querySelector('input[name="aw_link"]');
+  const submitBtn=form.querySelector('button[type="submit"]');
+  const link=input.value.trim();
+  if(!link)return;
+  submitBtn.disabled=true;submitBtn.textContent='Mapping...';
+  try{
+    const fd=new FormData();fd.append('aw_link',link);
+    const r=await fetch('/map/movie/'+movieId+_kp()+'&aw_link='+encodeURIComponent(link),{method:'POST',headers:_kh()});
+    const d=await r.json();
+    if(!(d.updated||d.status==='ok')){_btnErr(submitBtn,'Map');return;}
+    setTimeout(()=>location.reload(),500);
+  }catch(e){_btnErr(submitBtn,'Map');}
+}
+
+async function unmapMovie(movieId,btn){
+  btn.disabled=true;
+  try{
+    const r=await fetch('/unmap/movie/'+movieId+_kp(),{method:'POST',headers:_kh()});
+    if(!r.ok)throw new Error('unmap failed');
+    setTimeout(()=>location.reload(),300);
+  }catch(e){_btnErr(btn,'Remove');}
+}
+
+async function discoverMovie(movieId,btn){
+  const panel=document.getElementById('movie-disc-'+movieId);
+  if(panel.style.display==='block'){panel.style.display='none';return;}
+  panel.style.display='block';
+  panel.innerHTML='<em style="color:#8b949e">Searching AnimeWorld...</em>';
+  btn.disabled=true;
+  try{
+    const r=await fetch('/api/discover/movie/'+movieId+_kp());
+    const data=await r.json();
+    const links=(data.links||data.results||[]).map(l=>({link:l.link||l.url||_slugToUrl(l.aw_link||l.slug||''),eps:l.eps||l.aw_episode_count||0}));
+    if(!links||links.length===0){panel.innerHTML='<span style="color:#8b949e">No results found</span>';return;}
+    let html='';
+    for(const l of links){
+      const div=document.createElement('div');
+      div.className='discover-item';
+      const span=document.createElement('span');
+      const a=document.createElement('a');
+      a.href=l.link;a.target='_blank';a.textContent=l.link;
+      span.appendChild(a);
+      span.insertAdjacentHTML('beforeend',' <span style="color:#8b949e">'+l.eps+' eps</span>');
+      div.appendChild(span);
+      const cb=document.createElement('button');
+      cb.className='btn copy-btn';cb.textContent='Copy';cb.dataset.link=l.link;
+      div.appendChild(cb);
+      html+=div.outerHTML;
+    }
+    panel.innerHTML=html;
+  }catch(e){panel.innerHTML='<span style="color:#f85149">Error: '+e.message+'</span>';}
+  finally{btn.disabled=false;}
+}
+
+async function automapMovie(movieId,btn){
+  const panel=document.getElementById('movie-disc-'+movieId);
+  panel.style.display='block';
+  panel.innerHTML='<em style="color:#8b949e">Running automap...</em>';
+  btn.disabled=true;
+  try{
+    const r=await fetch('/automap/movie/'+movieId+_kp(),{method:'POST',headers:_kh()});
+    const data=await r.json();
+    if(data.status==='success'){
+      panel.innerHTML='<div style="color:#3fb950;font-weight:bold">✓ Mapped!</div><div style="color:#8b949e;margin-top:4px">'+data.mapping?.aw_link+'</div>';
+      setTimeout(()=>location.reload(),1500);
+    }else if(data.status==='ambiguous'){
+      let html='<div style="color:#d29922;font-weight:bold">Multiple candidates — map manually</div>';
+      if(data.candidates){for(const c of data.candidates){const url=_slugToUrl(c.aw_link||'');html+='<div style="font-size:12px;margin-top:4px"><a href="'+url+'" target="_blank">'+url+'</a> <span style="color:#8b949e">'+((c.confidence_score||0)*100).toFixed(1)+'%</span></div>';}}
+      panel.innerHTML=html;
+    }else if(data.status==='not_found'){
+      panel.innerHTML='<span style="color:#8b949e">No match found on AnimeWorld</span>';
+    }else if(data.status==='already_mapped'){
+      panel.innerHTML='<span style="color:#8b949e">Already mapped</span>';
+    }else{
+      panel.innerHTML='<span style="color:#f85149">'+(data.message||'Error')+'</span>';
+    }
+  }catch(e){panel.innerHTML='<span style="color:#f85149">Error: '+e.message+'</span>';}
+  finally{btn.disabled=false;}
+}
+
+document.addEventListener('click',function(e){
+  if(e.target.classList.contains('copy-btn')){
+    const link=e.target.dataset.link;
+    if(navigator.clipboard){
+      navigator.clipboard.writeText(link).then(()=>{
+        e.target.textContent='Copied!';
+        setTimeout(()=>{e.target.textContent='Copy'},1500);
+      },()=>{});
+    }else{
+      const ta=document.createElement('textarea');
+      ta.value=link;ta.style.position='fixed';ta.style.opacity='0';
+      document.body.appendChild(ta);ta.select();
+      document.execCommand('copy');document.body.removeChild(ta);
+      e.target.textContent='Copied!';
+      setTimeout(()=>{e.target.textContent='Copy'},1500);
+    }
+  }
+  if(e.target.classList.contains('discover-btn')){
+    const id=e.target.dataset.showid;
+    discover(id,e.target);
+  }
+  if(e.target.classList.contains('automap-btn')){
+    const id=e.target.dataset.showid;
+    automap(id,e.target);
+  }
+  if(e.target.classList.contains('movie-discover-btn')){
+    const id=e.target.dataset.movieid;
+    discoverMovie(id,e.target);
+  }
+});
+
+async function discover(showId,btn){
+  const panel=document.getElementById('disc-'+showId);
+  if(panel.style.display==='block'){panel.style.display='none';return}
+  panel.style.display='block';
+  panel.innerHTML='<em style="color:#8b949e">Searching AnimeWorld...</em>';
+  btn.disabled=true;
+  try{
+    const r=await fetch('/api/discover/'+showId+_kp());
+    const data=await r.json();
+    const links=(data.links||data.results||[]).map(l=>({link:l.link||l.url||_slugToUrl(l.aw_link||l.slug||''),eps:l.eps||l.aw_episode_count||0}));
+    if(!links||links.length===0){
+      panel.innerHTML='<span style="color:#8b949e">No results found</span>';
+      return;
+    }
+    let html='';
+    for(const l of links){
+      const div=document.createElement('div');
+      div.className='discover-item';
+      const span=document.createElement('span');
+      const a=document.createElement('a');
+      a.href=l.link;a.target='_blank';a.textContent=l.link;
+      span.appendChild(a);
+      span.insertAdjacentHTML('beforeend',' <span style="color:#8b949e">'+l.eps+' eps</span>');
+      div.appendChild(span);
+      const btn=document.createElement('button');
+      btn.className='btn copy-btn';btn.textContent='Copy';
+      btn.dataset.link=l.link;
+      div.appendChild(btn);
+      html+=div.outerHTML;
+    }
+    panel.innerHTML=html;
+  }catch(e){
+    panel.innerHTML='<span style="color:#f85149">Error: '+e.message+'</span>';
+  }finally{btn.disabled=false}
+}
+
+async function automap(showId,btn){
+  const panel=document.getElementById('disc-'+showId);
+  if(panel.style.display==='block'){panel.style.display='none';return}
+  panel.style.display='block';
+  panel.innerHTML='<em style="color:#8b949e">Running automap with confidence scoring...</em>';
+  btn.disabled=true;
+  try{
+    const r=await fetch('/automap/'+showId+_kp(),{method:'POST',headers:_kh()});
+    const data=await r.json();
+
+    if(data.status==='success'){
+      let html='<div style="color:#3fb950;font-weight:bold">✓ Successfully mapped!</div>';
+      if(data.mapped_seasons&&data.mapped_seasons.length>0){
+        html+='<div style="color:#8b949e;margin-top:4px">Seasons: '+data.mapped_seasons.join(', ')+'</div>';
+      }
+      if(data.mapping&&data.mapping.confidence_score){
+        html+='<div style="color:#8b949e;margin-top:4px">Confidence: '+(data.mapping.confidence_score*100).toFixed(1)+'%</div>';
+      }
+      if(data.mapping&&data.mapping.aw_link){
+        const mapUrl=_slugToUrl(data.mapping.aw_link);
+        html+='<div style="margin-top:8px"><a href="'+mapUrl+'" target="_blank" style="color:#58a6ff">'+mapUrl+'</a></div>';
+      }
+      panel.innerHTML=html;
+      // Reload page after 2 seconds to show updated mapping
+      setTimeout(()=>location.reload(),2000);
+    }else if(data.status==='ambiguous'){
+      let html='<div style="color:#d29922;font-weight:bold;font-size:15px;margin-bottom:8px">Multiple high-confidence candidates found!</div>';
+      html+='<div style="color:#8b949e;font-size:13px;margin-bottom:12px">Please use Discover AW Links and manually copy and paste them.</div>';
+      if(data.candidates&&data.candidates.length>0){
+        for(const c of data.candidates){
+          const div=document.createElement('div');
+          div.className='discover-item';
+          div.style.borderLeft='3px solid #d29922';
+          const span=document.createElement('span');
+          const a=document.createElement('a');
+          a.href=_slugToUrl(c.aw_link||'');a.target='_blank';a.textContent=_slugToUrl(c.aw_link||'');
+          span.appendChild(a);
+          let meta=' <span style="color:#8b949e">'+c.aw_episode_count+' eps';
+          if(c.confidence_score){
+            meta+=' | confidence: '+(c.confidence_score*100).toFixed(1)+'%';
+          }
+          meta+='</span>';
+          span.insertAdjacentHTML('beforeend',meta);
+          div.appendChild(span);
+          const btn=document.createElement('button');
+          btn.className='btn copy-btn';btn.textContent='Copy';
+          btn.dataset.link=c.aw_link;
+          div.appendChild(btn);
+          html+=div.outerHTML;
+        }
+      }
+      panel.innerHTML=html;
+    }else if(data.status==='not_found'){
+      panel.innerHTML='<span style="color:#8b949e">No high-confidence matches found on AnimeWorld</span>';
+    }else if(data.status==='already_mapped'){
+      panel.innerHTML='<span style="color:#8b949e">All seasons already mapped</span>';
+    }else if(data.status==='error'){
+      panel.innerHTML='<span style="color:#f85149">Error: '+(data.message||'Unknown error')+'</span>';
+    }else{
+      panel.innerHTML='<span style="color:#8b949e">'+data.message+'</span>';
+    }
+  }catch(e){
+    panel.innerHTML='<span style="color:#f85149">Error: '+e.message+'</span>';
+  }finally{btn.disabled=false}
+}
+
+function fmtAgo(ts){
+  if(!ts)return'never';
+  const secs=Math.floor(Date.now()/1000-ts);
+  if(secs<5)return'just now';
+  if(secs<60)return secs+'s ago';
+  if(secs<3600)return Math.floor(secs/60)+'m ago';
+  return Math.floor(secs/3600)+'h ago';
+}
+
+function fmtUptime(s){
+  if(s<60)return s+'s';
+  if(s<3600)return Math.floor(s/60)+'m';
+  if(s<86400)return Math.floor(s/3600)+'h '+Math.floor((s%3600)/60)+'m';
+  return Math.floor(s/86400)+'d '+Math.floor((s%86400)/3600)+'h';
+}
+
+function fmtDate(ts){
+  if(!ts)return '--';
+  const d=new Date(ts*1000);
+  return d.toLocaleString('en-GB', {
+    year: 'numeric', month: '2-digit', day: '2-digit',
+    hour: '2-digit', minute: '2-digit', hour12: false
+  }).replace(',', '');
+}
+
+function renderHeartbeatPayload(data){
+  try{
+    // Sync automap button state
+    const automapBtn=document.getElementById('automap-all-btn');
+    if(automapBtn){
+      if(data.automap_running){
+        _automapLaunched=false;
+        automapBtn.disabled=true;automapBtn.textContent='Auto-mapping...';
+      }else if(_automapLaunched){
+        // POST just fired — server hasn't set the flag yet, ignore this tick
+      }else if(automapBtn.textContent==='Auto-mapping...'||automapBtn.textContent==='Already running...'){
+        automapBtn.disabled=false;automapBtn.textContent='Automap Library';
+      }
+    }
+    document.getElementById('hb-companion').className='hb-dot hb-ok';
+    if(data.uptime_seconds!==undefined){
+      const verEl=document.getElementById('hb-companion-txt');
+      const ver=verEl.dataset.ver||(verEl.dataset.ver=verEl.textContent.split(' ·')[0].trim());
+      verEl.textContent=ver+' · up '+fmtUptime(data.uptime_seconds);
+    }
+    if(data.sonarr!==undefined&&data.sonarr!==null){
+      document.getElementById('hb-sonarr-item').style.display='';
+      const sDot=document.getElementById('hb-sonarr');
+      const sTxt=document.getElementById('hb-sonarr-txt');
+      if(data.sonarr.ok){
+        sDot.className='hb-dot hb-ok';
+        sTxt.textContent=data.sonarr.syncing?'syncing...':'connected'+(data.sonarr.version?' v'+data.sonarr.version:'');
+      }else{
+        sDot.className='hb-dot hb-err';
+        sTxt.textContent=data.sonarr.error||'error';
+      }
+    }else if(data.sonarr===null){
+      document.getElementById('hb-sonarr-item').style.display='none';
+    }
+    if(data.radarr!==undefined&&data.radarr!==null){
+      document.getElementById('hb-radarr-item').style.display='';
+      const raDot=document.getElementById('hb-radarr');
+      const raTxt=document.getElementById('hb-radarr-txt');
+      if(data.radarr.ok){
+        raDot.className='hb-dot hb-ok';
+        raTxt.textContent='connected'+(data.radarr.version?' v'+data.radarr.version:'');
+      }else{
+        raDot.className='hb-dot hb-err';
+        raTxt.textContent=data.radarr.error||'error';
+      }
+    }else if(data.radarr===null){
+      document.getElementById('hb-radarr-item').style.display='none';
+    }
+    const aDot=document.getElementById('hb-aw');
+    const aTxt=document.getElementById('hb-aw-txt');
+    if(data.animeworld&&data.animeworld.ok){
+      aDot.className='hb-dot hb-ok';
+      aTxt.textContent='reachable';
+    }else{
+      aDot.className='hb-dot hb-err';
+      aTxt.textContent='unreachable';
+    }
+    const rDot=document.getElementById('hb-rss');
+    const rTxt=document.getElementById('hb-rss-txt');
+    if(data.rss){
+      if(!data.rss.enabled){
+        rDot.className='hb-dot hb-wait';
+        rTxt.textContent='disabled';
+      }else if(data.rss.ok===null||data.rss.last_poll===null){
+        rDot.className='hb-dot hb-wait';
+        rTxt.textContent='pending...';
+      }else if(data.rss.ok){
+        rDot.className='hb-dot hb-ok';
+        rTxt.textContent='updated '+fmtAgo(data.rss.last_poll);
+      }else{
+        rDot.className='hb-dot hb-warn';
+        rTxt.textContent='failed '+fmtAgo(data.rss.last_poll);
+      }
+    }
+  }catch(e){
+    document.getElementById('hb-companion').className='hb-dot hb-err';
+    document.getElementById('hb-sonarr').className='hb-dot hb-err';
+    const raDotE=document.getElementById('hb-radarr');if(raDotE)raDotE.className='hb-dot hb-err';
+    document.getElementById('hb-aw').className='hb-dot hb-err';
+    document.getElementById('hb-rss').className='hb-dot hb-err';
+  }
+}
+
+async function checkHeartbeat(){
+  try{
+    const r=await fetch('/api/heartbeat'+_kp());
+    const data=await r.json();
+    renderHeartbeatPayload(data);
+  }catch(e){
+    document.getElementById('hb-companion').className='hb-dot hb-err';
+    document.getElementById('hb-sonarr').className='hb-dot hb-err';
+    const raDotE=document.getElementById('hb-radarr');if(raDotE)raDotE.className='hb-dot hb-err';
+    document.getElementById('hb-aw').className='hb-dot hb-err';
+    document.getElementById('hb-rss').className='hb-dot hb-err';
+  }
+}
+checkHeartbeat();
+setInterval(checkHeartbeat,60000);
+
+// --- Download tracking ---
+function fmtBytes(b){
+  if(b>=1073741824)return (b/1073741824).toFixed(1)+' GB';
+  if(b>=1048576)return (b/1048576).toFixed(1)+' MB';
+  if(b>=1024)return (b/1024).toFixed(0)+' KB';
+  return b+' B';
+}
+
+function fmtSpeed(bps){
+  if(bps>=1048576)return (bps/1048576).toFixed(1)+' MB/s';
+  if(bps>=1024)return (bps/1024).toFixed(0)+' KB/s';
+  return bps.toFixed(0)+' B/s';
+}
+
+let _dlPollTimer=null;
+let _dlHasActive=false;
+let _dlPage=0;
+let _dlPageSize=window.innerWidth<=768?5:10;
+let _dlAllDownloads=[];
+
+function renderDownloads(dls){
+  const box=document.getElementById('dl-box');
+  const list=document.getElementById('dl-list');
+  const pageInfo=document.getElementById('dl-page-info');
+  const prevBtn=document.getElementById('dl-prev-btn');
+  const nextBtn=document.getElementById('dl-next-btn');
+
+  if(!dls||dls.length===0){
+    box.style.display='none';
+    _dlHasActive=false;
+    _dlAllDownloads=[];
+    list.innerHTML='';
+    return;
+  }
+
+  box.style.display='block';
+  _dlAllDownloads=dls;
+  _dlHasActive=dls.some(d=>d.status==='downloading'||d.status==='queued');
+
+  // Calculate pagination
+  const totalPages=Math.ceil(dls.length/_dlPageSize);
+  const startIdx=_dlPage*_dlPageSize;
+  const endIdx=Math.min(startIdx+_dlPageSize,dls.length);
+  const pageDls=dls.slice(startIdx,endIdx);
+
+  // Update page info and button states
+  if(totalPages>1){
+    pageInfo.textContent=`${_dlPage+1}/${totalPages}`;
+    pageInfo.style.display='inline';
+    prevBtn.style.display='inline-block';
+    nextBtn.style.display='inline-block';
+    prevBtn.disabled=_dlPage===0;
+    nextBtn.disabled=_dlPage>=totalPages-1;
+    prevBtn.style.opacity=_dlPage===0?'0.5':'1';
+    nextBtn.style.opacity=_dlPage>=totalPages-1?'0.5':'1';
+    prevBtn.style.cursor=_dlPage===0?'not-allowed':'pointer';
+    nextBtn.style.cursor=_dlPage>=totalPages-1?'not-allowed':'pointer';
+  }else{
+    pageInfo.style.display='none';
+    prevBtn.style.display='none';
+    nextBtn.style.display='none';
+  }
+
+  let html='';
+  for(const d of pageDls){
+    const isActive=d.status==='downloading';
+    const isQueued=d.status==='queued';
+    const statusCls=d.status==='imported'?'dl-s-imported':d.status==='completed'?'dl-s-ok':d.status==='failed'?'dl-s-err':(d.status==='cancelled'||d.status==='paused')?'dl-s-cancel':d.status==='queued'?'dl-s-queue':'dl-s-run';
+    const sizeText=d.total_bytes>0?fmtBytes(d.downloaded_bytes)+' / '+fmtBytes(d.total_bytes):d.downloaded_bytes>0?fmtBytes(d.downloaded_bytes):'--';
+
+    html+='<tr>';
+    html+='<td class="dl-name" title="'+d.filename+'">'+d.filename+'</td>';
+    html+='<td><div class="dl-bar-wrap"><div class="dl-bar" style="width:'+d.percent+'%"></div></div></td>';
+    html+='<td class="dl-pct">'+Number(d.percent).toFixed(1)+'%</td>';
+    html+='<td class="dl-col-speed" style="color:#8b949e;text-align:center">'+(isActive&&d.speed>0?fmtSpeed(d.speed):'--')+'</td>';
+    html+='<td class="dl-col-size" style="color:#8b949e;text-align:center">'+sizeText+'</td>';
+    html+='<td style="text-align:center"><span class="'+statusCls+'">'+d.status+'</span></td>';
+    html+='<td class="dl-col-completed" style="color:#8b949e;text-align:center">'+fmtDate(d.finished_at)+'</td>';
+    html+='<td class="dl-col-actions" style="text-align:center;white-space:nowrap">';
+    if(isActive){
+      html+='<button class="btn btn-warning pause-dl-btn" data-dlid="'+d.id+'" style="padding:2px 8px;font-size:11px;margin-right:6px">Pause</button>';
+      html+='<button class="btn btn-danger hard-cancel-dl-btn" data-dlid="'+d.id+'" style="padding:2px 8px;font-size:11px">Cancel</button>';
+    }else if(isQueued){
+      html+='<button class="btn btn-danger hard-cancel-dl-btn" data-dlid="'+d.id+'" style="padding:2px 8px;font-size:11px">Cancel</button>';
+    }else if(d.resumable){
+      html+='<button class="btn btn-sync resume-dl-btn" data-dlid="'+d.id+'" style="padding:2px 8px;font-size:11px;margin-right:6px">Resume</button>';
+      html+='<button class="btn btn-danger hard-cancel-dl-btn" data-dlid="'+d.id+'" style="padding:2px 8px;font-size:11px">Cancel</button>';
+    }
+    html+='</td>';
+    html+='</tr>';
+  }
+  list.innerHTML=html;
+}
+
+function dlPrevPage(){
+  if(_dlPage>0){
+    _dlPage--;
+    renderDownloads(_dlAllDownloads);
+  }
+}
+
+function dlNextPage(){
+  const totalPages=Math.ceil(_dlAllDownloads.length/_dlPageSize);
+  if(_dlPage<totalPages-1){
+    _dlPage++;
+    renderDownloads(_dlAllDownloads);
+  }
+}
+
+async function pollDownloads(){
+  try{
+    const r=await fetch('/api/downloads'+_kp());
+    const data=await r.json();
+    renderDownloads(data.downloads||[]);
+  }catch(e){}
+}
+
+// Pause / Cancel / Resume button handlers via event delegation
+document.addEventListener('click',function(e){
+  if(e.target.classList.contains('pause-dl-btn')){
+    const id=e.target.dataset.dlid;
+    e.target.disabled=true;
+    // Pause = existing cancel behavior (keeps .part)
+    fetch('/api/downloads/'+id+'/cancel'+_kp(),{method:'POST',headers:_kh()}).then(()=>pollDownloads());
+  }
+  if(e.target.classList.contains('hard-cancel-dl-btn')){
+    const id=e.target.dataset.dlid;
+    if(!confirm('Permanently cancel this download and delete the partial file?')) return;
+    e.target.disabled=true;
+    fetch('/api/downloads/'+id+'/remove'+_kp(),{method:'POST',headers:_kh()}).then(()=>pollDownloads());
+  }
+  if(e.target.classList.contains('resume-dl-btn')){
+    const id=e.target.dataset.dlid;
+    e.target.disabled=true;e.target.textContent='Resuming...';
+    fetch('/api/downloads/'+id+'/resume'+_kp(),{method:'POST',headers:_kh()}).then(()=>pollDownloads());
+  }
+});
+
+async function clearDownloads(){
+  await fetch('/api/downloads/clear'+_kp(),{method:'POST',headers:_kh()});
+  pollDownloads();
+}
+
+// Poll: fast when active downloads exist, slow otherwise
+function scheduleDlPoll(){
+  pollDownloads().then(()=>{
+    const interval=_dlHasActive?2000:15000;
+    _dlPollTimer=setTimeout(scheduleDlPoll,interval);
+  });
+}
+scheduleDlPoll();
+
+// --- Server-Sent Events: listen for server pushes (downloads + heartbeat)
+if(window.EventSource){
+  try{
+    const es=new EventSource('/api/events'+_kp());
+    es.addEventListener('downloads', function(ev){
+      try{const payload=JSON.parse(ev.data); renderDownloads(payload.downloads||[]);}catch(e){}
+    });
+    es.addEventListener('heartbeat', function(ev){
+      try{const payload=JSON.parse(ev.data); renderHeartbeatPayload(payload);}catch(e){}
+    });
+    es.onerror=function(err){
+      // leave polling as a fallback; console for debugging
+      console.debug('SSE connection error', err);
+      // optionally close / reconnect logic could be added here
+    };
+  }catch(e){console.debug('SSE unsupported', e)}
+}
+
+// --- Restart companion ---
+async function restartCompanion(btn){
+  if(!confirm('Restart AnimeWorld Companion?\nThe page will reload once it comes back up.')) return;
+  btn.disabled=true;btn.textContent='Restarting...';
+  try{ await fetch('/restart'+_kp(),{method:'POST',headers:_kh()}); }catch(e){}
+  // Poll until the server comes back
+  const poll=setInterval(async()=>{
+    try{
+      const r=await fetch('/health');
+      if(r.ok){ clearInterval(poll); location.reload(); }
+    }catch(e){}
+  },2000);
+}
+</script>
+</body>
+</html>

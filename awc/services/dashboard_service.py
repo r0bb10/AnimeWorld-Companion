@@ -51,7 +51,9 @@ def _show_payload(show_id: int) -> dict | None:
         return None
     mappings = {}
     for season in show.get("seasons", []):
-        mappings[season["season_number"]] = season.get("mappings", [])
+        season_mappings = season.get("mappings", [])
+        if season_mappings:
+            mappings[season["season_number"]] = season_mappings
     return {
         **show,
         "alternate_titles": [item.get("title", "") for item in show.get("alternate_titles", []) if item.get("title")],

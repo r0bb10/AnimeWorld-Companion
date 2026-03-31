@@ -28,6 +28,7 @@ from .naming_service import build_release_name
 _download_events: dict[str, threading.Event] = {}
 _download_threads: dict[str, threading.Thread] = {}
 _download_lock = threading.Lock()
+_download_semaphore = threading.Semaphore(max(1, settings.max_concurrent_downloads))
 
 
 def _bencode(value) -> bytes:
@@ -77,6 +78,17 @@ def _final_path(filename: str) -> str:
     data_root = Path(settings.data_path)
     data_root.mkdir(parents=True, exist_ok=True)
     return str(data_root / filename)
+
+
+def _safe_unlink(path: str) -> None:
+    target = _localize_data_path(path)
+    if not target or not os.path.exists(target):
+        return
+    data_root = os.path.abspath(settings.data_path)
+    target_abs = os.path.abspath(target)
+    if os.path.commonpath([target_abs, data_root]) != data_root:
+        return
+    os.remove(target_abs)
 
 
 def _localize_data_path(path: str) -> str:
@@ -157,20 +169,32 @@ def create_fake_torrent(
             year=year,
         )
     )
-    download = create_download(
-        url=_decode_source_token(source) or build_download_url(
-            manager=manager,
-            title=title,
-            season=season,
-            episode=episode,
-            year=year,
-            manager_id=manager_id,
-        ),
-        filename=release_name,
-        status="queued",
-        part_path=_part_path(release_name),
-        sonarr_id=manager_id if manager == "sonarr" else None,
+    resolved_source = _decode_source_token(source) or build_download_url(
+        manager=manager,
+        title=title,
+        season=season,
+        episode=episode,
+        year=year,
+        manager_id=manager_id,
     )
+    existing = next(
+        (
+            item
+            for item in list_all_downloads()
+            if item.get("url") == resolved_source or item.get("filename") == release_name
+        ),
+        None,
+    )
+    if existing:
+        download = existing
+    else:
+        download = create_download(
+            url=resolved_source,
+            filename=release_name,
+            status="queued",
+            part_path=_part_path(release_name),
+            sonarr_id=manager_id if manager == "sonarr" else None,
+        )
     queue_download(download["id"])
 
     token = sha1(
@@ -202,28 +226,59 @@ def create_fake_torrent(
 
 
 def _download_worker(download_id: str) -> None:
+    acquired_slot = False
     entry = get_download(download_id)
     if not entry:
         return
-    url = entry["url"]
-    cancel_event = _download_events.setdefault(download_id, threading.Event())
-    part_path = entry["part_path"] or _part_path(entry["filename"])
-    final_path = _final_path(entry["filename"])
-    update_download_progress(
-        download_id,
-        status="downloading",
-        started_at=datetime.now(UTC).timestamp(),
-        part_path=part_path,
-        error="",
-    )
-
     try:
-        with requests.get(url, stream=True, timeout=60) as response:
+        _download_semaphore.acquire()
+        acquired_slot = True
+
+        url = entry["url"]
+        cancel_event = _download_events.setdefault(download_id, threading.Event())
+        cancel_event.clear()
+        part_path = _localize_data_path(entry.get("part_path") or _part_path(entry["filename"]))
+        final_path = _final_path(entry["filename"])
+        existing_bytes = os.path.getsize(part_path) if part_path and os.path.exists(part_path) else 0
+        headers = {"Range": f"bytes={existing_bytes}-"} if existing_bytes > 0 else {}
+
+        update_download_progress(
+            download_id,
+            status="downloading",
+            started_at=datetime.now(UTC).timestamp(),
+            part_path=part_path,
+            error="",
+            downloaded_bytes=existing_bytes,
+            finished_at=None,
+        )
+
+        with requests.get(url, stream=True, timeout=60, headers=headers) as response:
+            if response.status_code == 416 and existing_bytes > 0:
+                os.replace(part_path, final_path)
+                update_download_progress(
+                    download_id,
+                    status="completed",
+                    downloaded_bytes=existing_bytes,
+                    part_path="",
+                    finished_at=datetime.now(UTC).timestamp(),
+                )
+                return
+
             response.raise_for_status()
-            total = int(response.headers.get("Content-Length", 0))
-            update_download_progress(download_id, total_bytes=total)
-            downloaded = 0
-            with open(part_path, "wb") as handle:
+
+            if response.status_code == 206 and existing_bytes > 0:
+                total_header = response.headers.get("Content-Range", "").split("/")[-1]
+                total = int(total_header) if total_header.isdigit() else 0
+                mode = "ab"
+                downloaded = existing_bytes
+            else:
+                total = int(response.headers.get("Content-Length", 0))
+                mode = "wb"
+                downloaded = 0
+                existing_bytes = 0
+
+            update_download_progress(download_id, total_bytes=total, downloaded_bytes=downloaded)
+            with open(part_path, mode) as handle:
                 for chunk in response.iter_content(chunk_size=65536):
                     if cancel_event.is_set():
                         update_download_progress(
@@ -254,6 +309,8 @@ def _download_worker(download_id: str) -> None:
             finished_at=datetime.now(UTC).timestamp(),
         )
     finally:
+        if acquired_slot:
+            _download_semaphore.release()
         with _download_lock:
             _download_threads.pop(download_id, None)
 
@@ -349,19 +406,56 @@ def build_download_snapshot(limit: int = 100) -> dict:
 
 
 def cancel_download(download_id: str) -> dict | None:
+    entry = get_download(download_id)
+    if not entry:
+        return None
     event = _download_events.get(download_id)
-    if event:
+    if entry.get("status") == "queued":
+        return update_download_progress(
+            download_id,
+            status="cancelled",
+            finished_at=datetime.now(UTC).timestamp(),
+        )
+    if event and entry.get("status") == "downloading":
         event.set()
-    return update_download_status(download_id, "cancelled")
+        return update_download_progress(
+            download_id,
+            status="paused",
+            finished_at=datetime.now(UTC).timestamp(),
+        )
+    return entry
 
 
 def resume_download(download_id: str) -> dict | None:
-    update_download_status(download_id, "queued", error="")
+    entry = get_download(download_id)
+    if not entry:
+        return None
+    part_path = _localize_data_path(entry.get("part_path") or "")
+    if not part_path or not os.path.exists(part_path):
+        return None
+    update_download_progress(
+        download_id,
+        status="queued",
+        error="",
+        downloaded_bytes=os.path.getsize(part_path),
+        finished_at=None,
+    )
     return queue_download(download_id)
 
 
 def remove_download(download_id: str) -> bool:
-    return delete_download(download_id)
+    entry = get_download(download_id)
+    if not entry:
+        return False
+    event = _download_events.get(download_id)
+    if event:
+        event.set()
+    _safe_unlink(entry.get("part_path", ""))
+    removed = delete_download(download_id)
+    with _download_lock:
+        _download_threads.pop(download_id, None)
+        _download_events.pop(download_id, None)
+    return removed
 
 
 def clear_download_history() -> int:

@@ -182,7 +182,7 @@ def clear_finished_downloads() -> int:
         cursor = conn.execute(
             """
             DELETE FROM downloads
-            WHERE status IN ('imported', 'completed', 'failed', 'cancelled', 'removed')
+            WHERE status IN ('imported', 'failed', 'cancelled', 'removed')
             """
         )
     return int(cursor.rowcount or 0)

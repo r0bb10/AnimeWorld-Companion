@@ -1,6 +1,7 @@
 """Minimal route surface for the clean rebuild."""
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi.responses import Response
 
 from ..core.config import settings
 from ..services.catalog_service import (
@@ -16,6 +17,8 @@ from ..services.mapping_service import (
 )
 from ..services.preview_service import build_naming_preview
 from ..services.query_service import parse_query, resolve_local_query
+from ..services.torznab_service import build_caps_xml, build_search_xml
+from .auth import require_api_key
 
 api_router = APIRouter()
 
@@ -86,3 +89,41 @@ def rebuild_resolve_query(q: str, media: str = "show") -> dict:
 @api_router.get("/api/rebuild/preview-name", tags=["System"])
 def rebuild_preview_name(q: str, media: str = "show") -> dict:
     return build_naming_preview(q, media=media)
+
+
+@api_router.get("/api/rebuild/placeholder/{item_id}", tags=["System"])
+def rebuild_placeholder(item_id: str) -> dict:
+    return {
+        "item_id": item_id,
+        "status": "placeholder",
+        "detail": "Search contract is wired, download execution is not rebuilt yet.",
+    }
+
+
+@api_router.api_route("/api", methods=["GET", "POST"], tags=["Indexer"])
+def torznab_api(
+    _: str = Depends(require_api_key),
+    t: str = Query(default="caps"),
+    q: str = Query(default=""),
+    season: int | None = Query(default=None),
+    ep: int | None = Query(default=None),
+) -> Response:
+    request_type = (t or "caps").strip().lower()
+    if request_type == "caps":
+        return Response(content=build_caps_xml(), media_type="application/xml")
+    if request_type in {"search", "tvsearch"}:
+        return Response(
+            content=build_search_xml(
+                query=q,
+                media="search",
+                season=season,
+                episode=ep,
+            ),
+            media_type="application/xml",
+        )
+    if request_type == "movie":
+        return Response(
+            content=build_search_xml(query=q, media="movie"),
+            media_type="application/xml",
+        )
+    raise HTTPException(status_code=400, detail=f"Unsupported Torznab operation: {t}")

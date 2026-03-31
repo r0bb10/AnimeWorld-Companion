@@ -19,6 +19,7 @@ from ..integrations.sonarr_client import SonarrClient
 from ..repositories.db import get_db
 from ..repositories.rss_cache import cleanup_rss_items, has_rss_item, save_rss_item
 from .download_service import completed_downloads, mark_imported, restore_on_startup
+from .link_sanitizer_service import sanitize_links_once, sanitizer_status
 from .search_service import build_show_search_items
 from .sync_runner_service import sync_all
 
@@ -31,6 +32,7 @@ _state = {
     "sync": {"running": False, "last_run_at": None, "last_error": ""},
     "rss": {"enabled": False, "running": False, "last_run_at": None, "last_error": "", "last_cached": 0},
     "imports": {"running": False, "last_run_at": None, "last_error": "", "last_marked": 0},
+    "links": {"running": False, "last_run_at": None, "last_error": "", "last_result": None},
     "startup": {"restored": 0, "fixed": 0},
 }
 
@@ -305,6 +307,31 @@ def _run_import_loop() -> None:
             break
 
 
+def _run_link_loop() -> None:
+    while not _stop_event.is_set():
+        try:
+            _set_state("links", running=True)
+            result = sanitize_links_once()
+            _set_state(
+                "links",
+                running=False,
+                last_run_at=datetime.now(UTC).isoformat(),
+                last_error="",
+                last_result=result,
+            )
+        except Exception as exc:
+            logger.exception("Link sanitizer failed")
+            _set_state(
+                "links",
+                running=False,
+                last_run_at=datetime.now(UTC).isoformat(),
+                last_error=str(exc),
+                last_result=sanitizer_status().get("last_result"),
+            )
+        if _stop_event.wait(60 * 60 * 24):
+            break
+
+
 def start_background_workers() -> dict:
     _stop_event.clear()
     startup = restore_on_startup()
@@ -313,6 +340,7 @@ def start_background_workers() -> dict:
     workers = {
         "sync": _run_sync_loop,
         "imports": _run_import_loop,
+        "links": _run_link_loop,
     }
     if settings.rss_enabled:
         workers["rss"] = _run_rss_loop

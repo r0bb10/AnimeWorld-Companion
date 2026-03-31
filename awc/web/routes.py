@@ -1,5 +1,9 @@
 """Minimal route surface for the clean rebuild."""
 
+import os
+import threading
+import time
+
 from fastapi import APIRouter, Body, Depends, HTTPException, Query
 from fastapi.responses import HTMLResponse, Response, StreamingResponse
 
@@ -29,6 +33,7 @@ from ..services.download_service import (
 from ..services.discovery_service import discover_movie, discover_show, search_animeworld
 from ..services.events_service import stream_events
 from ..services.health_service import build_health_report
+from ..services.link_sanitizer_service import sanitizer_status, start_link_sanitizer
 from ..services.mapping_service import (
     build_show_mapping_snapshot,
     resolve_absolute_episode,
@@ -197,6 +202,7 @@ def rebuild_status() -> dict:
         "sync": sync_status(),
         "runtime": runtime_state(),
         "automap": automap_status(),
+        "links": sanitizer_status(),
     }
 
 
@@ -403,6 +409,21 @@ def api_clear_rss_cache(_: str = Depends(require_api_key)) -> dict:
 @api_router.post("/api/rss/update", tags=["System"])
 def api_update_rss_cache(_: str = Depends(require_api_key)) -> dict:
     return update_rss_cache()
+
+
+@api_router.post("/api/links/sanitize", tags=["System"])
+def api_sanitize_links(_: str = Depends(require_api_key)) -> dict:
+    return start_link_sanitizer()
+
+
+@api_router.post("/restart", tags=["System"])
+def api_restart(_: str = Depends(require_api_key)) -> dict:
+    def _graceful_exit() -> None:
+        time.sleep(1)
+        os._exit(0)
+
+    threading.Thread(target=_graceful_exit, name="awc-restart", daemon=True).start()
+    return {"ok": True, "message": "Restart scheduled"}
 
 
 @api_router.post("/api/webhook", tags=["Integration"])

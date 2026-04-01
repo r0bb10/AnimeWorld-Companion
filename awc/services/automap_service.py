@@ -514,8 +514,16 @@ def automap_show(show_id: int, season_number: int | None = None, force: bool = F
 
 
 def _run_background(target, *args, **kwargs) -> dict:
+    with _automap_lock:
+        if _automap_state.get("running"):
+            return {"status": "already_running"}
+        _automap_state.update(
+            running=True,
+            last_started_at=datetime.now(UTC).isoformat(),
+            last_error="",
+        )
+
     def worker():
-        _set_state(running=True, last_started_at=datetime.now(UTC).isoformat(), last_error="")
         try:
             result = target(*args, **kwargs)
             _set_state(last_result=result)

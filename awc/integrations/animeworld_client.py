@@ -6,6 +6,7 @@ import threading
 import time
 
 import requests
+from requests.adapters import HTTPAdapter
 from bs4 import BeautifulSoup
 
 from ..core.config import settings
@@ -20,6 +21,7 @@ _PAGE_CACHE: dict[str, tuple[BeautifulSoup, str, float]] = {}
 _PAGE_CACHE_LOCK = threading.Lock()
 _SESSION_LOCK = threading.Lock()
 _SESSION: requests.Session | None = None
+_POOL_MAXSIZE = 64
 
 
 @dataclass(frozen=True)
@@ -35,6 +37,9 @@ def _session_base_url() -> str:
 def _new_session() -> requests.Session:
     session = requests.Session()
     session.headers["User-Agent"] = _UA
+    adapter = HTTPAdapter(pool_connections=_POOL_MAXSIZE, pool_maxsize=_POOL_MAXSIZE, max_retries=0)
+    session.mount("http://", adapter)
+    session.mount("https://", adapter)
     return session
 
 

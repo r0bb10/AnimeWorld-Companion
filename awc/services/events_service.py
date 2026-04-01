@@ -1,10 +1,13 @@
 """Lightweight SSE stream for runtime events."""
 
 import json
+import threading
 import time
 
 from .dashboard_service import build_heartbeat_snapshot
 from .download_service import build_download_snapshot
+
+_sse_shutdown = threading.Event()
 
 
 def build_event_payload() -> dict:
@@ -15,9 +18,18 @@ def build_event_payload() -> dict:
     }
 
 
+def start_sse_streams() -> None:
+    _sse_shutdown.clear()
+
+
+def stop_sse_streams() -> None:
+    _sse_shutdown.set()
+
+
 def stream_events():
-    while True:
+    while not _sse_shutdown.is_set():
         payload = build_event_payload()
         yield f"event: heartbeat\ndata: {json.dumps(payload['heartbeat'])}\n\n"
         yield f"event: downloads\ndata: {json.dumps({'downloads': payload['downloads']})}\n\n"
-        time.sleep(10)
+        if _sse_shutdown.wait(10):
+            break

@@ -419,6 +419,9 @@ def api_sanitize_links(_: str = Depends(require_api_key)) -> dict:
 @api_router.post("/restart", tags=["System"])
 def api_restart(_: str = Depends(require_api_key)) -> dict:
     def _graceful_exit() -> None:
+        from ..services.events_service import stop_sse_streams
+
+        stop_sse_streams()
         time.sleep(1)
         os._exit(0)
 

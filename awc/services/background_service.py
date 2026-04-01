@@ -242,6 +242,8 @@ def _run_rss_loop() -> None:
 
 def _run_sync_loop() -> None:
     _set_state("sync", running=True)
+    if _stop_event.wait(max(60, settings.sync_interval_minutes * 60, 600)):
+        return
     while not _stop_event.is_set():
         try:
             result = sync_all()
@@ -308,6 +310,8 @@ def _run_import_loop() -> None:
 
 
 def _run_link_loop() -> None:
+    if _stop_event.wait(60 * 10):
+        return
     while not _stop_event.is_set():
         try:
             _set_state("links", running=True)

@@ -195,6 +195,7 @@ def create_fake_torrent(
             status="queued",
             part_path=_part_path(release_name),
             sonarr_id=manager_id if manager == "sonarr" else None,
+            radarr_id=manager_id if manager == "radarr" else None,
         )
     queue_download(download["id"])
 

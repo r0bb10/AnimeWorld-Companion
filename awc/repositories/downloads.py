@@ -22,7 +22,8 @@ def list_downloads(limit: int = 100) -> list[dict]:
                 started_at,
                 finished_at,
                 created_at,
-                sonarr_id
+                sonarr_id,
+                radarr_id
             FROM downloads
             ORDER BY created_at DESC
             LIMIT ?
@@ -48,7 +49,8 @@ def list_all_downloads() -> list[dict]:
                 started_at,
                 finished_at,
                 created_at,
-                sonarr_id
+                sonarr_id,
+                radarr_id
             FROM downloads
             ORDER BY created_at DESC
             """
@@ -72,7 +74,8 @@ def get_download(download_id: str) -> dict | None:
                 started_at,
                 finished_at,
                 created_at,
-                sonarr_id
+                sonarr_id,
+                radarr_id
             FROM downloads
             WHERE id = ?
             LIMIT 1
@@ -89,6 +92,7 @@ def create_download(
     status: str,
     part_path: str,
     sonarr_id: int | None = None,
+    radarr_id: int | None = None,
 ) -> dict:
     download_id = uuid4().hex
     created_at = datetime.now().timestamp()
@@ -107,11 +111,12 @@ def create_download(
                 started_at,
                 finished_at,
                 created_at,
-                sonarr_id
+                sonarr_id,
+                radarr_id
             )
-            VALUES (?, ?, ?, ?, 0, 0, ?, NULL, NULL, NULL, ?, ?)
+            VALUES (?, ?, ?, ?, 0, 0, ?, NULL, NULL, NULL, ?, ?, ?)
             """,
-            (url, download_id, filename, status, part_path, created_at, sonarr_id),
+            (url, download_id, filename, status, part_path, created_at, sonarr_id, radarr_id),
         )
     return get_download(download_id) or {}
 
@@ -204,7 +209,8 @@ def list_completed_downloads() -> list[dict]:
                 started_at,
                 finished_at,
                 created_at,
-                sonarr_id
+                sonarr_id,
+                radarr_id
             FROM downloads
             WHERE status = 'completed'
             ORDER BY created_at DESC

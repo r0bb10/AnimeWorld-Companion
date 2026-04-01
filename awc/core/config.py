@@ -86,6 +86,8 @@ class Settings:
     sync_interval_minutes: int
     max_concurrent_downloads: int
     download_history_days: int
+    import_poll_interval: int
+    unmonitor_imported: bool
     rss_enabled: bool
     rss_poll_interval: int
     rss_cache_retention_days: int
@@ -96,8 +98,6 @@ class Settings:
     sonarr_api_key: str
     sonarr_anime_tag: str
     sonarr_dub_tag: str
-    sonarr_import_poll_interval: int
-    sonarr_unmonitor_imported: bool
     radarr_url: str
     radarr_api_key: str
     anime_tag: str
@@ -115,6 +115,8 @@ def load_settings() -> Settings:
         sync_interval_minutes=_int("SYNC_INTERVAL", _int("SONARR_SYNC_INTERVAL", 30)),
         max_concurrent_downloads=_int("MAX_CONCURRENT_DOWNLOADS", 10),
         download_history_days=_int("DOWNLOAD_HISTORY_DAYS", 7),
+        import_poll_interval=_int("IMPORT_POLL_INTERVAL", 60),
+        unmonitor_imported=_get("UNMONITOR_IMPORTED", "false").lower() == "true",
         rss_enabled=_get("RSS_ENABLED", "false").lower() == "true",
         rss_poll_interval=_int("RSS_POLL_INTERVAL", 300),
         rss_cache_retention_days=_int("RSS_CACHE_RETENTION_DAYS", 30),
@@ -125,8 +127,6 @@ def load_settings() -> Settings:
         sonarr_api_key=_get("SONARR_API_KEY"),
         sonarr_anime_tag=_get("SONARR_ANIME_TAG", _get("ANIME_TAG", "anime")),
         sonarr_dub_tag=_get("SONARR_DUB_TAG", _get("DUB_TAG", "ita")),
-        sonarr_import_poll_interval=_int("SONARR_IMPORT_POLL_INTERVAL", 60),
-        sonarr_unmonitor_imported=_get("SONARR_UNMONITOR_IMPORTED", "false").lower() == "true",
         radarr_url=_normalize_manager_url(_get("RADARR_URL")),
         radarr_api_key=_get("RADARR_API_KEY"),
         anime_tag=_get("ANIME_TAG", _get("SONARR_ANIME_TAG", "anime")),

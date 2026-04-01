@@ -186,7 +186,8 @@ CREATE TABLE IF NOT EXISTS downloads (
     started_at       REAL,
     finished_at      REAL,
     created_at       REAL NOT NULL,
-    sonarr_id        INTEGER
+    sonarr_id        INTEGER,
+    radarr_id        INTEGER
 );
 
 CREATE INDEX IF NOT EXISTS idx_downloads_status  ON downloads(status);
@@ -198,3 +199,9 @@ def init_db() -> None:
     """Create all tables and indexes if they do not already exist."""
     with get_db(write=True) as conn:
         conn.executescript(_SCHEMA)
+        columns = {
+            row["name"]
+            for row in conn.execute("PRAGMA table_info(downloads)").fetchall()
+        }
+        if "radarr_id" not in columns:
+            conn.execute("ALTER TABLE downloads ADD COLUMN radarr_id INTEGER")

@@ -15,6 +15,7 @@ import requests
 from ..core.config import settings
 from ..core.logging import get_logger
 from ..integrations.animeworld_client import AnimeWorldClient
+from ..integrations.radarr_client import RadarrClient
 from ..integrations.sonarr_client import SonarrClient
 from ..repositories.db import get_db
 from ..repositories.rss_cache import cleanup_rss_items, has_rss_item, save_rss_item
@@ -268,27 +269,38 @@ def _run_sync_loop() -> None:
 
 def _run_import_loop() -> None:
     _set_state("imports", running=True)
-    client = SonarrClient()
+    sonarr_client = SonarrClient()
+    radarr_client = RadarrClient()
     while not _stop_event.is_set():
         marked = 0
         try:
             for entry in completed_downloads():
                 sonarr_id = entry.get("sonarr_id")
-                if not sonarr_id:
+                radarr_id = entry.get("radarr_id")
+                if sonarr_id:
+                    match = re.search(r"[Ss](\d+)[Ee](\d+)", entry.get("filename", ""))
+                    if not match:
+                        continue
+                    season_number = int(match.group(1))
+                    episode_number = int(match.group(2))
+                    episodes = sonarr_client.fetch_season_episodes(int(sonarr_id), season_number)
+                    target = next((ep for ep in episodes if ep.get("episodeNumber") == episode_number), None)
+                    if not target or not target.get("hasFile"):
+                        continue
+                    if mark_imported(entry["id"]):
+                        marked += 1
+                        if settings.unmonitor_imported and target.get("id"):
+                            sonarr_client.unmonitor_episode(int(target["id"]))
                     continue
-                match = re.search(r"[Ss](\d+)[Ee](\d+)", entry.get("filename", ""))
-                if not match:
-                    continue
-                season_number = int(match.group(1))
-                episode_number = int(match.group(2))
-                episodes = client.fetch_season_episodes(int(sonarr_id), season_number)
-                target = next((ep for ep in episodes if ep.get("episodeNumber") == episode_number), None)
-                if not target or not target.get("hasFile"):
-                    continue
-                if mark_imported(entry["id"]):
-                    marked += 1
-                    if settings.sonarr_unmonitor_imported and target.get("id"):
-                        client.unmonitor_episode(int(target["id"]))
+
+                if radarr_id:
+                    movie = radarr_client.fetch_movie_detail(int(radarr_id))
+                    if not movie or not movie.get("hasFile"):
+                        continue
+                    if mark_imported(entry["id"]):
+                        marked += 1
+                        if settings.unmonitor_imported and movie.get("id"):
+                            radarr_client.unmonitor_movie(int(movie["id"]))
             _set_state(
                 "imports",
                 running=False,
@@ -305,7 +317,7 @@ def _run_import_loop() -> None:
                 last_error=str(exc),
                 last_marked=marked,
             )
-        if _stop_event.wait(max(30, settings.sonarr_import_poll_interval)):
+        if _stop_event.wait(max(30, settings.import_poll_interval)):
             break
 
 

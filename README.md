@@ -43,9 +43,12 @@ SONARR_API_KEY=la_tua_api_key_sonarr
 SONARR_ANIME_TAG=anime
 SONARR_DUB_TAG=ita
 
+# --- Shared ---
+IMPORT_POLL_INTERVAL=60
+UNMONITOR_IMPORTED=true
+
 # --- RSS ---
 RSS_ENABLED=true
-SONARR_UNMONITOR_IMPORTED=true
 ```
 
 ### 3. Configurazione Sonarr

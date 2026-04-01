@@ -176,13 +176,23 @@ class AnimeWorldClient:
     def search(self, query: str, limit: int = 10) -> list[dict]:
         if not self.base_url or not query.strip():
             return []
-        try:
-            return self._search_v2(query, limit)
-        except Exception:
+
+        merged: list[dict] = []
+        seen: set[str] = set()
+
+        for search_fn in (self._search_v2, self._search_scrape):
             try:
-                return self._search_scrape(query, limit)
+                results = search_fn(query, limit)
             except Exception:
-                return []
+                results = []
+            for item in results:
+                key = self.url_to_slug(item.get("url") or item.get("slug", ""))
+                if not key or key in seen:
+                    continue
+                seen.add(key)
+                merged.append(item)
+
+        return merged[:limit]
 
     def get_episodes(self, slug_or_url: str) -> list[dict]:
         target = slug_or_url if slug_or_url.startswith("http") else self.slug_to_url(slug_or_url)

@@ -1,8 +1,29 @@
 """AnimeWorld discovery helpers for the clean rebuild."""
 
+from concurrent.futures import ThreadPoolExecutor, as_completed
+
 from ..integrations.animeworld_client import AnimeWorldClient
 from ..repositories.movies import get_movie_detail
 from ..repositories.shows import get_show_detail
+
+
+def _collect_queries(title: str, alternate_titles: list[dict], limit: int = 10) -> list[str]:
+    queries: list[str] = []
+    seen: set[str] = set()
+
+    for value in [title, *[(item.get("title") or "") for item in alternate_titles]]:
+        query = str(value or "").strip()
+        if not query:
+            continue
+        key = query.casefold()
+        if key in seen:
+            continue
+        seen.add(key)
+        queries.append(query)
+        if len(queries) >= limit:
+            break
+
+    return queries
 
 
 def _dedupe_results(results: list[dict]) -> list[dict]:
@@ -15,6 +36,54 @@ def _dedupe_results(results: list[dict]) -> list[dict]:
         seen.add(key)
         unique.append(item)
     return unique
+
+
+def _enrich_results(client: AnimeWorldClient, results: list[dict], limit: int) -> tuple[list[dict], list[dict]]:
+    unique = _dedupe_results(results)[:limit]
+
+    def enrich(item: dict) -> dict:
+        target = item.get("url") or item.get("slug") or ""
+        info, episodes = client.get_info_and_episodes(target)
+        non_special, total, _ = client.count_non_special_episodes(episodes)
+        enriched = dict(item)
+        enriched["aw_link"] = client.url_to_slug(target)
+        enriched["aw_title"] = item.get("title", "")
+        enriched["aw_jtitle"] = item.get("japanese_title", "")
+        enriched["aw_status"] = str(info.get("Stato") or info.get("status") or "")
+        enriched["aw_category"] = str(info.get("Categoria") or info.get("category") or item.get("kind") or "")
+        enriched["aw_audio"] = str(info.get("Audio") or info.get("audio") or "")
+        enriched["aw_episode_count"] = non_special
+        enriched["aw_total_episodes"] = total
+        enriched["eps"] = non_special
+        return enriched
+
+    enriched_results: list[dict] = []
+    with ThreadPoolExecutor(max_workers=min(len(unique), 5) or 1) as pool:
+        futures = {pool.submit(enrich, item): item for item in unique}
+        for future in as_completed(futures):
+            try:
+                enriched_results.append(future.result())
+            except Exception:
+                enriched_results.append(dict(futures[future]))
+
+    enriched_results.sort(key=lambda item: item.get("aw_title") or item.get("title") or "")
+
+    legacy_links = [
+        {
+            "link": item.get("url", ""),
+            "name": item.get("title", ""),
+            "eps": int(item.get("aw_episode_count") or item.get("eps") or 0),
+            "aw_link": item.get("aw_link", ""),
+            "aw_episode_count": int(item.get("aw_episode_count") or 0),
+            "aw_total_episodes": int(item.get("aw_total_episodes") or 0),
+            "aw_status": item.get("aw_status", ""),
+            "aw_category": item.get("aw_category", ""),
+            "aw_audio": item.get("aw_audio", ""),
+        }
+        for item in enriched_results
+    ]
+
+    return enriched_results, legacy_links
 
 
 def search_animeworld(query: str, limit: int = 10) -> dict:
@@ -32,36 +101,18 @@ def discover_show(show_id: int, limit: int = 10) -> dict | None:
         return None
 
     client = AnimeWorldClient()
-    queries = [show["title"]]
-    queries.extend(
-        item["title"]
-        for item in show.get("alternate_titles", [])
-        if item.get("title")
-    )
-    results = []
-    used_queries = []
-    for query in queries[:5]:
-        if not query or query in used_queries:
-            continue
-        used_queries.append(query)
+    used_queries = _collect_queries(show["title"], show.get("alternate_titles", []))
+    results: list[dict] = []
+    for query in used_queries:
         results.extend(client.search(query, limit=limit))
-        if len(results) >= limit:
-            break
 
-    legacy_links = [
-        {
-            "link": item.get("url", ""),
-            "name": item.get("title", ""),
-            "eps": 0,
-        }
-        for item in _dedupe_results(results)[:limit]
-    ]
+    enriched_results, legacy_links = _enrich_results(client, results, limit)
 
     return {
         "show_id": show_id,
         "title": show["title"],
         "queries": used_queries,
-        "results": _dedupe_results(results)[:limit],
+        "results": enriched_results,
         "links": legacy_links,
     }
 
@@ -72,35 +123,17 @@ def discover_movie(movie_id: int, limit: int = 10) -> dict | None:
         return None
 
     client = AnimeWorldClient()
-    queries = [movie["title"]]
-    queries.extend(
-        item["title"]
-        for item in movie.get("alternate_titles", [])
-        if item.get("title")
-    )
-    results = []
-    used_queries = []
-    for query in queries[:5]:
-        if not query or query in used_queries:
-            continue
-        used_queries.append(query)
+    used_queries = _collect_queries(movie["title"], movie.get("alternate_titles", []))
+    results: list[dict] = []
+    for query in used_queries:
         results.extend(client.search(query, limit=limit))
-        if len(results) >= limit:
-            break
 
-    legacy_links = [
-        {
-            "link": item.get("url", ""),
-            "name": item.get("title", ""),
-            "eps": 0,
-        }
-        for item in _dedupe_results(results)[:limit]
-    ]
+    enriched_results, legacy_links = _enrich_results(client, results, limit)
 
     return {
         "movie_id": movie_id,
         "title": movie["title"],
         "queries": used_queries,
-        "results": _dedupe_results(results)[:limit],
+        "results": enriched_results,
         "links": legacy_links,
     }

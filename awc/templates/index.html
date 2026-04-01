@@ -39,8 +39,8 @@ a{color:#58a6ff;text-decoration:none}a:hover{text-decoration:underline}
 .badge-manual{background:#9e6a03;color:#fff}
 .badge-prerelease{background:#6e40c9;color:#fff}
 .badge-ignored{background:#30363d;color:#8b949e}
-.badge-tv{background:#1f6feb;color:#fff}
-.badge-movie{background:#6e40c9;color:#fff}
+.badge-sonarr{background:#2193b5;color:#fff}
+.badge-radarr{background:#ffc230;color:#111827}
 
 .card-body{display:none;padding:0 14px 12px;border-top:1px solid #21262d}
 .card.open .card-body{display:block}
@@ -251,8 +251,7 @@ a{color:#58a6ff;text-decoration:none}a:hover{text-decoration:underline}
       {% endif %}
     </div>
     <div class="card-meta">
-      <span class="badge badge-tv">TV</span>
-      {% if show.series_type == 'standard' %}<span class="badge" style="background:#1f6feb">standard</span>{% endif %}
+      <span class="badge badge-sonarr">Sonarr</span>
       <span>{{ total_seasons }} seasons</span>
       {% if ns.mapped == effective_total and effective_total > 0 %}
       <span class="badge badge-mapped card-status-badge">all mapped</span>
@@ -347,7 +346,7 @@ a{color:#58a6ff;text-decoration:none}a:hover{text-decoration:underline}
       {% endif %}
     </div>
     <div class="card-meta">
-      <span class="badge badge-movie">Movie</span>
+      <span class="badge badge-radarr">Radarr</span>
       {% if movie.year %}<span>{{ movie.year }}</span>{% endif %}
       {% if mapping %}
       <span class="badge badge-{{ mapping.mapping_type }} card-status-badge">{{ mapping.mapping_type }}{% if mapping.mapping_type == 'auto' and mapping.confidence_score %} {{ (mapping.confidence_score * 100) | int }}%{% endif %}</span>

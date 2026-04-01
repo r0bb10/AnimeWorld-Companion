@@ -27,6 +27,7 @@ from .naming_service import build_release_name
 
 _download_events: dict[str, threading.Event] = {}
 _download_threads: dict[str, threading.Thread] = {}
+_download_metrics: dict[str, dict[str, float]] = {}
 _download_lock = threading.Lock()
 _download_semaphore = threading.Semaphore(max(1, settings.max_concurrent_downloads))
 
@@ -251,6 +252,12 @@ def _download_worker(download_id: str) -> None:
             downloaded_bytes=existing_bytes,
             finished_at=None,
         )
+        with _download_lock:
+            _download_metrics[download_id] = {
+                "window_started_at": datetime.now(UTC).timestamp(),
+                "window_bytes": 0.0,
+                "speed_bps": 0.0,
+            }
 
         with requests.get(url, stream=True, timeout=60, headers=headers) as response:
             if response.status_code == 416 and existing_bytes > 0:
@@ -285,13 +292,25 @@ def _download_worker(download_id: str) -> None:
                             download_id,
                             status="paused",
                             downloaded_bytes=downloaded,
-                            finished_at=datetime.now(UTC).timestamp(),
+                            finished_at=None,
                         )
                         return
                     if not chunk:
                         continue
                     handle.write(chunk)
                     downloaded += len(chunk)
+                    now_ts = datetime.now(UTC).timestamp()
+                    with _download_lock:
+                        metric = _download_metrics.setdefault(
+                            download_id,
+                            {"window_started_at": now_ts, "window_bytes": 0.0, "speed_bps": 0.0},
+                        )
+                        metric["window_bytes"] += float(len(chunk))
+                        elapsed_window = now_ts - float(metric["window_started_at"])
+                        if elapsed_window >= 0.75:
+                            metric["speed_bps"] = metric["window_bytes"] / elapsed_window
+                            metric["window_started_at"] = now_ts
+                            metric["window_bytes"] = 0.0
                     update_download_progress(download_id, downloaded_bytes=downloaded)
             os.replace(part_path, final_path)
             update_download_progress(
@@ -313,6 +332,8 @@ def _download_worker(download_id: str) -> None:
             _download_semaphore.release()
         with _download_lock:
             _download_threads.pop(download_id, None)
+            if not get_download(download_id) or get_download(download_id).get("status") not in {"paused", "queued", "resuming", "downloading"}:
+                _download_metrics.pop(download_id, None)
 
 
 def queue_download(download_id: str) -> dict | None:
@@ -362,7 +383,7 @@ def restore_on_startup() -> dict:
                 entry["id"],
                 status="paused",
                 downloaded_bytes=os.path.getsize(part_path),
-                finished_at=datetime.now(UTC).timestamp(),
+                finished_at=None,
                 part_path=_localize_data_path(entry.get("part_path", "")),
             )
         else:
@@ -379,10 +400,14 @@ def restore_on_startup() -> dict:
 def build_download_snapshot(limit: int = 100) -> dict:
     downloads = list_downloads(limit=limit)
     active_statuses = {"queued", "downloading", "resuming", "importing"}
+    finished_statuses = {"completed", "imported", "failed", "cancelled", "removed"}
     now = datetime.now(UTC).timestamp()
     enriched = []
     for item in downloads:
         entry = dict(item)
+        status = entry.get("status")
+        if status not in finished_statuses:
+            entry["finished_at"] = None
         total = int(entry.get("total_bytes") or 0)
         downloaded = int(entry.get("downloaded_bytes") or 0)
         started_at = entry.get("started_at") or entry.get("created_at") or now
@@ -391,15 +416,17 @@ def build_download_snapshot(limit: int = 100) -> dict:
         elapsed = max(float(end_time) - float(started_at), 0.0)
         entry["elapsed"] = round(elapsed, 1)
         entry["percent"] = round((downloaded / total) * 100, 1) if total > 0 else 0.0
-        entry["speed"] = round(downloaded / elapsed, 1) if elapsed > 0 and entry.get("status") == "downloading" else 0.0
+        with _download_lock:
+            metric = dict(_download_metrics.get(entry["id"], {}))
+        entry["speed"] = round(float(metric.get("speed_bps", 0.0)), 1) if status in {"downloading", "resuming"} else 0.0
         part_path = entry.get("part_path") or ""
-        entry["resumable"] = entry.get("status") in {"paused", "cancelled", "failed"} and bool(part_path) and os.path.exists(part_path)
+        entry["resumable"] = status in {"paused", "cancelled", "failed"} and bool(part_path) and os.path.exists(part_path)
         enriched.append(entry)
     return {
         "counts": {
             "total": len(enriched),
             "active": sum(1 for item in enriched if item["status"] in active_statuses),
-            "finished": sum(1 for item in enriched if item["status"] not in active_statuses),
+            "finished": sum(1 for item in enriched if item["status"] in finished_statuses),
         },
         "downloads": enriched,
     }
@@ -421,7 +448,7 @@ def cancel_download(download_id: str) -> dict | None:
         return update_download_progress(
             download_id,
             status="paused",
-            finished_at=datetime.now(UTC).timestamp(),
+            finished_at=None,
         )
     return entry
 
@@ -455,6 +482,7 @@ def remove_download(download_id: str) -> bool:
     with _download_lock:
         _download_threads.pop(download_id, None)
         _download_events.pop(download_id, None)
+        _download_metrics.pop(download_id, None)
     return removed
 
 

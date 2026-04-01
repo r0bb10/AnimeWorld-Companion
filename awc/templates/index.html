@@ -142,8 +142,8 @@ a{color:#58a6ff;text-decoration:none}a:hover{text-decoration:underline}
   /* Downloads box */
   .dl-header{flex-wrap:wrap;gap:6px}
   .dl-header>div{flex-wrap:wrap}
-  /* Hide low-priority columns on small screens */
-  .dl-col-speed,.dl-col-size,.dl-col-completed,.dl-col-actions{display:none}
+  /* Hide only the least important download columns on small screens */
+  .dl-col-size,.dl-col-completed{display:none}
 }
 
 @media(max-width:480px){
@@ -1011,10 +1011,11 @@ function renderDownloads(dls){
     html+='<td class="dl-name" title="'+d.filename+'">'+d.filename+'</td>';
     html+='<td><div class="dl-bar-wrap"><div class="dl-bar" style="width:'+d.percent+'%"></div></div></td>';
     html+='<td class="dl-pct">'+Number(d.percent).toFixed(1)+'%</td>';
-    html+='<td class="dl-col-speed" style="color:#8b949e;text-align:center">'+(isActive&&d.speed>0?fmtSpeed(d.speed):'--')+'</td>';
+    html+='<td class="dl-col-speed" style="color:#8b949e;text-align:center">'+(d.speed>0?fmtSpeed(d.speed):'--')+'</td>';
     html+='<td class="dl-col-size" style="color:#8b949e;text-align:center">'+sizeText+'</td>';
     html+='<td style="text-align:center"><span class="'+statusCls+'">'+d.status+'</span></td>';
-    html+='<td class="dl-col-completed" style="color:#8b949e;text-align:center">'+fmtDate(d.finished_at)+'</td>';
+    const completedAt=(d.status==='completed'||d.status==='imported')?fmtDate(d.finished_at):'--';
+    html+='<td class="dl-col-completed" style="color:#8b949e;text-align:center">'+completedAt+'</td>';
     html+='<td class="dl-col-actions" style="text-align:center;white-space:nowrap">';
     if(isActive){
       html+='<button class="btn btn-warning pause-dl-btn" data-dlid="'+d.id+'" style="padding:2px 8px;font-size:11px;margin-right:6px">Pause</button>';

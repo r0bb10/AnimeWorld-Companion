@@ -8,18 +8,30 @@ from ..repositories.shows import get_show_detail
 from .query_helper import build_query_variants
 
 
-def _collect_queries(title: str, alternate_titles: list[dict], limit: int = 10) -> list[str]:
+def _collect_queries(title: str, alternate_titles: list[dict], limit: int = 24) -> list[str]:
+    raw_values = [str(title or ""), *[str(item.get("title") or "") for item in alternate_titles]]
     queries: list[str] = []
     seen: set[str] = set()
 
-    for value in [title, *[(item.get("title") or "") for item in alternate_titles]]:
-        for query in build_query_variants(str(value or "")):
-            key = query.casefold()
-            if key in seen:
-                continue
-            seen.add(key)
-            queries.append(query)
-            if len(queries) >= limit:
+    def add(value: str) -> bool:
+        query = " ".join(str(value or "").split()).strip()
+        if not query:
+            return False
+        key = query.casefold()
+        if key in seen:
+            return False
+        seen.add(key)
+        queries.append(query)
+        return len(queries) >= limit
+
+    for value in raw_values:
+        variants = build_query_variants(value)
+        if variants and add(variants[0]):
+            return queries
+
+    for value in raw_values:
+        for query in build_query_variants(value)[1:]:
+            if add(query):
                 return queries
 
     return queries

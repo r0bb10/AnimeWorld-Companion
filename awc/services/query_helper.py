@@ -49,6 +49,9 @@ def build_query_variants(title: str) -> list[str]:
         seen.add(key)
         variants.append(query)
 
+    raw = " ".join(str(title or "").split()).strip()
+    add(raw)
+
     sanitized = sanitize_search_title(title)
     add(sanitized)
 

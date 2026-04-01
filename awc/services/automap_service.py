@@ -4,9 +4,12 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 import json
+import logging
 import threading
 
 from ..core.config import settings
+from ..core.log_events import format_movie_automap_lines, format_show_automap_lines, log_block
+from ..core.logging import get_logger
 from ..repositories.db import get_db
 from ..repositories.mappings import (
     list_show_mappings,
@@ -21,6 +24,7 @@ from .automap_language import resolve_movie_language_preference, resolve_show_la
 from .automap_scoring import calculate_movie_confidence, calculate_show_confidence
 
 _automap_lock = threading.Lock()
+logger = get_logger("automap")
 _automap_state = {
     "running": False,
     "last_started_at": None,
@@ -261,8 +265,10 @@ def _propagate_single_link(
 def automap_movie(movie_id: int, force: bool = False) -> dict:
     movie = get_movie_detail(movie_id)
     if not movie:
+        logger.warning("Movie automap failed: movie_id=%s not found", movie_id)
         return {"status": "error", "message": "movie_not_found", "movie_id": movie_id}
     if movie.get("mapping") and not force:
+        logger.info("Movie automap skipped: %s already mapped", movie.get("title"))
         return {"status": "already_mapped", "movie_id": movie_id}
 
     want_dubbed = resolve_movie_language_preference(movie)
@@ -278,6 +284,12 @@ def automap_movie(movie_id: int, force: bool = False) -> dict:
     if not candidates or candidates[0]["confidence_score"] < settings.automap_movie_confidence_threshold:
         if force:
             remove_movie_mapping(movie_id)
+        log_block(
+            logger,
+            logging.WARNING,
+            movie.get("title", f"movie:{movie_id}"),
+            ["No high-confidence movie match found"],
+        )
         return {"status": "not_found", "movie_id": movie_id, "candidates": candidates[:5]}
 
     best = candidates[0]
@@ -290,12 +302,19 @@ def automap_movie(movie_id: int, force: bool = False) -> dict:
         confidence_score=best["confidence_score"],
         confidence_factors=json.dumps(best["confidence_factors"]),
     )
+    log_block(
+        logger,
+        logging.INFO,
+        movie.get("title", f"movie:{movie_id}"),
+        format_movie_automap_lines(mapping),
+    )
     return {"status": "success", "movie_id": movie_id, "mapping": mapping, "candidates": candidates[:5]}
 
 
 def automap_show(show_id: int, season_number: int | None = None, force: bool = False) -> dict:
     show = get_show_detail(show_id)
     if not show:
+        logger.warning("Show automap failed: show_id=%s not found", show_id)
         return {"status": "error", "message": "show_not_found", "show_id": show_id}
 
     want_dubbed = resolve_show_language_preference(show)
@@ -313,6 +332,7 @@ def automap_show(show_id: int, season_number: int | None = None, force: bool = F
             continue
         target_seasons.append({**season, "has_aired": bool(season.get("air_date_start")) and str(season.get("air_date_start"))[:10] <= datetime.now(UTC).date().isoformat()})
     if not target_seasons:
+        logger.warning("Show automap found no target seasons: %s", show.get("title"))
         return {"status": "not_found", "show_id": show_id, "mapped_seasons": [], "ambiguous": [], "candidates": []}
 
     eligible_seasons = [
@@ -320,6 +340,7 @@ def automap_show(show_id: int, season_number: int | None = None, force: bool = F
         if force or not list_show_mappings(show_id, season["season_number"])
     ]
     if not eligible_seasons:
+        logger.info("Show automap skipped: %s already mapped", show.get("title"))
         return {"status": "already_mapped", "show_id": show_id, "mapped_seasons": [], "ambiguous": [], "candidates": []}
 
     reserved_links = _existing_links_by_show(show)
@@ -470,6 +491,36 @@ def automap_show(show_id: int, season_number: int | None = None, force: bool = F
         status = "partial"
     elif ambiguous and not mapped_seasons:
         status = "ambiguous"
+
+    refreshed_show = get_show_detail(show_id) if mapped_seasons else show
+    if status == "success":
+        log_block(
+            logger,
+            logging.INFO,
+            show.get("title", f"show:{show_id}"),
+            format_show_automap_lines(refreshed_show or show, mapped_seasons, []),
+        )
+    elif status == "partial":
+        log_block(
+            logger,
+            logging.WARNING,
+            show.get("title", f"show:{show_id}"),
+            format_show_automap_lines(refreshed_show or show, mapped_seasons, ambiguous),
+        )
+    elif status == "ambiguous":
+        log_block(
+            logger,
+            logging.WARNING,
+            show.get("title", f"show:{show_id}"),
+            format_show_automap_lines(show, [], ambiguous),
+        )
+    elif status == "not_found":
+        log_block(
+            logger,
+            logging.WARNING,
+            show.get("title", f"show:{show_id}"),
+            ["No high-confidence AnimeWorld match found"],
+        )
 
     return {
         "status": status,

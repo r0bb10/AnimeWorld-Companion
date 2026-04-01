@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 import json
+import logging
 from pathlib import Path
 import re
 import threading
@@ -13,6 +14,7 @@ import xml.etree.ElementTree as ET
 import requests
 
 from ..core.config import settings
+from ..core.log_events import log_block
 from ..core.logging import get_logger
 from ..integrations.animeworld_client import AnimeWorldClient
 from ..integrations.radarr_client import RadarrClient
@@ -24,7 +26,7 @@ from .sanitizer_service import sanitize_links_once, sanitizer_status
 from .search_service import build_movie_search_items, build_show_search_items
 from .sync_runner_service import sync_all
 
-logger = get_logger(__name__)
+logger = get_logger("runtime")
 
 _stop_event = threading.Event()
 _threads: dict[str, threading.Thread] = {}
@@ -255,6 +257,8 @@ def update_rss_cache() -> dict:
                 cached += 1
 
     cleanup_rss_items(settings.rss_cache_retention_days)
+    if cached:
+        logger.info("RSS cached %s item(s)", cached)
     _set_state(
         "rss",
         enabled=True,
@@ -268,6 +272,7 @@ def update_rss_cache() -> dict:
 
 def _run_rss_loop() -> None:
     _set_state("rss", enabled=settings.rss_enabled, running=True)
+    logger.info("RSS poller started: interval=%ss", max(30, settings.rss_poll_interval))
     while not _stop_event.is_set():
         try:
             update_rss_cache()
@@ -286,11 +291,17 @@ def _run_rss_loop() -> None:
 
 def _run_sync_loop() -> None:
     _set_state("sync", running=True)
+    logger.info("Background sync loop started: interval=%ss", max(60, settings.sync_interval_minutes * 60))
     if _stop_event.wait(max(60, settings.sync_interval_minutes * 60, 600)):
         return
     while not _stop_event.is_set():
         try:
             result = sync_all()
+            logger.info(
+                "Background sync completed: sonarr=%s radarr=%s",
+                int(result.get("sonarr", 0) or 0),
+                int(result.get("radarr", 0) or 0),
+            )
             _set_state(
                 "sync",
                 running=False,
@@ -312,6 +323,7 @@ def _run_sync_loop() -> None:
 
 def _run_import_loop() -> None:
     _set_state("imports", running=True)
+    logger.info("Import poller started: interval=%ss", max(30, settings.import_poll_interval))
     sonarr_client = SonarrClient()
     radarr_client = RadarrClient()
     while not _stop_event.is_set():
@@ -334,6 +346,9 @@ def _run_import_loop() -> None:
                         marked += 1
                         if settings.unmonitor_imported and target.get("id"):
                             sonarr_client.unmonitor_episode(int(target["id"]))
+                            logger.info("Imported and unmonitored Sonarr episode: %s", entry.get("filename"))
+                        else:
+                            logger.info("Imported Sonarr episode: %s", entry.get("filename"))
                     continue
 
                 if radarr_id:
@@ -344,6 +359,9 @@ def _run_import_loop() -> None:
                         marked += 1
                         if settings.unmonitor_imported and movie.get("id"):
                             radarr_client.unmonitor_movie(int(movie["id"]))
+                            logger.info("Imported and unmonitored Radarr movie: %s", entry.get("filename"))
+                        else:
+                            logger.info("Imported Radarr movie: %s", entry.get("filename"))
             _set_state(
                 "imports",
                 running=False,
@@ -365,12 +383,24 @@ def _run_import_loop() -> None:
 
 
 def _run_link_loop() -> None:
+    logger.info("Sanitizer loop scheduled: first_run=600s interval=86400s")
     if _stop_event.wait(60 * 10):
         return
     while not _stop_event.is_set():
         try:
             _set_state("links", running=True)
             result = sanitize_links_once()
+            log_block(
+                logger,
+                logging.INFO,
+                "Sanitizer cycle complete",
+                [
+                    f"checked={result.get('checked', 0)}",
+                    f"updated={result.get('updated', 0)}",
+                    f"removed={result.get('removed', 0)}",
+                    f"failed={result.get('failed', 0)}",
+                ],
+            )
             _set_state(
                 "links",
                 running=False,
@@ -414,6 +444,16 @@ def start_background_workers() -> dict:
         thread.start()
         started.append(name)
 
+    log_block(
+        logger,
+        logging.INFO,
+        "Background workers started",
+        [
+            f"workers={', '.join(started) if started else 'none'}",
+            f"restored={startup.get('restored', 0)}",
+            f"fixed={startup.get('fixed', 0)}",
+        ],
+    )
     return {"started": started, "startup": startup}
 
 
@@ -421,3 +461,4 @@ def stop_background_workers() -> None:
     _stop_event.set()
     for thread in list(_threads.values()):
         thread.join(timeout=1)
+    logger.info("Background workers stopped")

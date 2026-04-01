@@ -4,11 +4,14 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 import json
+import logging
 import threading
 
 import requests
 
 from ..core.config import settings
+from ..core.log_events import display_aw_link, format_movie_automap_lines, format_show_automap_lines, log_block
+from ..core.logging import get_logger
 from ..integrations.animeworld_client import AnimeWorldClient
 from ..repositories.db import get_db
 from ..repositories.movies import get_movie_detail
@@ -17,6 +20,7 @@ from .automap_language import resolve_movie_language_preference, resolve_show_la
 from .automap_scoring import calculate_movie_confidence, calculate_show_confidence, parse_italian_date
 
 _state_lock = threading.Lock()
+logger = get_logger("sanitizer")
 _state = {
     "running": False,
     "last_started_at": None,
@@ -109,7 +113,18 @@ def _refresh_show_mapping_metadata(client: AnimeWorldClient, row: dict, new_slug
                 row["id"],
             ),
         )
-    return new_slug != row["aw_link"] or bool(json.loads(row.get("confidence_factors") or "{}").get("preaired")) != bool(factors.get("preaired_placeholder"))
+    was_pre = bool(json.loads(row.get("confidence_factors") or "{}").get("preaired"))
+    is_pre = bool(factors.get("preaired_placeholder"))
+    changed = new_slug != row["aw_link"] or was_pre != is_pre
+    if changed:
+        refreshed_show = get_show_detail(int(row["show_id"])) or show
+        lines = format_show_automap_lines(refreshed_show, [int(row["season_number"])])
+        if new_slug != row["aw_link"]:
+            lines.append(f"redirect={display_aw_link(row['aw_link'])} -> {display_aw_link(new_slug)}")
+        if was_pre and not is_pre:
+            lines.append("promoted=pre -> auto")
+        log_block(logger, logging.INFO, str(show.get("title") or row.get("aw_title") or "Show"), lines)
+    return changed
 
 
 def _refresh_movie_mapping_metadata(client: AnimeWorldClient, row: dict, new_slug: str, now: str) -> bool:
@@ -162,7 +177,21 @@ def _refresh_movie_mapping_metadata(client: AnimeWorldClient, row: dict, new_slu
                 row["id"],
             ),
         )
-    return new_slug != row["aw_link"]
+    changed = new_slug != row["aw_link"]
+    if changed:
+        lines = format_movie_automap_lines(
+            {
+                "aw_link": new_slug,
+                "confidence_score": score,
+            }
+        )
+        log_block(
+            logger,
+            logging.INFO,
+            str(movie.get("title") or row.get("aw_title") or "Movie"),
+            lines + [f"redirect={display_aw_link(row['aw_link'])} -> {display_aw_link(new_slug)}"] if new_slug != row["aw_link"] else lines,
+        )
+    return changed
 
 
 def _needs_show_mapping_refresh(show: dict, season: dict) -> bool:
@@ -202,6 +231,7 @@ def sanitize_links_once() -> dict:
     now = datetime.now(UTC).isoformat()
     result = {"checked": 0, "updated": 0, "removed": 0, "failed": 0}
     show_seasons_to_refresh: set[tuple[int, int]] = set()
+    logger.info("Sanitizer cycle started")
 
     with get_db(write=True) as conn:
         show_rows = conn.execute(
@@ -221,6 +251,7 @@ def sanitize_links_once() -> dict:
                 failures = int(row["link_check_failures"] or 0) + 1
                 if failures >= 2:
                     conn.execute("DELETE FROM aw_show_mappings WHERE id = ?", (row["id"],))
+                    logger.warning("Removed dead show mapping: %s", display_aw_link(row["aw_link"]))
                     result["removed"] += 1
                 else:
                     conn.execute(
@@ -231,6 +262,7 @@ def sanitize_links_once() -> dict:
                         """,
                         (failures, now, row["id"]),
                     )
+                    logger.warning("Show mapping verification failed: %s (%s/2)", display_aw_link(row["aw_link"]), failures)
                     result["failed"] += 1
 
         for row in conn.execute(
@@ -260,6 +292,7 @@ def sanitize_links_once() -> dict:
                 failures = int(row["link_check_failures"] or 0) + 1
                 if failures >= 2:
                     conn.execute("DELETE FROM aw_movie_mappings WHERE id = ?", (row["id"],))
+                    logger.warning("Removed dead movie mapping: %s", display_aw_link(row["aw_link"]))
                     result["removed"] += 1
                 else:
                     conn.execute(
@@ -270,6 +303,7 @@ def sanitize_links_once() -> dict:
                         """,
                         (failures, now, row["id"]),
                     )
+                    logger.warning("Movie mapping verification failed: %s (%s/2)", display_aw_link(row["aw_link"]), failures)
                     result["failed"] += 1
 
     for show_id, season_number in sorted(show_seasons_to_refresh):
@@ -284,8 +318,25 @@ def sanitize_links_once() -> dict:
         response = automap_show(show_id, season_number=season_number, force=True)
         if response.get("status") in {"success", "partial"}:
             result["updated"] += 1
+            logger.info(
+                "Refreshed stale auto mapping: show_id=%s season=%s status=%s",
+                show_id,
+                season_number,
+                response.get("status"),
+            )
 
     _set_state(last_result=result, last_error="", last_finished_at=now, running=False)
+    log_block(
+        logger,
+        logging.INFO,
+        "Sanitizer cycle complete",
+        [
+            f"checked={result['checked']}",
+            f"updated={result['updated']}",
+            f"removed={result['removed']}",
+            f"failed={result['failed']}",
+        ],
+    )
     return result
 
 
@@ -299,4 +350,5 @@ def start_link_sanitizer() -> dict:
             raise
 
     threading.Thread(target=worker, name="awc-link-sanitizer", daemon=True).start()
+    logger.info("Sanitizer run requested")
     return {"ok": True, "message": "Mapped links sanitizer started"}

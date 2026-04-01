@@ -1,14 +1,17 @@
 from datetime import UTC, datetime
 from email.utils import format_datetime
+import logging
 from urllib.parse import quote, urlsplit, urlunsplit
 from xml.etree.ElementTree import Element, SubElement, register_namespace, tostring
 
 from ..core.config import settings
+from ..core.logging import get_logger
 from ..repositories.rss_cache import list_rss_items
 from .search_service import build_movie_search_items, build_show_search_items
 
 TORZNAB_NS = "http://torznab.com/schemas/2015/feed"
 register_namespace("torznab", TORZNAB_NS)
+logger = get_logger("torznab")
 
 
 def _xml_bytes(root: Element) -> bytes:
@@ -182,7 +185,8 @@ def build_search_xml(
     root, channel = _build_rss_root(base_url=base_url)
 
     if not (query or tvdb_id or tmdb_id or imdb_id):
-        for item in list_rss_items(limit=100):
+        cached_items = list_rss_items(limit=100)
+        for item in cached_items:
             category_id = int(item.get("category_id") or 5070)
             _add_item(
                 channel,
@@ -209,6 +213,8 @@ def build_search_xml(
                     episode=episode,
                     size=item.get("size", 1),
                 )
+            logger.debug("Torznab RSS fallback emitted dummy item: media=%s category=%s", media, category)
+        logger.debug("Torznab RSS served cached items=%s", len(cached_items))
         return _xml_bytes(root)
 
     effective_media = media
@@ -236,4 +242,16 @@ def build_search_xml(
             size=item.get("size", 0),
             pub_date=item.get("pubDate"),
         )
+    logger.debug(
+        "Torznab search served: media=%s query=%r season=%r episode=%r category=%r tvdb_id=%r tmdb_id=%r imdb_id=%r items=%s",
+        effective_media,
+        query,
+        season,
+        episode,
+        category,
+        tvdb_id,
+        tmdb_id,
+        imdb_id,
+        len(items),
+    )
     return _xml_bytes(root)

@@ -81,6 +81,7 @@ class Settings:
     awc_port: int
     awc_url: str
     log_level: str
+    timezone_name: str
     data_path: str
     database_path: str
     sync_interval_minutes: int
@@ -110,6 +111,7 @@ def load_settings() -> Settings:
         awc_port=_int("AWC_PORT", 7004),
         awc_url=_get("AWC_URL"),
         log_level=_get("LOG_LEVEL", "INFO").upper(),
+        timezone_name=_get("TZ", "UTC"),
         data_path=_get("AWC_DATA_PATH", "/data"),
         database_path=_resolve_database_path(),
         sync_interval_minutes=_int("SYNC_INTERVAL", _int("SONARR_SYNC_INTERVAL", 30)),

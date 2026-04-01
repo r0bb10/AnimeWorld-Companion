@@ -2,9 +2,12 @@
 
 from datetime import UTC, datetime
 import json
+import logging
 import threading
 
 from ..core.config import settings
+from ..core.log_events import log_block
+from ..core.logging import get_logger
 from ..integrations.radarr_client import RadarrClient
 from ..integrations.sonarr_client import SonarrClient
 from ..repositories.library_write import (
@@ -20,6 +23,7 @@ from ..repositories.library_write import (
 )
 
 _sync_lock = threading.Lock()
+logger = get_logger("sync")
 _sync_status = {"running": False, "last_started_at": None, "last_finished_at": None}
 
 
@@ -207,10 +211,17 @@ def sync_single_show(series_id: int) -> int | None:
         return None
     episodes = client.fetch_episodes(series_id)
     show_id = upsert_show(_build_show_payload(detail))
-    replace_show_seasons(show_id, _build_show_seasons(detail, episodes))
+    seasons = _build_show_seasons(detail, episodes)
+    replace_show_seasons(show_id, seasons)
     replace_show_alternate_titles(show_id, _build_show_alt_titles(detail))
     replace_scene_episode_map(show_id, _build_scene_episode_map(episodes))
     set_sync_meta("last_sonarr_sync", datetime.now(UTC).isoformat())
+    log_block(
+        logger,
+        logging.INFO,
+        f"Synced Sonarr: {detail.get('title')}",
+        [f"seasons={len([s for s in seasons if int(s.get('season_number') or 0) > 0])}"],
+    )
     return show_id
 
 
@@ -233,6 +244,7 @@ def sync_sonarr_library() -> int:
     if seen:
         prune_missing_shows(seen)
     set_sync_meta("last_sonarr_sync", datetime.now(UTC).isoformat())
+    logger.info("Sonarr sync complete: %s shows", processed)
     return processed
 
 
@@ -285,6 +297,7 @@ def sync_single_movie(movie_payload_or_id) -> int | None:
     movie_id = upsert_movie(_build_movie_payload(movie))
     replace_movie_alternate_titles(movie_id, _build_movie_alt_titles(movie))
     set_sync_meta("last_radarr_sync", datetime.now(UTC).isoformat())
+    logger.info("Synced Radarr: %s", movie.get("title"))
     return movie_id
 
 
@@ -307,6 +320,7 @@ def sync_radarr_library() -> int:
     if seen:
         prune_missing_movies(seen)
     set_sync_meta("last_radarr_sync", datetime.now(UTC).isoformat())
+    logger.info("Radarr sync complete: %s movies", processed)
     return processed
 
 

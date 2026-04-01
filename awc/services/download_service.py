@@ -3,6 +3,7 @@
 from base64 import urlsafe_b64decode, urlsafe_b64encode
 from datetime import UTC, datetime
 from hashlib import sha1
+import logging
 from pathlib import Path
 import os
 import threading
@@ -11,6 +12,8 @@ from urllib.parse import urlencode
 import requests
 
 from ..core.config import settings
+from ..core.log_events import extract_remote_filename, log_block
+from ..core.logging import get_logger
 from ..domain.media import MediaKind, MediaManager, NamingContext
 from ..repositories.downloads import (
     clear_finished_downloads,
@@ -30,6 +33,7 @@ _download_threads: dict[str, threading.Thread] = {}
 _download_metrics: dict[str, dict[str, float]] = {}
 _download_lock = threading.Lock()
 _download_semaphore = threading.Semaphore(max(1, settings.max_concurrent_downloads))
+logger = get_logger("download")
 
 
 def _bencode(value) -> bytes:
@@ -197,6 +201,15 @@ def create_fake_torrent(
             sonarr_id=manager_id if manager == "sonarr" else None,
             radarr_id=manager_id if manager == "radarr" else None,
         )
+        log_block(
+            logger,
+            logging.INFO,
+            f"Queued download: {release_name}",
+            [
+                f"manager={manager}",
+                f"source={resolved_source}",
+            ],
+        )
     queue_download(download["id"])
 
     token = sha1(
@@ -273,6 +286,7 @@ def _download_worker(download_id: str) -> None:
                 return
 
             response.raise_for_status()
+            remote_name = extract_remote_filename(response.headers, url)
 
             if response.status_code == 206 and existing_bytes > 0:
                 total_header = response.headers.get("Content-Range", "").split("/")[-1]
@@ -285,6 +299,16 @@ def _download_worker(download_id: str) -> None:
                 downloaded = 0
                 existing_bytes = 0
 
+            log_block(
+                logger,
+                logging.INFO,
+                f"Download started: {entry['filename']}",
+                [
+                    f"remote={remote_name or '(unknown)'}",
+                    f"resume={'yes' if existing_bytes > 0 else 'no'}",
+                ],
+            )
+
             update_download_progress(download_id, total_bytes=total, downloaded_bytes=downloaded)
             with open(part_path, mode) as handle:
                 for chunk in response.iter_content(chunk_size=65536):
@@ -294,6 +318,12 @@ def _download_worker(download_id: str) -> None:
                             status="paused",
                             downloaded_bytes=downloaded,
                             finished_at=None,
+                        )
+                        log_block(
+                            logger,
+                            logging.INFO,
+                            f"Download paused: {entry['filename']}",
+                            [f"downloaded={downloaded} bytes"],
                         )
                         return
                     if not chunk:
@@ -321,6 +351,15 @@ def _download_worker(download_id: str) -> None:
                 part_path="",
                 finished_at=datetime.now(UTC).timestamp(),
             )
+            log_block(
+                logger,
+                logging.INFO,
+                f"Download completed: {entry['filename']}",
+                [
+                    f"saved={final_path}",
+                    f"remote={remote_name or '(unknown)'}",
+                ],
+            )
     except Exception as exc:
         update_download_progress(
             download_id,
@@ -328,6 +367,7 @@ def _download_worker(download_id: str) -> None:
             error=str(exc),
             finished_at=datetime.now(UTC).timestamp(),
         )
+        logger.exception("Download failed: %s", entry["filename"])
     finally:
         if acquired_slot:
             _download_semaphore.release()
@@ -362,11 +402,14 @@ def mark_imported(download_id: str) -> dict | None:
     entry = get_download(download_id)
     if not entry or entry.get("status") != "completed":
         return None
-    return update_download_progress(
+    updated = update_download_progress(
         download_id,
         status="imported",
         finished_at=datetime.now(UTC).timestamp(),
     )
+    if updated:
+        logger.info("Download imported: %s", updated.get("filename"))
+    return updated
 
 
 def restore_on_startup() -> dict:
@@ -439,18 +482,24 @@ def cancel_download(download_id: str) -> dict | None:
         return None
     event = _download_events.get(download_id)
     if entry.get("status") == "queued":
-        return update_download_progress(
+        updated = update_download_progress(
             download_id,
             status="cancelled",
             finished_at=datetime.now(UTC).timestamp(),
         )
+        if updated:
+            logger.info("Download cancelled: %s", updated.get("filename"))
+        return updated
     if event and entry.get("status") == "downloading":
         event.set()
-        return update_download_progress(
+        updated = update_download_progress(
             download_id,
             status="paused",
             finished_at=None,
         )
+        if updated:
+            logger.info("Download pause requested: %s", updated.get("filename"))
+        return updated
     return entry
 
 
@@ -468,6 +517,7 @@ def resume_download(download_id: str) -> dict | None:
         downloaded_bytes=os.path.getsize(part_path),
         finished_at=None,
     )
+    logger.info("Download resumed: %s", entry.get("filename"))
     return queue_download(download_id)
 
 

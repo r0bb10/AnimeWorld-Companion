@@ -1,8 +1,10 @@
 """Mapping-aware AnimeWorld search orchestration."""
 
+import logging
 from urllib.parse import quote
 
 from ..core.config import settings
+from ..core.logging import get_logger
 from ..domain.media import MediaKind, MediaManager, NamingContext
 from ..integrations.animeworld_client import AnimeWorldClient
 from ..repositories.movies import get_movie_detail
@@ -11,6 +13,8 @@ from .download_service import build_download_url
 from .mapping_service import resolve_scene_episode
 from .naming_service import build_release_name
 from .query_service import parse_query
+
+logger = get_logger("search")
 
 
 def _match_episode(episodes: list[dict], episode_number: int) -> dict | None:
@@ -119,6 +123,7 @@ def build_show_search_items(query: str, season_number: int | None, episode_numbe
         episode_number = parsed.get("episode")
 
     if season_number is None or episode_number is None:
+        logger.debug("Show search rejected: missing season/episode for query=%r", query)
         return []
 
     show = find_show_by_tvdb_id(tvdb_id) if tvdb_id is not None else None
@@ -127,6 +132,7 @@ def build_show_search_items(query: str, season_number: int | None, episode_numbe
     if not show and parsed_title and parsed_title != query:
         show = find_show_by_title(parsed_title)
     if not show:
+        logger.debug("Show search miss: query=%r parsed=%r tvdb_id=%r", query, parsed_title, tvdb_id)
         return []
 
     resolved = resolve_scene_episode(show["id"], season_number, episode_number)
@@ -136,8 +142,17 @@ def build_show_search_items(query: str, season_number: int | None, episode_numbe
 
     detail = get_show_detail(show["id"])
     if not detail:
+        logger.debug("Show search detail miss: show_id=%s query=%r", show["id"], query)
         return []
-    return _series_items(detail, season_number, episode_number)
+    items = _series_items(detail, season_number, episode_number)
+    logger.debug(
+        "Show search resolved: title=%s season=%s episode=%s items=%s",
+        detail.get("title"),
+        season_number,
+        episode_number,
+        len(items),
+    )
+    return items
 
 
 def build_movie_search_items(query: str, tmdb_id: int | None = None, imdb_id: str = "") -> list[dict]:
@@ -151,15 +166,18 @@ def build_movie_search_items(query: str, tmdb_id: int | None = None, imdb_id: st
     if not movie and parsed_title and parsed_title != query:
         movie = find_movie_by_title(parsed_title)
     if not movie:
+        logger.debug("Movie search miss: query=%r parsed=%r tmdb_id=%r imdb_id=%r", query, parsed_title, tmdb_id, imdb_id)
         return []
 
     detail = get_movie_detail(movie["id"])
     if not detail or not detail.get("mapping"):
+        logger.debug("Movie search unmapped: title=%s", movie.get("title"))
         return []
 
     client = AnimeWorldClient()
     episodes = client.get_episodes(detail["mapping"]["aw_link"])
     if not episodes:
+        logger.debug("Movie search found no episodes: title=%s aw_link=%s", detail.get("title"), detail["mapping"]["aw_link"])
         return []
 
     episode = episodes[0]
@@ -193,4 +211,5 @@ def build_movie_search_items(query: str, tmdb_id: int | None = None, imdb_id: st
                 "aw_link": detail["mapping"]["aw_link"],
             }
         )
+    logger.debug("Movie search resolved: title=%s items=%s", detail.get("title"), len(results))
     return results

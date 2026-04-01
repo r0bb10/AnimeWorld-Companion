@@ -59,7 +59,7 @@ from ..services.sync_runner_service import sync_all, sync_now_radarr, sync_now_s
 from .auth import require_api_key
 
 api_router = APIRouter()
-logger = get_logger(__name__)
+logger = get_logger("routes")
 
 
 @api_router.get("/", tags=["UI"])
@@ -95,6 +95,7 @@ def api_map_show_season(
     )
     if not result["updated"]:
         raise HTTPException(status_code=404, detail=result["reason"])
+    logger.info("Manual map saved: show_id=%s season=%s part=%s link=%s", show_id, season_number, part, result.get("mapping", {}).get("aw_link", aw_link))
     return result
 
 
@@ -104,7 +105,9 @@ def api_unmap_show_season(
     season_number: int,
     _: str = Depends(require_api_key),
 ) -> dict:
-    return unmap_show_season(show_id, season_number)
+    result = unmap_show_season(show_id, season_number)
+    logger.info("Manual unmap: show_id=%s season=%s removed=%s", show_id, season_number, result.get("removed", 0))
+    return result
 
 
 @api_router.post("/ignore-season", tags=["Mutation"])
@@ -136,6 +139,7 @@ def api_delete_show(show_id: int, _: str = Depends(require_api_key)) -> dict:
     result = remove_show(show_id)
     if not result["removed"]:
         raise HTTPException(status_code=404, detail="Show not found")
+    logger.info("Show deleted: show_id=%s", show_id)
     return result
 
 
@@ -187,12 +191,15 @@ def api_map_movie(
     )
     if not result["updated"]:
         raise HTTPException(status_code=404, detail=result["reason"])
+    logger.info("Manual movie map saved: movie_id=%s link=%s", movie_id, result.get("mapping", {}).get("aw_link", aw_link))
     return result
 
 
 @api_router.post("/unmap/movie/{movie_id}", tags=["Mutation"])
 def api_unmap_movie(movie_id: int, _: str = Depends(require_api_key)) -> dict:
-    return unmap_movie(movie_id)
+    result = unmap_movie(movie_id)
+    logger.info("Manual movie unmap: movie_id=%s removed=%s", movie_id, result.get("removed", 0))
+    return result
 
 
 @api_router.get("/api/rebuild/status", tags=["System"])
@@ -405,17 +412,23 @@ def api_events(_: str = Depends(require_api_key)) -> StreamingResponse:
 
 @api_router.post("/api/rss/cache/clear", tags=["System"])
 def api_clear_rss_cache(_: str = Depends(require_api_key)) -> dict:
-    return clear_rss_cache()
+    result = clear_rss_cache()
+    logger.info("RSS cache cleared: removed=%s", result.get("removed", 0))
+    return result
 
 
 @api_router.post("/api/rss/update", tags=["System"])
 def api_update_rss_cache(_: str = Depends(require_api_key)) -> dict:
-    return update_rss_cache()
+    result = update_rss_cache()
+    logger.info("RSS cache update requested: cached=%s", result.get("cached", 0))
+    return result
 
 
 @api_router.post("/api/links/sanitize", tags=["System"])
 def api_sanitize_links(_: str = Depends(require_api_key)) -> dict:
-    return start_link_sanitizer()
+    result = start_link_sanitizer()
+    logger.info("Sanitizer requested")
+    return result
 
 
 @api_router.post("/restart", tags=["System"])
@@ -428,6 +441,7 @@ def api_restart(_: str = Depends(require_api_key)) -> dict:
         os._exit(0)
 
     threading.Thread(target=_graceful_exit, name="awc-restart", daemon=True).start()
+    logger.warning("Restart requested")
     return {"ok": True, "message": "Restart scheduled"}
 
 
@@ -478,17 +492,23 @@ def manager_webhook(
 
 @api_router.post("/sync", tags=["Integration"])
 def manual_sync(_: str = Depends(require_api_key)) -> dict:
-    return {"status": "ok", "result": sync_all()}
+    result = sync_all()
+    logger.info("Manual sync completed")
+    return {"status": "ok", "result": result}
 
 
 @api_router.post("/sync/sonarr", tags=["Integration"])
 def manual_sync_sonarr(_: str = Depends(require_api_key)) -> dict:
-    return {"status": "ok", "result": sync_now_sonarr()}
+    result = sync_now_sonarr()
+    logger.info("Manual Sonarr sync completed")
+    return {"status": "ok", "result": result}
 
 
 @api_router.post("/sync/radarr", tags=["Integration"])
 def manual_sync_radarr(_: str = Depends(require_api_key)) -> dict:
-    return {"status": "ok", "result": sync_now_radarr()}
+    result = sync_now_radarr()
+    logger.info("Manual Radarr sync completed")
+    return {"status": "ok", "result": result}
 
 
 @api_router.api_route("/api", methods=["GET", "POST"], tags=["Indexer"])
@@ -506,6 +526,17 @@ def torznab_api(
 ) -> Response:
     request_type = (t or "caps").strip().lower()
     base_url = str(request.base_url).rstrip("/")
+    logger.debug(
+        "Torznab request: type=%s q=%r season=%r ep=%r cat=%r tvdb_id=%r tmdb_id=%r imdb_id=%r",
+        request_type,
+        q,
+        season,
+        ep,
+        cat,
+        tvdbid,
+        tmdbid,
+        imdbid,
+    )
     if request_type == "caps":
         return Response(content=build_caps_xml(base_url=base_url), media_type="application/xml")
     if request_type in {"search", "tvsearch"}:

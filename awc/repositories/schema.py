@@ -48,6 +48,7 @@ CREATE TABLE IF NOT EXISTS show_seasons (
     episode_count  INTEGER DEFAULT 0,
     air_date_start DATE,
     air_date_end   DATE,
+    segment_markers TEXT DEFAULT '[]',
     ignored        BOOLEAN DEFAULT 0,
     created_at     TEXT DEFAULT (datetime('now')),
     updated_at     TEXT DEFAULT (datetime('now')),
@@ -220,3 +221,9 @@ def init_db() -> None:
         }
         if "radarr_id" not in columns:
             conn.execute("ALTER TABLE downloads ADD COLUMN radarr_id INTEGER")
+        season_columns = {
+            row["name"]
+            for row in conn.execute("PRAGMA table_info(show_seasons)").fetchall()
+        }
+        if "segment_markers" not in season_columns:
+            conn.execute("ALTER TABLE show_seasons ADD COLUMN segment_markers TEXT DEFAULT '[]'")

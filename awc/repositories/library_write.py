@@ -1,6 +1,7 @@
 """Write-side repositories for manager sync."""
 
 from datetime import UTC, datetime
+import json
 
 from .db import get_db
 from .title_normalization import normalize_title
@@ -74,9 +75,9 @@ def replace_show_seasons(show_id: int, seasons: list[dict]) -> None:
                 """
                 INSERT INTO show_seasons (
                     show_id, season_number, monitored, episode_count,
-                    air_date_start, air_date_end, updated_at
+                    air_date_start, air_date_end, segment_markers, updated_at
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     show_id,
@@ -85,6 +86,7 @@ def replace_show_seasons(show_id: int, seasons: list[dict]) -> None:
                     season.get("episode_count", 0),
                     season.get("air_date_start"),
                     season.get("air_date_end"),
+                    json.dumps(season.get("segment_markers", [])),
                     _now(),
                 ),
             )

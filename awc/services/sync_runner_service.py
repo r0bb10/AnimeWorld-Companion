@@ -68,12 +68,17 @@ def _build_show_seasons(series: dict, episodes: list[dict]) -> list[dict]:
             "episode_count": stats.get("totalEpisodeCount", 0),
             "air_date_start": None,
             "air_date_end": None,
+            "segment_markers": [],
         }
 
+    episodes_by_season: dict[int, list[dict]] = {}
     for episode in episodes:
         season_number = episode.get("seasonNumber")
         air_date = episode.get("airDate") or episode.get("airDateUtc")
-        if season_number is None or not air_date:
+        if season_number is None:
+            continue
+        episodes_by_season.setdefault(int(season_number), []).append(episode)
+        if not air_date:
             continue
         air_date = str(air_date).split("T")[0]
         season = by_season.setdefault(
@@ -84,12 +89,72 @@ def _build_show_seasons(series: dict, episodes: list[dict]) -> list[dict]:
                 "episode_count": 0,
                 "air_date_start": air_date,
                 "air_date_end": air_date,
+                "segment_markers": [],
             },
         )
         if not season.get("air_date_start") or air_date < season["air_date_start"]:
             season["air_date_start"] = air_date
         if not season.get("air_date_end") or air_date > season["air_date_end"]:
             season["air_date_end"] = air_date
+
+    for season_number, items in episodes_by_season.items():
+        season = by_season.setdefault(
+            season_number,
+            {
+                "season_number": season_number,
+                "monitored": True,
+                "episode_count": 0,
+                "air_date_start": None,
+                "air_date_end": None,
+                "segment_markers": [],
+            },
+        )
+        ordered = sorted(
+            items,
+            key=lambda item: (
+                int(item.get("episodeNumber") or 0),
+                int(item.get("absoluteEpisodeNumber") or 0),
+            ),
+        )
+        segment_start = None
+        segment_count = 0
+        segment_air_start = None
+        markers: list[dict] = []
+        for episode in ordered:
+            number = int(episode.get("episodeNumber") or 0)
+            air_value = str(episode.get("airDate") or episode.get("airDateUtc") or "").split("T")[0] or None
+            if segment_start is None:
+                segment_start = number
+                segment_air_start = air_value
+            segment_count += 1
+            finale_type = str(episode.get("finaleType") or "").strip().lower()
+            if finale_type in {"midseason", "season", "series"}:
+                markers.append(
+                    {
+                        "start_episode": segment_start,
+                        "end_episode": number,
+                        "count": segment_count,
+                        "finale_type": finale_type,
+                        "air_date_start": segment_air_start,
+                        "air_date_end": air_value,
+                    }
+                )
+                segment_start = None
+                segment_count = 0
+                segment_air_start = None
+        if segment_count and segment_start is not None:
+            last = ordered[-1]
+            markers.append(
+                {
+                    "start_episode": segment_start,
+                    "end_episode": int(last.get("episodeNumber") or segment_start),
+                    "count": segment_count,
+                    "finale_type": "",
+                    "air_date_start": segment_air_start,
+                    "air_date_end": str(last.get("airDate") or last.get("airDateUtc") or "").split("T")[0] or None,
+                }
+            )
+        season["segment_markers"] = markers
     return list(sorted(by_season.values(), key=lambda item: item["season_number"]))
 
 

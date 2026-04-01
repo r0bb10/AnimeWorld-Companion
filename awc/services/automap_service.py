@@ -80,62 +80,119 @@ def _build_scored_candidates(show: dict, season: dict, candidates: list[dict], w
     return scored
 
 
-def _detect_split_cour_pair(show: dict, season: dict, season_scores: list[dict], want_dubbed: bool) -> tuple[list[dict], float, dict] | None:
+def _season_segments(season: dict) -> list[dict]:
+    markers = season.get("segment_markers") or []
+    valid = [dict(item) for item in markers if int(item.get("count") or 0) > 0]
+    return valid if len(valid) > 1 else []
+
+
+def _segment_marker_bonus(parts: list[dict], markers: list[dict]) -> tuple[float, dict]:
+    exact_count_hits = 0
+    date_hits = 0
+    for part, marker in zip(parts, markers):
+        if abs(int(part.get("aw_episode_count") or 0) - int(marker.get("count") or 0)) <= 1:
+            exact_count_hits += 1
+        release = part.get("aw_release_datetime")
+        marker_start = str(marker.get("air_date_start") or "")
+        if release and marker_start:
+            try:
+                marker_dt = datetime.fromisoformat(marker_start.replace("Z", "+00:00"))
+                if abs((release.date() - marker_dt.date()).days) <= 14:
+                    date_hits += 1
+            except ValueError:
+                pass
+    bonus = min(exact_count_hits * 0.02 + date_hits * 0.02, 0.10)
+    return bonus, {
+        "segment_exact_matches": exact_count_hits,
+        "segment_date_matches": date_hits,
+        "segment_bonus": round(bonus, 3),
+    }
+
+
+def _detect_segment_chain(show: dict, season: dict, season_scores: list[dict], want_dubbed: bool) -> tuple[list[dict], float, dict] | None:
     target_count = int(season.get("episode_count") or 0)
     if not target_count:
         return None
 
+    markers = _season_segments(season)
+    if not markers:
+        return None
+
     season_end = season.get("air_date_end") or ""
-    best_pair: tuple[list[dict], float, dict] | None = None
+    required_counts = [int(item.get("count") or 0) for item in markers]
+    best_chain: tuple[list[dict], float, dict] | None = None
 
-    for first in season_scores:
-        first_count = int(first.get("aw_episode_count") or 0)
-        if not first_count or first_count >= target_count:
-            continue
-        if (first.get("aw_status") or "").lower() != "finito":
-            continue
-        first_release = first.get("aw_release_datetime")
+    candidates = [
+        candidate for candidate in season_scores
+        if int(candidate.get("aw_episode_count") or 0) > 0
+    ]
 
-        for second in season_scores:
-            if first["aw_link"] == second["aw_link"]:
-                continue
-            second_count = int(second.get("aw_episode_count") or 0)
-            if not second_count:
-                continue
-            if (first.get("aw_audio") or "").lower() != (second.get("aw_audio") or "").lower():
-                continue
-            second_release = second.get("aw_release_datetime")
-            if first_release and second_release and second_release <= first_release:
-                continue
-            if season_end and second_release:
-                try:
-                    last_aired_dt = datetime.fromisoformat(season_end.replace("Z", "+00:00"))
-                    if second_release > last_aired_dt:
-                        delta_days = (second_release - last_aired_dt).days
-                        if delta_days > 30:
-                            continue
-                except (TypeError, ValueError):
-                    pass
-            combined = first_count + second_count
+    def fits_marker(candidate: dict, marker: dict, prev_release: datetime | None) -> bool:
+        count = int(candidate.get("aw_episode_count") or 0)
+        target = int(marker.get("count") or 0)
+        if abs(count - target) > 1:
+            return False
+        if (candidate.get("aw_status") or "").lower() != "finito":
+            return False
+        release = candidate.get("aw_release_datetime")
+        if prev_release and release and release <= prev_release:
+            return False
+        if season_end and release:
+            try:
+                last_aired_dt = datetime.fromisoformat(str(season_end).replace("Z", "+00:00"))
+                if release.date() > last_aired_dt.date() and (release.date() - last_aired_dt.date()).days > 30:
+                    return False
+            except ValueError:
+                pass
+        marker_start = str(marker.get("air_date_start") or "")
+        if release and marker_start:
+            try:
+                marker_dt = datetime.fromisoformat(marker_start.replace("Z", "+00:00"))
+                if abs((release.date() - marker_dt.date()).days) > 45:
+                    return False
+            except ValueError:
+                pass
+        return True
+
+    def backtrack(index: int, chain: list[dict]) -> None:
+        nonlocal best_chain
+        if index >= len(required_counts):
+            combined = sum(int(item.get("aw_episode_count") or 0) for item in chain)
             if abs(combined - target_count) > 1:
-                continue
-
+                return
+            first = chain[0]
             combined_candidate = {
                 **first,
-                "aw_title": f"{first.get('aw_title', '')} + {second.get('aw_title', '')}",
+                "aw_title": " + ".join(item.get("aw_title", "") for item in chain),
                 "aw_episode_count": combined,
-                "aw_total_episodes": int(first.get("aw_total_episodes") or first_count) + int(second.get("aw_total_episodes") or second_count),
-                "aw_release_datetime": first_release,
+                "aw_total_episodes": sum(int(item.get("aw_total_episodes") or item.get("aw_episode_count") or 0) for item in chain),
+                "aw_release_datetime": first.get("aw_release_datetime"),
             }
-            combined_score, combined_factors = calculate_show_confidence(
-                show, season, combined_candidate, want_dubbed=want_dubbed
-            )
+            combined_score, combined_factors = calculate_show_confidence(show, season, combined_candidate, want_dubbed=want_dubbed)
+            bonus, bonus_factors = _segment_marker_bonus(chain, markers)
+            combined_score += bonus
+            combined_factors = {**combined_factors, **bonus_factors, "split_cour": True}
             if combined_score < settings.automap_confidence_threshold:
-                continue
-            if best_pair is None or combined_score > best_pair[1]:
-                best_pair = ([first, second], combined_score, combined_factors)
+                return
+            if best_chain is None or combined_score > best_chain[1]:
+                best_chain = (list(chain), combined_score, combined_factors)
+            return
 
-    return best_pair
+        prev_release = chain[-1].get("aw_release_datetime") if chain else None
+        prev_audio = (chain[-1].get("aw_audio") or "").lower() if chain else ""
+        for candidate in candidates:
+            if any(candidate["aw_link"] == item["aw_link"] for item in chain):
+                continue
+            if prev_audio and (candidate.get("aw_audio") or "").lower() != prev_audio:
+                continue
+            if not fits_marker(candidate, markers[index], prev_release):
+                continue
+            chain.append(candidate)
+            backtrack(index + 1, chain)
+            chain.pop()
+
+    backtrack(0, [])
+    return best_chain
 
 
 def _propagate_single_link(
@@ -283,7 +340,7 @@ def automap_show(show_id: int, season_number: int | None = None, force: bool = F
         second = season_scores[1] if len(season_scores) > 1 else None
         season_has_aired = bool(season.get("has_aired", True))
 
-        split_pair = _detect_split_cour_pair(show, season, season_scores, want_dubbed)
+        split_pair = _detect_segment_chain(show, season, season_scores, want_dubbed)
         if split_pair:
             parts, split_score, split_factors = split_pair
             replace_show_mappings_auto(

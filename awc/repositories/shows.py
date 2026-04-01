@@ -1,5 +1,7 @@
 """Show repository for the clean rebuild."""
 
+import json
+
 from .db import get_db
 from .title_normalization import normalize_title
 
@@ -79,6 +81,7 @@ def get_show_detail(show_id: int) -> dict | None:
                 episode_count,
                 air_date_start,
                 air_date_end,
+                segment_markers,
                 ignored
             FROM show_seasons
             WHERE show_id = ?
@@ -123,6 +126,10 @@ def get_show_detail(show_id: int) -> dict | None:
     seasons = []
     for row in season_rows:
         season = dict(row)
+        try:
+            season["segment_markers"] = json.loads(season.get("segment_markers") or "[]")
+        except (TypeError, ValueError):
+            season["segment_markers"] = []
         season["mappings"] = mappings_by_season.get(season["season_number"], [])
         seasons.append(season)
 

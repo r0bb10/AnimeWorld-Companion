@@ -6,7 +6,7 @@ from ..repositories.mappings import (
     replace_movie_mapping,
     replace_show_mapping,
 )
-from ..repositories.movies import get_movie_detail
+from ..repositories.movies import get_movie_detail, set_movie_ignored
 from ..repositories.shows import delete_show, get_show_detail, set_season_ignored
 
 
@@ -87,6 +87,15 @@ def unmap_movie(movie_id: int) -> dict:
         "updated": removed > 0,
         "removed": removed,
         "movie_id": movie_id,
+    }
+
+
+def ignore_movie(movie_id: int, ignored: bool = True) -> dict:
+    updated = set_movie_ignored(movie_id, ignored)
+    return {
+        "updated": updated,
+        "movie_id": movie_id,
+        "ignored": ignored if updated else None,
     }
 
 

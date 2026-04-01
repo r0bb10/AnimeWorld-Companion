@@ -15,6 +15,7 @@ _DEBUG_ONLY_UVICORN_MESSAGES = (
     "Waiting for application startup.",
     "Application startup complete.",
     "Waiting for connections to close.",
+    "Uvicorn running on ",
 )
 
 

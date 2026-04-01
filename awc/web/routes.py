@@ -42,6 +42,7 @@ from ..services.mapping_service import (
 )
 from ..services.mutation_service import (
     ignore_show_season,
+    ignore_movie,
     map_movie,
     map_show_season,
     remove_show,
@@ -131,6 +132,30 @@ def api_unignore_show_season(
     result = ignore_show_season(show_id, season_number, False)
     if not result["updated"]:
         raise HTTPException(status_code=404, detail="Season not found")
+    return result
+
+
+@api_router.post("/ignore-movie", tags=["Mutation"])
+def api_ignore_movie(
+    movie_id: int,
+    _: str = Depends(require_api_key),
+) -> dict:
+    result = ignore_movie(movie_id, True)
+    if not result["updated"]:
+        raise HTTPException(status_code=404, detail="Movie not found")
+    logger.info("Movie ignored: movie_id=%s", movie_id)
+    return result
+
+
+@api_router.post("/unignore-movie", tags=["Mutation"])
+def api_unignore_movie(
+    movie_id: int,
+    _: str = Depends(require_api_key),
+) -> dict:
+    result = ignore_movie(movie_id, False)
+    if not result["updated"]:
+        raise HTTPException(status_code=404, detail="Movie not found")
+    logger.info("Movie unignored: movie_id=%s", movie_id)
     return result
 
 

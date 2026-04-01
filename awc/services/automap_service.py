@@ -323,6 +323,7 @@ def automap_show(show_id: int, season_number: int | None = None, force: bool = F
     mapped_seasons: list[int] = []
     ambiguous: list[dict] = []
     handled: set[int] = set()
+    skipped_unaired: list[int] = []
 
     target_seasons = []
     for season in show.get("seasons", []):
@@ -418,32 +419,11 @@ def automap_show(show_id: int, season_number: int | None = None, force: bool = F
                 handled.add(sn)
                 reserved_links.add(best_preaired["aw_link"])
                 continue
-
-            if best and best["confidence_score"] >= settings.automap_confidence_threshold and (
-                not second or (best["confidence_score"] - second["confidence_score"]) >= 0.05
-            ):
-                replace_show_mappings_auto(
-                    show_id=show_id,
-                    season_number=sn,
-                    items=[
-                        {
-                            "part": 1,
-                            "aw_link": best["aw_link"],
-                            "aw_title": best["aw_title"],
-                            "aw_episode_count": best["aw_episode_count"],
-                            "aw_total_episodes": best["aw_total_episodes"],
-                            "aw_status": best.get("aw_status", ""),
-                            "aw_category": best.get("aw_category", ""),
-                            "confidence_score": best["confidence_score"],
-                            "confidence_factors": json.dumps(best["confidence_factors"]),
-                            "linked_with_season": None,
-                        }
-                    ],
-                )
-                mapped_seasons.append(sn)
-                handled.add(sn)
-                reserved_links.add(best["aw_link"])
-                continue
+            # Unaired seasons should never degrade into ambiguous "needs review".
+            # We either promote a verified placeholder match, or we skip them silently
+            # until AnimeWorld exposes a real placeholder/released page worth mapping.
+            skipped_unaired.append(sn)
+            continue
 
         if best and best["confidence_score"] >= settings.automap_confidence_threshold and (
             not second or (best["confidence_score"] - second["confidence_score"]) >= 0.05
@@ -491,6 +471,8 @@ def automap_show(show_id: int, season_number: int | None = None, force: bool = F
         status = "partial"
     elif ambiguous and not mapped_seasons:
         status = "ambiguous"
+    elif skipped_unaired and not mapped_seasons:
+        status = "already_mapped" if any(list_show_mappings(show_id, season["season_number"]) for season in target_seasons) else "not_found"
 
     refreshed_show = get_show_detail(show_id) if mapped_seasons else show
     if status == "success":
@@ -521,13 +503,13 @@ def automap_show(show_id: int, season_number: int | None = None, force: bool = F
             show.get("title", f"show:{show_id}"),
             ["No high-confidence AnimeWorld match found"],
         )
-
     return {
         "status": status,
         "show_id": show_id,
         "mapped_seasons": sorted(mapped_seasons),
         "ambiguous": ambiguous,
         "candidates": scored_candidates[:10],
+        "skipped_unaired": sorted(skipped_unaired),
     }
 
 

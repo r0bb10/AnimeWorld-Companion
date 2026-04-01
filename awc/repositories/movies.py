@@ -20,6 +20,7 @@ def list_movie_summaries(limit: int = 25) -> list[dict]:
                 m.title,
                 m.year,
                 m.status,
+                m.ignored,
                 CASE WHEN amm.id IS NULL THEN 0 ELSE 1 END AS mapped
             FROM movies m
             LEFT JOIN aw_movie_mappings amm ON amm.movie_id = m.id
@@ -43,6 +44,7 @@ def get_movie_detail(movie_id: int) -> dict | None:
                 title,
                 sort_title,
                 monitored,
+                ignored,
                 status,
                 year,
                 original_language,
@@ -215,3 +217,16 @@ def find_movie_by_external_ids(tmdb_id: int | None = None, imdb_id: str = "") ->
                 return dict(row)
 
     return None
+
+
+def set_movie_ignored(movie_id: int, ignored: bool) -> bool:
+    with get_db(write=True) as conn:
+        cursor = conn.execute(
+            """
+            UPDATE movies
+            SET ignored = ?, updated_at = CURRENT_TIMESTAMP
+            WHERE id = ?
+            """,
+            (1 if ignored else 0, movie_id),
+        )
+    return bool(cursor.rowcount)

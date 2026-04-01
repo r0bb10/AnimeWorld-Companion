@@ -365,7 +365,8 @@ a{color:#58a6ff;text-decoration:none}a:hover{text-decoration:underline}
 {% else %}
 {% set movie = item %}
 {% set mapping = movie.mapping %}
-<div class="card" data-title="{{ movie.title|lower }}" data-status="{{ 'mapped' if mapping else 'unmapped' }}" data-type="movie">
+{% set ignored = movie.ignored %}
+<div class="card" data-title="{{ movie.title|lower }}" data-status="{{ 'mapped' if mapping else ('ignored' if ignored else 'unmapped') }}" data-type="movie">
   <div class="card-header" onclick="toggle(this)">
     <div>
       <span class="card-title">{{ movie.title }}</span>
@@ -376,7 +377,9 @@ a{color:#58a6ff;text-decoration:none}a:hover{text-decoration:underline}
     <div class="card-meta">
       <span class="badge badge-radarr">Radarr</span>
       {% if movie.year %}<span>{{ movie.year }}</span>{% endif %}
-      {% if mapping %}
+      {% if ignored %}
+      <span class="badge badge-ignored card-status-badge">ignored</span>
+      {% elif mapping %}
       <span class="badge badge-{{ mapping.mapping_type }} card-status-badge">{{ mapping.mapping_type }}{% if mapping.mapping_type == 'auto' and mapping.confidence_score %} {{ (mapping.confidence_score * 100) | int }}%{% endif %}</span>
       {% else %}
       <span class="badge badge-unmapped card-status-badge">unmapped</span>
@@ -385,10 +388,12 @@ a{color:#58a6ff;text-decoration:none}a:hover{text-decoration:underline}
     </div>
   </div>
   <div class="card-body">
-    <div class="season-row" style="flex-wrap:wrap;gap:10px;padding:8px 0">
+    <div class="season-row{% if ignored %} season-unaired{% endif %}" style="flex-wrap:wrap;gap:10px;padding:8px 0" data-movieid="{{ movie.id }}" data-ignored="{{ 'true' if ignored else 'false' }}">
       <div style="width:50px;font-weight:600;color:#f0f6fc">Film</div>
       <div style="width:70px">
-        {% if mapping %}
+        {% if ignored %}
+        <span class="badge badge-ignored">ignored</span>
+        {% elif mapping %}
         <span class="badge badge-{{ mapping.mapping_type }}">{{ mapping.mapping_type }}{% if mapping.mapping_type == 'auto' and mapping.confidence_score %} {{ (mapping.confidence_score * 100) | int }}%{% endif %}</span>
         {% else %}
         <span style="color:#8b949e">--</span>
@@ -397,6 +402,8 @@ a{color:#58a6ff;text-decoration:none}a:hover{text-decoration:underline}
       <div style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">
         {% if mapping %}
         <a href="{{ slug_to_url(mapping.aw_link) }}" target="_blank">{{ slug_to_url(mapping.aw_link) }}</a>
+        {% elif ignored %}
+        
         {% else %}
         <form class="map-form" onsubmit="mapMovie(event,{{ movie.id }})">
           <input type="text" name="aw_link" placeholder="Paste AW movie link...">
@@ -407,6 +414,10 @@ a{color:#58a6ff;text-decoration:none}a:hover{text-decoration:underline}
       <div style="display:flex;gap:4px;flex-shrink:0">
         {% if mapping %}
         <button class="btn btn-danger" onclick="unmapMovie({{ movie.id }},this)">Remove</button>
+        {% elif not ignored %}
+        <button class="btn" style="color:#8b949e;border-color:#30363d" onclick="ignoreMovie({{ movie.id }},this)">Ignore</button>
+        {% else %}
+        <button class="btn" style="color:#8b949e;border-color:#30363d" onclick="unignoreMovie({{ movie.id }},this)">Unignore</button>
         {% endif %}
       </div>
     </div>
@@ -678,6 +689,24 @@ async function unmapMovie(movieId,btn){
     if(!r.ok)throw new Error('unmap failed');
     setTimeout(()=>location.reload(),300);
   }catch(e){_btnErr(btn,'Remove');}
+}
+
+async function ignoreMovie(movieId,btn){
+  btn.disabled=true;
+  try{
+    const r=await fetch('/ignore-movie?movie_id='+movieId,{method:'POST',headers:_kh()});
+    if(!r.ok)throw new Error('ignore failed');
+    setTimeout(()=>location.reload(),300);
+  }catch(e){_btnErr(btn,'Ignore');}
+}
+
+async function unignoreMovie(movieId,btn){
+  btn.disabled=true;
+  try{
+    const r=await fetch('/unignore-movie?movie_id='+movieId,{method:'POST',headers:_kh()});
+    if(!r.ok)throw new Error('unignore failed');
+    setTimeout(()=>location.reload(),300);
+  }catch(e){_btnErr(btn,'Unignore');}
 }
 
 async function discoverMovie(movieId,btn){

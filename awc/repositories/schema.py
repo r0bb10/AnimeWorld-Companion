@@ -145,6 +145,7 @@ CREATE TABLE IF NOT EXISTS movies (
     title             TEXT NOT NULL,
     sort_title        TEXT,
     monitored         INTEGER DEFAULT 1,
+    ignored           BOOLEAN DEFAULT 0,
     status            TEXT,
     year              INTEGER,
     original_language TEXT,
@@ -227,3 +228,9 @@ def init_db() -> None:
         }
         if "segment_markers" not in season_columns:
             conn.execute("ALTER TABLE show_seasons ADD COLUMN segment_markers TEXT DEFAULT '[]'")
+        movie_columns = {
+            row["name"]
+            for row in conn.execute("PRAGMA table_info(movies)").fetchall()
+        }
+        if "ignored" not in movie_columns:
+            conn.execute("ALTER TABLE movies ADD COLUMN ignored BOOLEAN DEFAULT 0")

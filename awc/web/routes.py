@@ -231,28 +231,23 @@ def api_delete_movie(movie_id: int, _: str = Depends(require_api_key)) -> dict:
 
 
 @api_router.post("/automap", tags=["Automap"])
-def api_automap_all(force: bool = False, _: str = Depends(require_api_key)) -> dict:
-    return start_automap_all(force=force)
-
-
-@api_router.post("/automap/movie/{movie_id}", tags=["Automap"])
-def api_automap_movie(movie_id: int, force: bool = False, _: str = Depends(require_api_key)) -> dict:
-    return automap_movie(movie_id, force=force)
-
-
-@api_router.post("/automap/{show_id}", tags=["Automap"])
-def api_automap_show(show_id: int, force: bool = False, _: str = Depends(require_api_key)) -> dict:
-    return automap_show(show_id, force=force)
-
-
-@api_router.post("/automap/{show_id}/{season_number}", tags=["Automap"])
-def api_automap_show_season(
-    show_id: int,
-    season_number: int,
+def api_automap(
+    kind: str | None = Query(default=None),
+    item_id: int | None = Query(default=None),
+    season_number: int | None = Query(default=None),
     force: bool = False,
     _: str = Depends(require_api_key),
 ) -> dict:
-    return automap_show(show_id, season_number=season_number, force=force)
+    normalized_kind = (kind or "").strip().lower()
+    if not normalized_kind and item_id is None and season_number is None:
+        return start_automap_all(force=force)
+    if normalized_kind not in {"show", "movie"} or item_id is None:
+        raise HTTPException(status_code=422, detail="Use /automap with kind=show|movie and item_id=...")
+    if normalized_kind == "movie":
+        if season_number is not None:
+            raise HTTPException(status_code=422, detail="Movies do not support season_number")
+        return automap_movie(item_id, force=force)
+    return automap_show(item_id, season_number=season_number, force=force)
 
 
 @api_router.post("/map/movie/{movie_id}", tags=["Mutation"])

@@ -473,7 +473,8 @@ function _discoverEndpoint(kind,id){
 }
 
 function _automapEndpoint(kind,id){
-  return kind==='show' ? '/automap/'+id+_kp() : '/automap/movie/'+id+_kp();
+  const prefix = AWC_KEY ? '/automap?apikey='+encodeURIComponent(AWC_KEY) : '/automap?';
+  return prefix+'&kind='+encodeURIComponent(kind)+'&item_id='+encodeURIComponent(id);
 }
 
 function _mapEndpoint(kind,id,seasonNum,link){

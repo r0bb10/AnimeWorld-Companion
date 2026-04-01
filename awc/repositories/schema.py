@@ -121,6 +121,21 @@ CREATE TABLE IF NOT EXISTS show_rss_cache (
 CREATE INDEX IF NOT EXISTS idx_rss_cache_show_season ON show_rss_cache(show_id, season_number);
 CREATE INDEX IF NOT EXISTS idx_rss_cache_created     ON show_rss_cache(created_at);
 
+CREATE TABLE IF NOT EXISTS movie_rss_cache (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    movie_id        INTEGER NOT NULL REFERENCES movies(id) ON DELETE CASCADE,
+    title           TEXT NOT NULL,
+    guid            TEXT NOT NULL,
+    size            TEXT DEFAULT '0',
+    pub_date        TEXT,
+    aw_episode_link TEXT,
+    created_at      TEXT DEFAULT (datetime('now')),
+    UNIQUE(movie_id, guid)
+);
+
+CREATE INDEX IF NOT EXISTS idx_movie_rss_cache_movie   ON movie_rss_cache(movie_id);
+CREATE INDEX IF NOT EXISTS idx_movie_rss_cache_created ON movie_rss_cache(created_at);
+
 CREATE TABLE IF NOT EXISTS movies (
     id                INTEGER PRIMARY KEY AUTOINCREMENT,
     radarr_id         INTEGER UNIQUE NOT NULL,

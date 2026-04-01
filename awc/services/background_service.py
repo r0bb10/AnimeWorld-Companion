@@ -18,10 +18,10 @@ from ..integrations.animeworld_client import AnimeWorldClient
 from ..integrations.radarr_client import RadarrClient
 from ..integrations.sonarr_client import SonarrClient
 from ..repositories.db import get_db
-from ..repositories.rss_cache import cleanup_rss_items, has_rss_item, save_rss_item
+from ..repositories.rss_cache import cleanup_rss_items, has_movie_rss_item, has_rss_item, save_movie_rss_item, save_rss_item
 from .download_service import completed_downloads, mark_imported, restore_on_startup
 from .link_sanitizer_service import sanitize_links_once, sanitizer_status
-from .search_service import build_show_search_items
+from .search_service import build_movie_search_items, build_show_search_items
 from .sync_runner_service import sync_all
 
 logger = get_logger(__name__)
@@ -106,6 +106,26 @@ def _resolve_rss_mapping(anime_slug: str) -> dict | None:
     return dict(row) if row else None
 
 
+def _resolve_movie_rss_mapping(anime_slug: str) -> dict | None:
+    with get_db() as conn:
+        row = conn.execute(
+            """
+            SELECT
+                m.movie_id,
+                m.aw_link,
+                mv.title,
+                mv.tmdb_id,
+                mv.imdb_id
+            FROM aw_movie_mappings m
+            JOIN movies mv ON mv.id = m.movie_id
+            WHERE m.aw_link = ?
+            LIMIT 1
+            """,
+            (anime_slug,),
+        ).fetchone()
+    return dict(row) if row else None
+
+
 def _resolve_rss_episode(show_id: int, anime_slug: str, episode_number: int) -> tuple[int, int] | None:
     with get_db() as conn:
         linked = conn.execute(
@@ -180,36 +200,59 @@ def update_rss_cache() -> dict:
             continue
         anime_slug = client.url_to_slug(fields["anime_link"])
         mapping = _resolve_rss_mapping(anime_slug)
-        if not mapping:
-            continue
-        resolved = _resolve_rss_episode(mapping["show_id"], anime_slug, fields["episode_number"])
-        if not resolved:
-            continue
-        season_number, episode_number = resolved
-        if has_rss_item(mapping["show_id"], season_number, episode_number):
+        if mapping:
+            resolved = _resolve_rss_episode(mapping["show_id"], anime_slug, fields["episode_number"])
+            if not resolved:
+                continue
+            season_number, episode_number = resolved
+            if has_rss_item(mapping["show_id"], season_number, episode_number):
+                continue
+
+            items = build_show_search_items(
+                mapping["title"],
+                season_number,
+                episode_number,
+                tvdb_id=mapping.get("tvdb_id"),
+            )
+            if not items:
+                continue
+
+            item_payload = items[0]
+            if save_rss_item(
+                show_id=mapping["show_id"],
+                season_number=season_number,
+                episode_number=episode_number,
+                title=item_payload["title"],
+                guid=item_payload["guid"],
+                size=int(item_payload.get("size", 0) or 0),
+                pub_date=fields["pub_date"],
+                aw_episode_link=item_payload.get("aw_link", anime_slug),
+            ):
+                cached += 1
             continue
 
-        items = build_show_search_items(
-            mapping["title"],
-            season_number,
-            episode_number,
-            tvdb_id=mapping.get("tvdb_id"),
+        movie_mapping = _resolve_movie_rss_mapping(anime_slug)
+        if not movie_mapping:
+            continue
+
+        items = build_movie_search_items(
+            movie_mapping["title"],
+            tmdb_id=movie_mapping.get("tmdb_id"),
+            imdb_id=movie_mapping.get("imdb_id") or "",
         )
-        if not items:
-            continue
-
-        item_payload = items[0]
-        if save_rss_item(
-            show_id=mapping["show_id"],
-            season_number=season_number,
-            episode_number=episode_number,
-            title=item_payload["title"],
-            guid=item_payload["guid"],
-            size=int(item_payload.get("size", 0) or 0),
-            pub_date=fields["pub_date"],
-            aw_episode_link=item_payload.get("aw_link", anime_slug),
-        ):
-            cached += 1
+        for item_payload in items:
+            guid = str(item_payload.get("guid", "") or "")
+            if not guid or has_movie_rss_item(movie_mapping["movie_id"], guid):
+                continue
+            if save_movie_rss_item(
+                movie_id=movie_mapping["movie_id"],
+                title=item_payload["title"],
+                guid=guid,
+                size=int(item_payload.get("size", 0) or 0),
+                pub_date=fields["pub_date"],
+                aw_episode_link=item_payload.get("aw_link", anime_slug),
+            ):
+                cached += 1
 
     cleanup_rss_items(settings.rss_cache_retention_days)
     _set_state(

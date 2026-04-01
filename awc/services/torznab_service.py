@@ -183,11 +183,12 @@ def build_search_xml(
 
     if not (query or tvdb_id or tmdb_id or imdb_id):
         for item in list_rss_items(limit=100):
+            category_id = int(item.get("category_id") or 5070)
             _add_item(
                 channel,
                 guid=item["guid"],
                 title=item["title"],
-                category_id=5070,
+                category_id=category_id,
                 download_url="",
                 season=item.get("season_number"),
                 episode=item.get("episode_number"),

@@ -5,6 +5,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from ..integrations.animeworld_client import AnimeWorldClient
 from ..repositories.movies import get_movie_detail
 from ..repositories.shows import get_show_detail
+from .query_helper import build_query_variants
 
 
 def _collect_queries(title: str, alternate_titles: list[dict], limit: int = 10) -> list[str]:
@@ -12,16 +13,14 @@ def _collect_queries(title: str, alternate_titles: list[dict], limit: int = 10) 
     seen: set[str] = set()
 
     for value in [title, *[(item.get("title") or "") for item in alternate_titles]]:
-        query = str(value or "").strip()
-        if not query:
-            continue
-        key = query.casefold()
-        if key in seen:
-            continue
-        seen.add(key)
-        queries.append(query)
-        if len(queries) >= limit:
-            break
+        for query in build_query_variants(str(value or "")):
+            key = query.casefold()
+            if key in seen:
+                continue
+            seen.add(key)
+            queries.append(query)
+            if len(queries) >= limit:
+                return queries
 
     return queries
 

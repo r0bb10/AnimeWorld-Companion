@@ -5,6 +5,7 @@ from __future__ import annotations
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from ..integrations.animeworld_client import AnimeWorldClient
+from .query_helper import build_query_variants
 from .automap_scoring import parse_italian_date
 
 
@@ -12,16 +13,14 @@ def _collect_titles(primary_title: str, alternate_titles: list[dict], limit: int
     titles: list[str] = []
     seen: set[str] = set()
     for value in [primary_title, *[(item.get("title") or "") for item in alternate_titles]]:
-        title = str(value or "").strip()
-        if not title:
-            continue
-        key = title.casefold()
-        if key in seen:
-            continue
-        seen.add(key)
-        titles.append(title)
-        if len(titles) >= limit:
-            break
+        for title in build_query_variants(str(value or "")):
+            key = title.casefold()
+            if key in seen:
+                continue
+            seen.add(key)
+            titles.append(title)
+            if len(titles) >= limit:
+                return titles
     return titles
 
 

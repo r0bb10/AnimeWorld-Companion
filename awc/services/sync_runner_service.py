@@ -11,6 +11,8 @@ from ..core.logging import get_logger
 from ..integrations.radarr_client import RadarrClient
 from ..integrations.sonarr_client import SonarrClient
 from ..repositories.library_write import (
+    delete_movie_by_radarr_id,
+    delete_show_by_sonarr_id,
     prune_missing_movies,
     prune_missing_shows,
     replace_movie_alternate_titles,
@@ -25,6 +27,28 @@ from ..repositories.library_write import (
 _sync_lock = threading.Lock()
 logger = get_logger("sync")
 _sync_status = {"running": False, "last_started_at": None, "last_finished_at": None}
+
+
+def _resolve_tag_ids(tags: dict[int, str], names: tuple[str, ...]) -> set[int]:
+    wanted = {name.strip().lower() for name in names if name.strip()}
+    if not wanted:
+        return set()
+    return {tag_id for tag_id, label in tags.items() if str(label).strip().lower() in wanted}
+
+
+def _item_tag_ids(payload: dict) -> set[int]:
+    return {int(tag_id) for tag_id in (payload.get("tags") or []) if isinstance(tag_id, int)}
+
+
+def _is_ignored_by_tag(payload: dict, ignore_tag_ids: set[int]) -> bool:
+    return bool(ignore_tag_ids and _item_tag_ids(payload) & ignore_tag_ids)
+
+
+def _ignored_tag_names(payload: dict, tags: dict[int, str], ignore_tag_ids: set[int]) -> list[str]:
+    if not ignore_tag_ids:
+        return []
+    matched = sorted(_item_tag_ids(payload) & ignore_tag_ids)
+    return [tags.get(tag_id, str(tag_id)) for tag_id in matched]
 
 
 def _language_name(payload) -> str | None:
@@ -209,6 +233,18 @@ def sync_single_show(series_id: int) -> int | None:
     detail = client.fetch_series_detail(series_id)
     if not detail:
         return None
+    tags = client.fetch_tags()
+    ignore_tag_ids = _resolve_tag_ids(tags, settings.ignore_tags)
+    if _is_ignored_by_tag(detail, ignore_tag_ids):
+        delete_show_by_sonarr_id(int(detail.get("id") or series_id))
+        ignored = ", ".join(_ignored_tag_names(detail, tags, ignore_tag_ids))
+        log_block(
+            logger,
+            logging.INFO,
+            detail.get("title") or f"Sonarr {series_id}",
+            [f"skipped by ignore tag: {ignored or 'configured'}"],
+        )
+        return None
     episodes = client.fetch_episodes(series_id)
     show_id = upsert_show(_build_show_payload(detail))
     seasons = _build_show_seasons(detail, episodes)
@@ -232,16 +268,30 @@ def sync_sonarr_library() -> int:
     tags = client.fetch_tags()
     anime_tag = settings.sonarr_anime_tag.lower()
     anime_tag_id = next((tag_id for tag_id, label in tags.items() if label.lower() == anime_tag), None)
+    ignore_tag_ids = _resolve_tag_ids(tags, settings.ignore_tags)
 
     processed = 0
+    series_list = client.fetch_series()
+    if not series_list and not client.health().ok:
+        logger.warning("Sonarr sync skipped: manager unavailable")
+        return 0
     seen: set[int] = set()
-    for series in client.fetch_series():
+    for series in series_list:
         if anime_tag_id is not None and anime_tag_id not in (series.get("tags") or []):
+            continue
+        if _is_ignored_by_tag(series, ignore_tag_ids):
+            ignored = ", ".join(_ignored_tag_names(series, tags, ignore_tag_ids))
+            log_block(
+                logger,
+                logging.INFO,
+                series.get("title") or "Sonarr item",
+                [f"skipped by ignore tag: {ignored or 'configured'}"],
+            )
             continue
         if sync_single_show(series["id"]):
             processed += 1
             seen.add(series["id"])
-    if seen:
+    if seen or series_list:
         prune_missing_shows(seen)
     set_sync_meta("last_sonarr_sync", datetime.now(UTC).isoformat())
     logger.info("Sonarr sync complete: %s shows", processed)
@@ -294,6 +344,18 @@ def sync_single_movie(movie_payload_or_id) -> int | None:
                 break
     if not movie:
         return None
+    tags = client.fetch_tags()
+    ignore_tag_ids = _resolve_tag_ids(tags, settings.ignore_tags)
+    if _is_ignored_by_tag(movie, ignore_tag_ids):
+        delete_movie_by_radarr_id(int(movie.get("id") or movie_payload_or_id))
+        ignored = ", ".join(_ignored_tag_names(movie, tags, ignore_tag_ids))
+        log_block(
+            logger,
+            logging.INFO,
+            movie.get("title") or f"Radarr {movie_payload_or_id}",
+            [f"skipped by ignore tag: {ignored or 'configured'}"],
+        )
+        return None
     movie_id = upsert_movie(_build_movie_payload(movie))
     replace_movie_alternate_titles(movie_id, _build_movie_alt_titles(movie))
     set_sync_meta("last_radarr_sync", datetime.now(UTC).isoformat())
@@ -308,16 +370,30 @@ def sync_radarr_library() -> int:
     tags = client.fetch_tags()
     anime_tag = settings.anime_tag.lower()
     anime_tag_id = next((tag_id for tag_id, label in tags.items() if label.lower() == anime_tag), None)
+    ignore_tag_ids = _resolve_tag_ids(tags, settings.ignore_tags)
 
     processed = 0
+    movies = client.fetch_movies()
+    if not movies and not client.health().ok:
+        logger.warning("Radarr sync skipped: manager unavailable")
+        return 0
     seen: set[int] = set()
-    for movie in client.fetch_movies():
+    for movie in movies:
         if anime_tag_id is not None and anime_tag_id not in (movie.get("tags") or []):
+            continue
+        if _is_ignored_by_tag(movie, ignore_tag_ids):
+            ignored = ", ".join(_ignored_tag_names(movie, tags, ignore_tag_ids))
+            log_block(
+                logger,
+                logging.INFO,
+                movie.get("title") or "Radarr item",
+                [f"skipped by ignore tag: {ignored or 'configured'}"],
+            )
             continue
         if sync_single_movie(movie):
             processed += 1
             seen.add(movie["id"])
-    if seen:
+    if seen or movies:
         prune_missing_movies(seen)
     set_sync_meta("last_radarr_sync", datetime.now(UTC).isoformat())
     logger.info("Radarr sync complete: %s movies", processed)

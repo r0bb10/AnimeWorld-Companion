@@ -158,6 +158,12 @@ def prune_missing_shows(sonarr_ids: set[int]) -> int:
     return int(cursor.rowcount or 0)
 
 
+def delete_show_by_sonarr_id(sonarr_id: int) -> int:
+    with get_db(write=True) as conn:
+        cursor = conn.execute("DELETE FROM shows WHERE sonarr_id = ?", (sonarr_id,))
+    return int(cursor.rowcount or 0)
+
+
 def upsert_movie(payload: dict) -> int:
     with get_db(write=True) as conn:
         conn.execute(
@@ -235,4 +241,10 @@ def prune_missing_movies(radarr_ids: set[int]) -> int:
     placeholders = ",".join("?" for _ in radarr_ids)
     with get_db(write=True) as conn:
         cursor = conn.execute(f"DELETE FROM movies WHERE radarr_id NOT IN ({placeholders})", tuple(radarr_ids))
+    return int(cursor.rowcount or 0)
+
+
+def delete_movie_by_radarr_id(radarr_id: int) -> int:
+    with get_db(write=True) as conn:
+        cursor = conn.execute("DELETE FROM movies WHERE radarr_id = ?", (radarr_id,))
     return int(cursor.rowcount or 0)

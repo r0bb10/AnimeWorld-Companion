@@ -22,6 +22,13 @@ def _int(name: str, default: int) -> int:
         return default
 
 
+def _csv(name: str, default: str = "") -> tuple[str, ...]:
+    raw = _get(name, default)
+    if not raw:
+        return ()
+    return tuple(part.strip() for part in raw.split(",") if part.strip())
+
+
 def _resolve_database_path() -> str:
     configured = _get("AWC_DATABASE_PATH", "/config/database.db")
     repo_root = Path(__file__).resolve().parents[2]
@@ -89,6 +96,7 @@ class Settings:
     download_history_days: int
     import_poll_interval: int
     unmonitor_imported: bool
+    ignore_tags: tuple[str, ...]
     rss_enabled: bool
     rss_poll_interval: int
     rss_cache_retention_days: int
@@ -119,6 +127,7 @@ def load_settings() -> Settings:
         download_history_days=_int("DOWNLOAD_HISTORY_DAYS", 7),
         import_poll_interval=_int("IMPORT_POLL_INTERVAL", 60),
         unmonitor_imported=_get("UNMONITOR_IMPORTED", "false").lower() == "true",
+        ignore_tags=tuple(tag.lower() for tag in _csv("IGNORE_TAG")),
         rss_enabled=_get("RSS_ENABLED", "false").lower() == "true",
         rss_poll_interval=_int("RSS_POLL_INTERVAL", 300),
         rss_cache_retention_days=_int("RSS_CACHE_RETENTION_DAYS", 30),

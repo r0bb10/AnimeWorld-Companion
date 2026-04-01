@@ -46,6 +46,7 @@ SONARR_DUB_TAG=ita
 # --- Shared ---
 IMPORT_POLL_INTERVAL=60
 UNMONITOR_IMPORTED=true
+IGNORE_TAG=ghibli
 
 # --- RSS ---
 RSS_ENABLED=true

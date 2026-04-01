@@ -158,6 +158,8 @@ def _propagate_single_link(
         sn = season["season_number"]
         if sn in handled:
             continue
+        if not bool(season.get("has_aired", True)):
+            break
         season_count = int(season.get("episode_count") or 0)
         if season_count <= 0:
             break
@@ -246,10 +248,13 @@ def automap_show(show_id: int, season_number: int | None = None, force: bool = F
     ambiguous: list[dict] = []
     handled: set[int] = set()
 
-    target_seasons = [
-        season for season in show.get("seasons", [])
-        if season.get("season_number", 0) > 0 and (season_number is None or season["season_number"] == season_number)
-    ]
+    target_seasons = []
+    for season in show.get("seasons", []):
+        if season.get("season_number", 0) <= 0:
+            continue
+        if season_number is not None and season["season_number"] != season_number:
+            continue
+        target_seasons.append({**season, "has_aired": bool(season.get("air_date_start")) and str(season.get("air_date_start"))[:10] <= datetime.now(UTC).date().isoformat()})
     if not target_seasons:
         return {"status": "not_found", "show_id": show_id, "mapped_seasons": [], "ambiguous": [], "candidates": []}
 
@@ -276,6 +281,7 @@ def automap_show(show_id: int, season_number: int | None = None, force: bool = F
         target_count = int(season.get("episode_count") or 0)
         best = season_scores[0] if season_scores else None
         second = season_scores[1] if len(season_scores) > 1 else None
+        season_has_aired = bool(season.get("has_aired", True))
 
         split_pair = _detect_split_cour_pair(show, season, season_scores, want_dubbed)
         if split_pair:
@@ -304,6 +310,36 @@ def automap_show(show_id: int, season_number: int | None = None, force: bool = F
             for candidate in parts:
                 reserved_links.add(candidate["aw_link"])
             continue
+
+        if not season_has_aired:
+            preaired = [
+                candidate for candidate in season_scores
+                if candidate.get("aw_is_placeholder") and candidate["confidence_score"] >= settings.automap_confidence_threshold
+            ]
+            if preaired:
+                best_preaired = preaired[0]
+                replace_show_mappings_auto(
+                    show_id=show_id,
+                    season_number=sn,
+                    items=[
+                        {
+                            "part": 1,
+                            "aw_link": best_preaired["aw_link"],
+                            "aw_title": best_preaired["aw_title"],
+                            "aw_episode_count": best_preaired["aw_episode_count"],
+                            "aw_total_episodes": best_preaired["aw_total_episodes"],
+                            "aw_status": best_preaired.get("aw_status", ""),
+                            "aw_category": best_preaired.get("aw_category", ""),
+                            "confidence_score": best_preaired["confidence_score"],
+                            "confidence_factors": json.dumps({**best_preaired["confidence_factors"], "preaired": True}),
+                            "linked_with_season": None,
+                        }
+                    ],
+                )
+                mapped_seasons.append(sn)
+                handled.add(sn)
+                reserved_links.add(best_preaired["aw_link"])
+                continue
 
         if best and best["confidence_score"] >= settings.automap_confidence_threshold and (
             not second or (best["confidence_score"] - second["confidence_score"]) >= 0.05

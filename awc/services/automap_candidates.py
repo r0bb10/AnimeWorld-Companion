@@ -38,13 +38,14 @@ def _dedupe_by_slug(client: AnimeWorldClient, results: list[dict]) -> list[dict]
 
 def _enrich_result(client: AnimeWorldClient, item: dict) -> dict:
     target = item.get("url") or item.get("slug") or ""
-    info, episodes = client.get_info_and_episodes(target)
+    info, episodes, page_url, is_placeholder = client.get_info_and_episodes_meta(target)
     non_special, total, _ = client.count_non_special_episodes(episodes)
     release_value = str(info.get("Data di Uscita") or info.get("release_date") or "")
     release_dt = parse_italian_date(release_value) if release_value else None
     return {
         **item,
         "aw_link": client.url_to_slug(target),
+        "aw_page_url": page_url,
         "aw_title": item.get("title", ""),
         "aw_jtitle": item.get("japanese_title", ""),
         "aw_status": str(info.get("Stato") or info.get("status") or ""),
@@ -54,6 +55,7 @@ def _enrich_result(client: AnimeWorldClient, item: dict) -> dict:
         "aw_release_datetime": release_dt,
         "aw_episode_count": non_special,
         "aw_total_episodes": total,
+        "aw_is_placeholder": is_placeholder,
     }
 
 

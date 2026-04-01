@@ -69,12 +69,18 @@ def episode_count_score(
     aw_episode_count: int | None,
     manager_status: str = "",
     aw_status: str = "",
+    *,
+    manager_has_aired: bool = True,
+    aw_is_placeholder: bool = False,
 ) -> float:
     if not manager_episode_count:
         return 0.0
 
     manager_ongoing = manager_status.lower() == "continuing"
     aw_ongoing = aw_status.lower() == "in corso"
+
+    if not manager_has_aired and aw_is_placeholder:
+        return EPISODE_WEIGHT
 
     if manager_ongoing and aw_ongoing:
         return 0.10
@@ -198,6 +204,8 @@ def calculate_show_confidence(show: dict, season: dict, candidate: dict, want_du
         candidate.get("aw_episode_count"),
         show.get("status", ""),
         candidate.get("aw_status", ""),
+        manager_has_aired=bool(season.get("has_aired", True)),
+        aw_is_placeholder=bool(candidate.get("aw_is_placeholder")),
     )
     air_date = air_date_score(manager_first_aired, candidate.get("aw_release_datetime"))
     status = status_match_score(show.get("status", ""), candidate.get("aw_status", ""))
@@ -212,6 +220,7 @@ def calculate_show_confidence(show: dict, season: dict, candidate: dict, want_du
         "status_match": round(status, 3),
         "language_match": round(language, 3),
         "category": round(category, 3),
+        "preaired_placeholder": bool(not season.get("has_aired", True) and candidate.get("aw_is_placeholder")),
         "total": round(total, 3),
         "passed": total >= 0.0,
     }

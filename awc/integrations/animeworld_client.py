@@ -16,7 +16,7 @@ _UA = (
     "Chrome/122.0.0.0 Safari/537.36"
 )
 _PAGE_CACHE_TTL = 60
-_PAGE_CACHE: dict[str, tuple[BeautifulSoup, float]] = {}
+_PAGE_CACHE: dict[str, tuple[BeautifulSoup, str, float]] = {}
 _PAGE_CACHE_LOCK = threading.Lock()
 _SESSION_LOCK = threading.Lock()
 _SESSION: requests.Session | None = None
@@ -82,22 +82,27 @@ class AnimeWorldClient:
             session = _reset_shared_session(self.base_url)
             return session.post(f"{self.base_url}{path}", timeout=15, **kwargs)
 
-    def _get_page(self, url: str) -> BeautifulSoup | None:
+    def _get_page_details(self, url: str) -> tuple[BeautifulSoup | None, str]:
         now = time.time()
         with _PAGE_CACHE_LOCK:
             cached = _PAGE_CACHE.get(url)
-            if cached and now - cached[1] < _PAGE_CACHE_TTL:
-                return cached[0]
+            if cached and now - cached[2] < _PAGE_CACHE_TTL:
+                return cached[0], cached[1]
 
         try:
             response = self._session().get(url, timeout=15)
             response.raise_for_status()
         except requests.RequestException:
-            return None
+            return None, url
 
         soup = BeautifulSoup(response.text, "html.parser")
+        final_url = str(response.url or url)
         with _PAGE_CACHE_LOCK:
-            _PAGE_CACHE[url] = (soup, time.time())
+            _PAGE_CACHE[url] = (soup, final_url, time.time())
+        return soup, final_url
+
+    def _get_page(self, url: str) -> BeautifulSoup | None:
+        soup, _ = self._get_page_details(url)
         return soup
 
     def health(self) -> AnimeWorldHealth:
@@ -196,7 +201,7 @@ class AnimeWorldClient:
 
     def get_episodes(self, slug_or_url: str) -> list[dict]:
         target = slug_or_url if slug_or_url.startswith("http") else self.slug_to_url(slug_or_url)
-        soup = self._get_page(target)
+        soup, _ = self._get_page_details(target)
         if soup is None:
             return []
         episodes = []
@@ -214,10 +219,14 @@ class AnimeWorldClient:
         return episodes
 
     def get_info_and_episodes(self, slug_or_url: str) -> tuple[dict, list[dict]]:
+        info, episodes, _, _ = self.get_info_and_episodes_meta(slug_or_url)
+        return info, episodes
+
+    def get_info_and_episodes_meta(self, slug_or_url: str) -> tuple[dict, list[dict], str, bool]:
         target = slug_or_url if slug_or_url.startswith("http") else self.slug_to_url(slug_or_url)
-        soup = self._get_page(target)
+        soup, final_url = self._get_page_details(target)
         if soup is None:
-            return {}, []
+            return {}, [], target, False
 
         info: dict[str, object] = {}
         info_div = soup.find("div", class_="info")
@@ -231,7 +240,13 @@ class AnimeWorldClient:
                 else:
                     info[key] = dd.get_text(" ", strip=True)
 
-        return info, self.get_episodes(target)
+        episodes = self.get_episodes(target)
+        final_url_normalized = final_url.rstrip("/")
+        is_placeholder = final_url_normalized.endswith("/tba")
+        if not is_placeholder:
+            body_text = soup.get_text(" ", strip=True).lower()
+            is_placeholder = bool(not episodes and "tba" in final_url_normalized.lower()) or ("coming soon" in body_text and not episodes)
+        return info, episodes, final_url, is_placeholder
 
     def get_file_info(self, episode_id: str) -> list[dict]:
         if not episode_id:

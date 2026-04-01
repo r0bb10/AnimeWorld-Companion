@@ -1,6 +1,6 @@
 from datetime import UTC, datetime
 from email.utils import format_datetime
-from html import escape
+from urllib.parse import quote
 from xml.etree.ElementTree import Element, SubElement, register_namespace, tostring
 
 from ..core.config import settings
@@ -55,6 +55,32 @@ def build_caps_xml() -> bytes:
     return _xml_bytes(root)
 
 
+def _dummy_items_for_media(media: str, category: str = "") -> list[dict]:
+    category_ids = {part.strip() for part in category.split(",") if part.strip()}
+    effective_media = media
+    if media == "search" and "2000" in category_ids:
+        effective_media = "movie"
+
+    if effective_media == "movie":
+        return [
+            {
+                "guid": "aw://test/movie-result",
+                "title": "AnimeWorld-Companion.Test.Movie.Result.mp4",
+                "categories": ["2000"],
+                "size": 1,
+            }
+        ]
+
+    return [
+        {
+            "guid": "aw://test/anime-result",
+            "title": "AnimeWorld-Companion.Test.Result.mp4",
+            "categories": ["5070"],
+            "size": 1,
+        }
+    ]
+
+
 def _build_rss_root() -> tuple[Element, Element]:
     root = Element("rss")
     root.set("version", "2.0")
@@ -87,13 +113,17 @@ def _add_item(
 ) -> None:
     item = SubElement(channel, "item")
     SubElement(item, "title").text = title
-    link = download_url
+    link = download_url or _build_download_url(guid, title)
     SubElement(item, "guid").text = guid
     SubElement(item, "link").text = link
     SubElement(item, "comments").text = link
     SubElement(item, "pubDate").text = pub_date or format_datetime(datetime.now(UTC))
     SubElement(item, "category").text = "Anime" if category_id == 5070 else "Movies"
     SubElement(item, "size").text = str(size)
+    enclosure = SubElement(item, "enclosure")
+    enclosure.set("url", link)
+    enclosure.set("length", str(size))
+    enclosure.set("type", "application/x-bittorrent")
 
     _add_attr(item, "category", category_id)
     _add_attr(item, "downloadvolumefactor", 0)
@@ -106,6 +136,16 @@ def _add_item(
             _add_attr(item, "episode", episode)
     elif year is not None:
         _add_attr(item, "year", year)
+
+
+def _build_download_url(guid: str, title: str) -> str:
+    base = (settings.awc_url or f"http://localhost:{settings.awc_port}").rstrip("/")
+    params = [f"url={quote(guid, safe='')}"]
+    if title:
+        params.append(f"save_name={quote(title, safe='')}")
+    if settings.awc_api_key:
+        params.append(f"apikey={quote(settings.awc_api_key, safe='')}")
+    return f"{base}/download?{'&'.join(params)}"
 
 
 def build_search_xml(
@@ -134,6 +174,19 @@ def build_search_xml(
                 size=item.get("size", 0),
                 pub_date=item.get("pub_date"),
             )
+        if len(channel) == 3:
+            for item in _dummy_items_for_media(media, category):
+                category_id = 2000 if "2000" in item.get("categories", []) else 5070
+                _add_item(
+                    channel,
+                    guid=item["guid"],
+                    title=item["title"],
+                    category_id=category_id,
+                    download_url="",
+                    season=season,
+                    episode=episode,
+                    size=item.get("size", 1),
+                )
         return _xml_bytes(root)
 
     effective_media = media
@@ -146,6 +199,8 @@ def build_search_xml(
         if effective_media == "movie"
         else build_show_search_items(query, season, episode, tvdb_id=tvdb_id)
     )
+    if not items:
+        items = _dummy_items_for_media(effective_media, category)
     for item in items:
         category_id = 2000 if "2000" in item.get("categories", []) else 5070
         _add_item(

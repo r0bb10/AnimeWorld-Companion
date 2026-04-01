@@ -172,7 +172,7 @@ def language_match_score(candidate: dict, want_dubbed: bool) -> float:
 
 
 def category_score(manager_episode_count: int, aw_category: str = "") -> float:
-    if aw_category.lower() in {"film", "movie", "ova", "ona"} and manager_episode_count >= 4:
+    if aw_category.lower() in {"film", "movie", "ova"} and manager_episode_count >= 4:
         return -CATEGORY_PENALTY
     return 0.0
 
@@ -190,9 +190,23 @@ def _alternate_titles(payload: dict) -> list[str]:
     return titles
 
 
+def _season_year(show: dict, season: dict) -> int | None:
+    season_number = int(season.get("season_number") or 0)
+    source = season.get("air_date_start") or (show.get("first_aired") if season_number == 1 else "")
+    if not source:
+        return show.get("year") if season_number == 1 else None
+    try:
+        return datetime.fromisoformat(str(source).replace("Z", "+00:00")).year
+    except (TypeError, ValueError):
+        try:
+            return int(str(source)[:4])
+        except (TypeError, ValueError):
+            return show.get("year") if season_number == 1 else None
+
+
 def calculate_show_confidence(show: dict, season: dict, candidate: dict, want_dubbed: bool) -> tuple[float, dict]:
     manager_alts = _alternate_titles(show)
-    manager_year = show.get("year")
+    manager_year = _season_year(show, season)
 
     season_number = int(season.get("season_number") or 0)
     manager_first_aired = season.get("air_date_start") or (show.get("first_aired") if season_number == 1 else "")

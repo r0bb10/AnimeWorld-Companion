@@ -22,7 +22,6 @@ from ..services.automap_service import (
     automap_show,
     automap_status,
     start_automap_all,
-    start_automap_all_movies,
 )
 from ..services.dashboard_service import build_dashboard_html, build_dashboard_snapshot, build_heartbeat_snapshot
 from ..services.download_service import (
@@ -105,7 +104,7 @@ def api_map_show_season(
         logger,
         logging.INFO,
         str((show or {}).get("title") or f"show:{show_id}"),
-        [f"↳ S{season_number:02d} manual → {mapped_link}"],
+        [f"S{season_number:02d} manual → {mapped_link}"],
     )
     return result
 
@@ -122,7 +121,7 @@ def api_unmap_show_season(
         logger,
         logging.INFO,
         str((show or {}).get("title") or f"show:{show_id}"),
-        [f"↳ S{season_number:02d} removed"],
+        [f"S{season_number:02d} removed"],
     )
     return result
 
@@ -133,9 +132,16 @@ def api_ignore_show_season(
     season_number: int,
     _: str = Depends(require_api_key),
 ) -> dict:
+    show = build_show_snapshot(show_id)
     result = ignore_show_season(show_id, season_number, True)
     if not result["updated"]:
         raise HTTPException(status_code=404, detail="Season not found")
+    log_block(
+        logger,
+        logging.INFO,
+        str((show or {}).get("title") or f"show:{show_id}"),
+        [f"S{season_number:02d} ignored"],
+    )
     return result
 
 
@@ -145,9 +151,16 @@ def api_unignore_show_season(
     season_number: int,
     _: str = Depends(require_api_key),
 ) -> dict:
+    show = build_show_snapshot(show_id)
     result = ignore_show_season(show_id, season_number, False)
     if not result["updated"]:
         raise HTTPException(status_code=404, detail="Season not found")
+    log_block(
+        logger,
+        logging.INFO,
+        str((show or {}).get("title") or f"show:{show_id}"),
+        [f"S{season_number:02d} unignored"],
+    )
     return result
 
 
@@ -222,11 +235,6 @@ def api_automap_all(force: bool = False, _: str = Depends(require_api_key)) -> d
     return start_automap_all(force=force)
 
 
-@api_router.post("/automap/movies", tags=["Automap"])
-def api_automap_all_movies(force: bool = False, _: str = Depends(require_api_key)) -> dict:
-    return start_automap_all_movies(force=force)
-
-
 @api_router.post("/automap/movie/{movie_id}", tags=["Automap"])
 def api_automap_movie(movie_id: int, force: bool = False, _: str = Depends(require_api_key)) -> dict:
     return automap_movie(movie_id, force=force)
@@ -271,7 +279,7 @@ def api_map_movie(
         logger,
         logging.INFO,
         str((movie or {}).get("title") or f"movie:{movie_id}"),
-        [f"↳ manual → {mapped_link}"],
+        [f"manual → {mapped_link}"],
     )
     return result
 
@@ -284,7 +292,7 @@ def api_unmap_movie(movie_id: int, _: str = Depends(require_api_key)) -> dict:
         logger,
         logging.INFO,
         str((movie or {}).get("title") or f"movie:{movie_id}"),
-        ["↳ removed"],
+        ["removed"],
     )
     return result
 

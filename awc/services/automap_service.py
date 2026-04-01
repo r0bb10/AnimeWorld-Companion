@@ -533,20 +533,11 @@ def _run_background(target, *args, **kwargs) -> dict:
 def automap_all(force: bool = False) -> dict:
     with get_db() as conn:
         show_ids = [row[0] for row in conn.execute("SELECT id FROM shows ORDER BY title COLLATE NOCASE").fetchall()]
-    results = [automap_show(show_id, force=force) for show_id in show_ids]
-    return {"shows": results}
-
-
-def automap_all_movies(force: bool = False) -> dict:
-    with get_db() as conn:
         movie_ids = [row[0] for row in conn.execute("SELECT id FROM movies ORDER BY title COLLATE NOCASE").fetchall()]
-    results = [automap_movie(movie_id, force=force) for movie_id in movie_ids]
-    return {"movies": results}
+    show_results = [automap_show(show_id, force=force) for show_id in show_ids]
+    movie_results = [automap_movie(movie_id, force=force) for movie_id in movie_ids]
+    return {"shows": show_results, "movies": movie_results}
 
 
 def start_automap_all(force: bool = False) -> dict:
     return _run_background(automap_all, force)
-
-
-def start_automap_all_movies(force: bool = False) -> dict:
-    return _run_background(automap_all_movies, force)

@@ -75,6 +75,7 @@ def _show_card(show: dict) -> dict:
     mappings = show.get("mappings", {})
     totals = {
         "total": 0,
+        "active": 0,
         "mapped": 0,
         "ignored": 0,
         "unaired": 0,
@@ -90,17 +91,20 @@ def _show_card(show: dict) -> dict:
         has_mapping = bool(mapping_list)
         if aired:
             totals["total"] += 1
-            if has_mapping:
-                totals["mapped"] += 1
-            elif ignored:
+            if ignored:
                 totals["ignored"] += 1
+            else:
+                totals["active"] += 1
+                if has_mapping:
+                    totals["mapped"] += 1
         else:
             totals["unaired"] += 1
-            if has_mapping:
-                totals["total"] += 1
-                totals["mapped"] += 1
-            elif ignored:
+            if ignored:
                 totals["ignored"] += 1
+            elif has_mapping:
+                totals["total"] += 1
+                totals["active"] += 1
+                totals["mapped"] += 1
 
         if ignored:
             status_badge = {"class": "badge-ignored", "text": "ignored"}
@@ -159,8 +163,10 @@ def _show_card(show: dict) -> dict:
             }
         )
 
-    effective_total = totals["total"] - totals["ignored"]
-    if totals["mapped"] == effective_total and effective_total > 0:
+    effective_total = totals["active"]
+    if effective_total == 0 and totals["ignored"] > 0:
+        status = {"key": "ignored", "label": "ignored"}
+    elif totals["mapped"] == effective_total and effective_total > 0:
         status = {"key": "mapped", "label": "all mapped"}
     elif totals["mapped"] > 0:
         status = {"key": "partial", "label": f"{totals['mapped']}/{effective_total}"}
@@ -208,7 +214,12 @@ def _movie_card(movie: dict) -> dict:
         "manager_label": "Radarr",
         "manager_badge_class": "badge-radarr",
         "meta_label": str(movie.get("year") or ""),
-        "status": {"key": "mapped", "label": "all mapped"} if mapping else {"key": "unmapped", "label": "unmapped"},
+        "status": (
+            {"key": "ignored", "label": "ignored"}
+            if ignored and not mapping
+            else {"key": "mapped", "label": "all mapped"} if mapping
+            else {"key": "unmapped", "label": "unmapped"}
+        ),
         "has_unaired": False,
         "rows": [
             {

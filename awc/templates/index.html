@@ -373,26 +373,31 @@ function filterShows(){
 
 function _refreshCardBadge(card){
   const rows=card.querySelectorAll('.season-row');
-  let total=0,mapped=0,ignored=0;
+  let total=0,active=0,mapped=0,ignored=0;
   rows.forEach(r=>{
     const aired=r.dataset.aired==='true';
     const isMapped=r.dataset.mapped==='true';
     const isIgnored=r.dataset.ignored==='true';
     if(aired){
       total++;
-      if(isMapped)mapped++;
-      else if(isIgnored)ignored++;
+      if(isIgnored)ignored++;
+      else{
+        active++;
+        if(isMapped)mapped++;
+      }
     }else if(isMapped){
       // unaired but already mapped to a pre-release placeholder
-      total++;mapped++;
+      total++;active++;mapped++;
     }else if(isIgnored){
       ignored++;
     }
   });
-  const effective=total-ignored;
+  const effective=active;
   const badge=card.querySelector('.card-status-badge');
   if(!badge)return;
-  if(mapped===effective&&effective>0){
+  if(effective===0&&ignored>0){
+    badge.className='badge badge-ignored card-status-badge';badge.textContent='ignored';card.dataset.status='ignored';
+  }else if(mapped===effective&&effective>0){
     badge.className='badge badge-mapped card-status-badge';badge.textContent='all mapped';card.dataset.status='mapped';
   }else if(mapped>0){
     badge.className='badge badge-partial card-status-badge';badge.textContent=mapped+'/'+effective;card.dataset.status='partial';

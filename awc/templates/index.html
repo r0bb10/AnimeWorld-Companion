@@ -73,8 +73,31 @@ a{color:#58a6ff;text-decoration:none}a:hover{text-decoration:underline}
 .map-form input{flex:1;padding:4px 8px;background:#0d1117;border:1px solid #30363d;border-radius:6px;color:#c9d1d9;font-size:12px}
 
 .discover-panel{margin-top:8px;padding:8px;background:#0d1117;border-radius:6px}
-.discover-item{display:flex;justify-content:space-between;align-items:center;padding:4px 0;font-size:12px}
+.discover-item{display:flex;justify-content:space-between;align-items:center;gap:10px;padding:6px 0;font-size:13px;line-height:1.45}
 .discover-item+.discover-item{border-top:1px solid #21262d}
+.discover-link-wrap{display:flex;align-items:center;gap:8px;min-width:0;flex:1}
+.discover-link-wrap a{font-size:13px;line-height:1.45;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.discover-meta{color:#8b949e;font-size:13px;line-height:1.45;white-space:nowrap}
+.discover-status{margin-top:8px;color:#8b949e;font-size:13px;line-height:1.45}
+.automap-status{margin-top:8px;color:#8b949e;font-size:13px;line-height:1.45}
+.automap-note-title.success{color:#3fb950}
+.automap-note-title{margin-top:8px;margin-bottom:8px;color:#d29922;font-size:13px;font-weight:600;line-height:1.45}
+.automap-note-subtitle{margin-bottom:12px;color:#8b949e;font-size:13px;line-height:1.45}
+.automap-note-meta{display:flex;flex-wrap:wrap;gap:12px;margin-bottom:12px;color:#8b949e;font-size:13px;line-height:1.45}
+.automap-note-link{margin-bottom:12px}
+.automap-note-link a{font-size:13px;line-height:1.45}
+.automap-panel{margin-top:8px;padding:12px 14px;background:#0d1117;border:1px solid #21262d;border-radius:8px}
+.automap-panel-success{border-left:3px solid #3fb950}
+.automap-panel-warn{border-left:3px solid #d29922}
+.automap-panel-error{border-left:3px solid #f85149}
+.automap-panel-title{font-size:14px;font-weight:700;line-height:1.3}
+.automap-panel-title.success{color:#3fb950}
+.automap-panel-title.warn{color:#d29922}
+.automap-panel-title.error{color:#f85149}
+.automap-panel-subtitle{margin-top:6px;color:#8b949e;font-size:12px;line-height:1.45}
+.automap-panel-meta{display:flex;flex-wrap:wrap;gap:8px;margin-top:10px}
+.automap-chip{display:inline-flex;align-items:center;padding:4px 8px;border-radius:999px;background:#161b22;border:1px solid #30363d;color:#c9d1d9;font-size:12px;line-height:1.2}
+.automap-chip-label{color:#8b949e;margin-right:6px}
 
 .dl-box{margin-bottom:12px;background:#161b22;border:1px solid #21262d;border-radius:8px;overflow:hidden}
 .dl-header{display:flex;justify-content:space-between;align-items:center;padding:10px 14px;border-bottom:1px solid #21262d}
@@ -406,6 +429,29 @@ const AWC_AW_BASE={{ aw_base_url|tojson }};
 function _kp(){return AWC_KEY?'?apikey='+encodeURIComponent(AWC_KEY):'';}
 function _kh(){return AWC_KEY?{'X-Api-Key':AWC_KEY}:{};}
 function _slugToUrl(slug){return AWC_AW_BASE+'/play/'+slug+'/';}
+function _statusLine(text,kind){return '<div class="'+(kind==='automap'?'automap-status':'discover-status')+'">'+text+'</div>';}
+function _discoverRow(url,metaText,copyValue,borderColor){
+  const div=document.createElement('div');
+  div.className='discover-item';
+  if(borderColor)div.style.borderLeft='3px solid '+borderColor;
+  const span=document.createElement('span');
+  span.className='discover-link-wrap';
+  const a=document.createElement('a');
+  a.href=url;a.target='_blank';a.textContent=url;
+  span.appendChild(a);
+  if(metaText){
+    const meta=document.createElement('span');
+    meta.className='discover-meta';
+    meta.textContent=metaText;
+    span.appendChild(meta);
+  }
+  div.appendChild(span);
+  const btn=document.createElement('button');
+  btn.className='btn copy-btn';btn.textContent='Copy';
+  btn.dataset.link=copyValue||url;
+  div.appendChild(btn);
+  return div.outerHTML;
+}
 
 function toggle(el){el.closest('.card').classList.toggle('open')}
 
@@ -638,7 +684,7 @@ async function discoverMovie(movieId,btn){
   const panel=document.getElementById('movie-disc-'+movieId);
   if(panel.style.display==='block'){panel.style.display='none';return;}
   panel.style.display='block';
-  panel.innerHTML='<em style="color:#8b949e">Searching AnimeWorld...</em>';
+  panel.innerHTML=_statusLine('Searching AnimeWorld...','discover');
   btn.disabled=true;
   try{
     const r=await fetch('/api/discover/movie/'+movieId+_kp());
@@ -647,18 +693,7 @@ async function discoverMovie(movieId,btn){
     if(!links||links.length===0){panel.innerHTML='<span style="color:#8b949e">No results found</span>';return;}
     let html='';
     for(const l of links){
-      const div=document.createElement('div');
-      div.className='discover-item';
-      const span=document.createElement('span');
-      const a=document.createElement('a');
-      a.href=l.link;a.target='_blank';a.textContent=l.link;
-      span.appendChild(a);
-      span.insertAdjacentHTML('beforeend',' <span style="color:#8b949e">'+l.eps+' eps</span>');
-      div.appendChild(span);
-      const cb=document.createElement('button');
-      cb.className='btn copy-btn';cb.textContent='Copy';cb.dataset.link=l.link;
-      div.appendChild(cb);
-      html+=div.outerHTML;
+      html+=_discoverRow(l.link,l.eps+' eps',l.link);
     }
     panel.innerHTML=html;
   }catch(e){panel.innerHTML='<span style="color:#f85149">Error: '+e.message+'</span>';}
@@ -726,7 +761,7 @@ async function discover(showId,btn){
   const panel=document.getElementById('disc-'+showId);
   if(panel.style.display==='block'){panel.style.display='none';return}
   panel.style.display='block';
-  panel.innerHTML='<em style="color:#8b949e">Searching AnimeWorld...</em>';
+  panel.innerHTML=_statusLine('Searching AnimeWorld...','discover');
   btn.disabled=true;
   try{
     const r=await fetch('/api/discover/'+showId+_kp());
@@ -738,19 +773,7 @@ async function discover(showId,btn){
     }
     let html='';
     for(const l of links){
-      const div=document.createElement('div');
-      div.className='discover-item';
-      const span=document.createElement('span');
-      const a=document.createElement('a');
-      a.href=l.link;a.target='_blank';a.textContent=l.link;
-      span.appendChild(a);
-      span.insertAdjacentHTML('beforeend',' <span style="color:#8b949e">'+l.eps+' eps</span>');
-      div.appendChild(span);
-      const btn=document.createElement('button');
-      btn.className='btn copy-btn';btn.textContent='Copy';
-      btn.dataset.link=l.link;
-      div.appendChild(btn);
-      html+=div.outerHTML;
+      html+=_discoverRow(l.link,l.eps+' eps',l.link);
     }
     panel.innerHTML=html;
   }catch(e){
@@ -762,61 +785,56 @@ async function automap(showId,btn){
   const panel=document.getElementById('disc-'+showId);
   if(panel.style.display==='block'){panel.style.display='none';return}
   panel.style.display='block';
-  panel.innerHTML='<em style="color:#8b949e">Running automap with confidence scoring...</em>';
+  panel.innerHTML=_statusLine('Running automap with confidence scoring...','automap');
   btn.disabled=true;
   try{
     const r=await fetch('/automap/'+showId+_kp(),{method:'POST',headers:_kh()});
     const data=await r.json();
 
     if(data.status==='success'){
-      let html='<div style="color:#3fb950;font-weight:bold">✓ Successfully mapped!</div>';
+      let html='<div class="automap-note-title success">Successfully mapped!</div>';
+      let meta='';
       if(data.mapped_seasons&&data.mapped_seasons.length>0){
-        html+='<div style="color:#8b949e;margin-top:4px">Seasons: '+data.mapped_seasons.join(', ')+'</div>';
+        meta+='<span>Seasons: '+data.mapped_seasons.join(', ')+'</span>';
       }
       if(data.mapping&&data.mapping.confidence_score){
-        html+='<div style="color:#8b949e;margin-top:4px">Confidence: '+(data.mapping.confidence_score*100).toFixed(1)+'%</div>';
+        meta+='<span>Confidence: '+(data.mapping.confidence_score*100).toFixed(1)+'%</span>';
+      }
+      if(meta){
+        html+='<div class="automap-note-meta">'+meta+'</div>';
       }
       if(data.mapping&&data.mapping.aw_link){
         const mapUrl=_slugToUrl(data.mapping.aw_link);
-        html+='<div style="margin-top:8px"><a href="'+mapUrl+'" target="_blank" style="color:#58a6ff">'+mapUrl+'</a></div>';
+        html+='<div class="automap-note-link"><a href="'+mapUrl+'" target="_blank">'+mapUrl+'</a></div>';
       }
       panel.innerHTML=html;
       // Reload page after 2 seconds to show updated mapping
       setTimeout(()=>location.reload(),2000);
     }else if(data.status==='ambiguous'){
-      let html='<div style="color:#d29922;font-weight:bold;font-size:15px;margin-bottom:8px">Multiple high-confidence candidates found!</div>';
-      html+='<div style="color:#8b949e;font-size:13px;margin-bottom:12px">Please use Discover AW Links and manually copy and paste them.</div>';
+      let html='<div class="automap-note-title">Multiple high-confidence candidates found!</div>';
+      html+='<div class="automap-note-subtitle">Please use Discover AW Links and manually copy and paste the correct one.</div>';
       if(data.candidates&&data.candidates.length>0){
         for(const c of data.candidates){
-          const div=document.createElement('div');
-          div.className='discover-item';
-          div.style.borderLeft='3px solid #d29922';
-          const span=document.createElement('span');
-          const a=document.createElement('a');
-          a.href=_slugToUrl(c.aw_link||'');a.target='_blank';a.textContent=_slugToUrl(c.aw_link||'');
-          span.appendChild(a);
-          let meta=' <span style="color:#8b949e">'+c.aw_episode_count+' eps';
+          let meta=(c.aw_episode_count||0)+' eps';
           if(c.confidence_score){
             meta+=' | confidence: '+(c.confidence_score*100).toFixed(1)+'%';
           }
-          meta+='</span>';
-          span.insertAdjacentHTML('beforeend',meta);
-          div.appendChild(span);
-          const btn=document.createElement('button');
-          btn.className='btn copy-btn';btn.textContent='Copy';
-          btn.dataset.link=c.aw_link;
-          div.appendChild(btn);
-          html+=div.outerHTML;
+          html+=_discoverRow(_slugToUrl(c.aw_link||''),meta,c.aw_link,'#d29922');
         }
       }
       panel.innerHTML=html;
     }else if(data.status==='partial'){
-      let html='<div style="color:#d29922;font-weight:bold">Partially mapped</div>';
+      let html='<div class="automap-note-title">Partially mapped</div>';
+      html+='<div class="automap-note-subtitle">Some seasons were mapped automatically, but a few still need manual review.</div>';
+      let meta='';
       if(data.mapped_seasons&&data.mapped_seasons.length>0){
-        html+='<div style="color:#8b949e;margin-top:4px">Mapped seasons: '+data.mapped_seasons.join(', ')+'</div>';
+        meta+='<span>Mapped: '+data.mapped_seasons.join(', ')+'</span>';
       }
       if(data.ambiguous&&data.ambiguous.length>0){
-        html+='<div style="color:#8b949e;margin-top:8px">Needs review: '+data.ambiguous.map(x=>'S'+String(x.season).padStart(2,'0')).join(', ')+'</div>';
+        meta+='<span>Needs review: '+data.ambiguous.map(x=>'S'+String(x.season).padStart(2,'0')).join(', ')+'</span>';
+      }
+      if(meta){
+        html+='<div class="automap-note-meta">'+meta+'</div>';
       }
       panel.innerHTML=html;
       setTimeout(()=>location.reload(),2000);

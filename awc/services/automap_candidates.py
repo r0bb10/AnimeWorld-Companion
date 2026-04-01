@@ -1,0 +1,78 @@
+"""Shared candidate discovery and enrichment for automap."""
+
+from __future__ import annotations
+
+from concurrent.futures import ThreadPoolExecutor, as_completed
+
+from ..integrations.animeworld_client import AnimeWorldClient
+from .automap_scoring import parse_italian_date
+
+
+def _collect_titles(primary_title: str, alternate_titles: list[dict], limit: int = 10) -> list[str]:
+    titles: list[str] = []
+    seen: set[str] = set()
+    for value in [primary_title, *[(item.get("title") or "") for item in alternate_titles]]:
+        title = str(value or "").strip()
+        if not title:
+            continue
+        key = title.casefold()
+        if key in seen:
+            continue
+        seen.add(key)
+        titles.append(title)
+        if len(titles) >= limit:
+            break
+    return titles
+
+
+def _dedupe_by_slug(client: AnimeWorldClient, results: list[dict]) -> list[dict]:
+    unique: list[dict] = []
+    seen: set[str] = set()
+    for item in results:
+        slug = client.url_to_slug(item.get("url") or item.get("slug", ""))
+        if not slug or slug in seen:
+            continue
+        seen.add(slug)
+        unique.append(item)
+    return unique
+
+
+def _enrich_result(client: AnimeWorldClient, item: dict) -> dict:
+    target = item.get("url") or item.get("slug") or ""
+    info, episodes = client.get_info_and_episodes(target)
+    non_special, total, _ = client.count_non_special_episodes(episodes)
+    release_value = str(info.get("Data di Uscita") or info.get("release_date") or "")
+    release_dt = parse_italian_date(release_value) if release_value else None
+    return {
+        **item,
+        "aw_link": client.url_to_slug(target),
+        "aw_title": item.get("title", ""),
+        "aw_jtitle": item.get("japanese_title", ""),
+        "aw_status": str(info.get("Stato") or info.get("status") or ""),
+        "aw_category": str(info.get("Categoria") or info.get("category") or item.get("kind") or ""),
+        "aw_audio": str(info.get("Audio") or info.get("audio") or ""),
+        "aw_year": release_dt.year if release_dt else None,
+        "aw_release_datetime": release_dt,
+        "aw_episode_count": non_special,
+        "aw_total_episodes": total,
+    }
+
+
+def discover_candidates_for_titles(primary_title: str, alternate_titles: list[dict], limit: int = 20) -> list[dict]:
+    client = AnimeWorldClient()
+    raw_results: list[dict] = []
+    for query in _collect_titles(primary_title, alternate_titles, limit=10):
+        raw_results.extend(client.search(query, limit=limit))
+    unique = _dedupe_by_slug(client, raw_results)[:limit]
+
+    enriched: list[dict] = []
+    with ThreadPoolExecutor(max_workers=min(len(unique), 6) or 1) as pool:
+        futures = {pool.submit(_enrich_result, client, item): item for item in unique}
+        for future in as_completed(futures):
+            try:
+                enriched.append(future.result())
+            except Exception:
+                continue
+
+    enriched.sort(key=lambda item: item.get("aw_title") or item.get("title") or "")
+    return enriched

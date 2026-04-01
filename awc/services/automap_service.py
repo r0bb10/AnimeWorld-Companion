@@ -3,13 +3,10 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime
-from difflib import SequenceMatcher
 import json
-import re
 import threading
 
 from ..core.config import settings
-from ..integrations.animeworld_client import AnimeWorldClient
 from ..repositories.db import get_db
 from ..repositories.mappings import (
     list_show_mappings,
@@ -19,6 +16,9 @@ from ..repositories.mappings import (
 )
 from ..repositories.movies import get_movie_detail
 from ..repositories.shows import get_show_detail
+from .automap_candidates import discover_candidates_for_titles
+from .automap_language import resolve_movie_language_preference, resolve_show_language_preference
+from .automap_scoring import calculate_movie_confidence, calculate_show_confidence
 
 _automap_lock = threading.Lock()
 _automap_state = {
@@ -40,114 +40,134 @@ def _set_state(**updates) -> None:
         _automap_state.update(updates)
 
 
-def _normalize_title(value: str) -> str:
-    text = (value or "").lower()
-    text = re.sub(r"[^a-z0-9\s]", " ", text)
-    text = re.sub(r"\b(season|part|movie|film|the|and|of|cour|tv|ova|ona)\b", " ", text)
-    text = re.sub(r"\s+", " ", text)
-    return text.strip()
-
-
-def _similarity(a: str, b: str) -> float:
-    if not a or not b:
-        return 0.0
-    return SequenceMatcher(None, _normalize_title(a), _normalize_title(b)).ratio()
-
-
-def _extract_year(value: object) -> int | None:
-    if isinstance(value, int):
-        return value
-    match = re.search(r"(19|20)\d{2}", str(value or ""))
-    return int(match.group(0)) if match else None
-
-
-def _candidate_meta(result: dict) -> dict:
-    client = AnimeWorldClient()
-    info, episodes = client.get_info_and_episodes(result.get("slug") or result.get("url", ""))
-    non_special, total, _ = client.count_non_special_episodes(episodes)
-    return {
-        "aw_link": client.url_to_slug(result.get("url") or result.get("slug", "")),
-        "aw_title": result.get("title", ""),
-        "aw_jtitle": result.get("japanese_title", ""),
-        "aw_status": str(info.get("Stato") or info.get("status") or ""),
-        "aw_category": str(info.get("Categoria") or info.get("category") or result.get("kind") or ""),
-        "aw_audio": str(info.get("Audio") or info.get("audio") or ""),
-        "aw_year": _extract_year(info.get("Data di Uscita") or info.get("release_date")),
-        "aw_episode_count": non_special,
-        "aw_total_episodes": total,
-    }
-
-
 def _show_alternate_titles(show: dict) -> list[str]:
     return [item.get("title", "") for item in show.get("alternate_titles", []) if item.get("title")]
 
 
-def _show_score(show: dict, season: dict, candidate: dict) -> tuple[float, dict]:
-    titles = [show.get("title", ""), * _show_alternate_titles(show)]
-    title_score = max(_similarity(title, candidate["aw_title"]) for title in titles if title) if titles else 0.0
-    if candidate.get("aw_jtitle"):
-        title_score = max(title_score, max(_similarity(title, candidate["aw_jtitle"]) for title in titles if title))
-
-    year_score = 0.0
-    show_year = show.get("year")
-    if show_year and candidate.get("aw_year"):
-        diff = abs(int(show_year) - int(candidate["aw_year"]))
-        year_score = 1.0 if diff == 0 else 0.5 if diff == 1 else 0.0
-
-    target_count = int(season.get("episode_count") or 0)
-    aw_count = int(candidate.get("aw_episode_count") or 0)
-    count_score = 0.0
-    if target_count and aw_count:
-        if target_count == aw_count:
-            count_score = 1.0
-        else:
-            diff_ratio = abs(target_count - aw_count) / max(target_count, aw_count)
-            count_score = max(0.0, 1.0 - diff_ratio)
-
-    total = round((title_score * 0.55) + (year_score * 0.2) + (count_score * 0.25), 4)
-    return total, {
-        "title": round(title_score, 4),
-        "year": round(year_score, 4),
-        "episode_count": round(count_score, 4),
-    }
-
-
-def _movie_score(movie: dict, candidate: dict) -> tuple[float, dict]:
-    titles = [movie.get("title", "")] + [item.get("title", "") for item in movie.get("alternate_titles", [])]
-    title_score = max(_similarity(title, candidate["aw_title"]) for title in titles if title) if titles else 0.0
-    if candidate.get("aw_jtitle"):
-        title_score = max(title_score, max(_similarity(title, candidate["aw_jtitle"]) for title in titles if title))
-
-    year_score = 0.0
-    movie_year = movie.get("year")
-    if movie_year and candidate.get("aw_year"):
-        diff = abs(int(movie_year) - int(candidate["aw_year"]))
-        year_score = 1.0 if diff == 0 else 0.5 if diff == 1 else 0.0
-
-    total = round((title_score * 0.8) + (year_score * 0.2), 4)
-    return total, {
-        "title": round(title_score, 4),
-        "year": round(year_score, 4),
-    }
-
-
 def _discovery_candidates(title: str, alternates: list[str], limit: int = 12) -> list[dict]:
-    client = AnimeWorldClient()
-    results = []
-    seen: set[str] = set()
-    for query in [title, *alternates]:
-        if not query:
-            continue
-        for result in client.search(query, limit=limit):
-            slug = client.url_to_slug(result.get("url") or result.get("slug", ""))
-            if not slug or slug in seen:
+    alt_payload = [{"title": value} for value in alternates if value]
+    return discover_candidates_for_titles(title, alt_payload, limit=limit)
+
+
+def _existing_links_by_show(show: dict) -> set[str]:
+    links: set[str] = set()
+    for season in show.get("seasons", []):
+        for mapping in season.get("mappings", []):
+            link = (mapping.get("aw_link") or "").strip()
+            if not link:
                 continue
-            seen.add(slug)
-            meta = _candidate_meta(result)
-            results.append({**result, **meta})
-        if len(results) >= limit:
+            for part in link.split(","):
+                part = part.strip()
+                if part:
+                    links.add(part)
+    return links
+
+
+def _build_scored_candidates(show: dict, season: dict, candidates: list[dict], want_dubbed: bool, reserved_links: set[str]) -> list[dict]:
+    own_links = {
+        (mapping.get("aw_link") or "").strip()
+        for mapping in season.get("mappings", [])
+        if mapping.get("aw_link")
+    }
+    blocked_links = reserved_links - own_links
+    scored: list[dict] = []
+    for candidate in candidates:
+        if candidate.get("aw_link", "") in blocked_links:
+            continue
+        score, factors = calculate_show_confidence(show, season, candidate, want_dubbed=want_dubbed)
+        scored.append({**candidate, "confidence_score": score, "confidence_factors": factors})
+    scored.sort(key=lambda item: item["confidence_score"], reverse=True)
+    return scored
+
+
+def _detect_split_cour_pair(season_scores: list[dict], target_count: int) -> list[dict] | None:
+    if not target_count:
+        return None
+
+    for first in season_scores:
+        first_count = int(first.get("aw_episode_count") or 0)
+        if not first_count or first_count >= target_count:
+            continue
+        if (first.get("aw_status") or "").lower() != "finito":
+            continue
+
+        for second in season_scores:
+            if first["aw_link"] == second["aw_link"]:
+                continue
+            second_count = int(second.get("aw_episode_count") or 0)
+            if not second_count:
+                continue
+            if (first.get("aw_audio") or "").lower() != (second.get("aw_audio") or "").lower():
+                continue
+            combined = first_count + second_count
+            if abs(combined - target_count) > 1:
+                continue
+            if min(first["confidence_score"], second["confidence_score"]) < 0.65:
+                continue
+            return [first, second]
+
+    return None
+
+
+def _propagate_single_link(
+    *,
+    show_id: int,
+    eligible_seasons: list[dict],
+    start_index: int,
+    best: dict,
+    mapped_seasons: list[int],
+    handled: set[int],
+    reserved_links: set[str],
+) -> None:
+    available = int(best.get("aw_episode_count") or 0)
+    if available <= 0:
+        return
+
+    chain: list[dict] = []
+    consumed = 0
+    for season in eligible_seasons[start_index:]:
+        sn = season["season_number"]
+        if sn in handled:
+            continue
+        season_count = int(season.get("episode_count") or 0)
+        if season_count <= 0:
             break
-    return results[:limit]
+        if consumed + season_count > available:
+            break
+        consumed += season_count
+        chain.append(season)
+
+    if not chain:
+        return
+
+    root_sn = chain[0]["season_number"]
+    for index, season in enumerate(chain):
+        sn = season["season_number"]
+        factors = dict(best["confidence_factors"])
+        if index > 0:
+            factors["linked"] = root_sn
+        replace_show_mappings_auto(
+            show_id=show_id,
+            season_number=sn,
+            items=[
+                {
+                    "part": 1,
+                    "aw_link": best["aw_link"],
+                    "aw_title": best["aw_title"],
+                    "aw_episode_count": best["aw_episode_count"],
+                    "aw_total_episodes": best["aw_total_episodes"],
+                    "aw_status": best.get("aw_status", ""),
+                    "aw_category": best.get("aw_category", ""),
+                    "confidence_score": best["confidence_score"],
+                    "confidence_factors": json.dumps(factors),
+                    "linked_with_season": None if index == 0 else root_sn,
+                }
+            ],
+        )
+        mapped_seasons.append(sn)
+        handled.add(sn)
+
+    reserved_links.add(best["aw_link"])
 
 
 def automap_movie(movie_id: int, force: bool = False) -> dict:
@@ -157,12 +177,13 @@ def automap_movie(movie_id: int, force: bool = False) -> dict:
     if movie.get("mapping") and not force:
         return {"status": "already_mapped", "movie_id": movie_id}
 
+    want_dubbed = resolve_movie_language_preference(movie)
     candidates = []
     for candidate in _discovery_candidates(
         movie["title"],
         [item.get("title", "") for item in movie.get("alternate_titles", [])],
     ):
-        score, factors = _movie_score(movie, candidate)
+        score, factors = calculate_movie_confidence(movie, candidate, want_dubbed=want_dubbed)
         candidates.append({**candidate, "confidence_score": score, "confidence_factors": factors})
     candidates.sort(key=lambda item: item["confidence_score"], reverse=True)
 
@@ -189,6 +210,7 @@ def automap_show(show_id: int, season_number: int | None = None, force: bool = F
     if not show:
         return {"status": "error", "message": "show_not_found", "show_id": show_id}
 
+    want_dubbed = resolve_show_language_preference(show)
     candidates = _discovery_candidates(show["title"], _show_alternate_titles(show))
     scored_candidates: list[dict] = []
     mapped_seasons: list[int] = []
@@ -209,16 +231,14 @@ def automap_show(show_id: int, season_number: int | None = None, force: bool = F
     if not eligible_seasons:
         return {"status": "already_mapped", "show_id": show_id, "mapped_seasons": [], "ambiguous": [], "candidates": []}
 
-    for season in eligible_seasons:
+    reserved_links = _existing_links_by_show(show)
+
+    for index, season in enumerate(eligible_seasons):
         sn = season["season_number"]
         if sn in handled:
             continue
 
-        season_scores = []
-        for candidate in candidates:
-            score, factors = _show_score(show, season, candidate)
-            season_scores.append({**candidate, "confidence_score": score, "confidence_factors": factors})
-        season_scores.sort(key=lambda item: item["confidence_score"], reverse=True)
+        season_scores = _build_scored_candidates(show, season, candidates, want_dubbed, reserved_links)
         if season_scores:
             scored_candidates.extend(
                 [{**candidate, "season_number": sn} for candidate in season_scores[:3]]
@@ -228,70 +248,7 @@ def automap_show(show_id: int, season_number: int | None = None, force: bool = F
         best = season_scores[0] if season_scores else None
         second = season_scores[1] if len(season_scores) > 1 else None
 
-        if best and best["confidence_score"] >= settings.automap_confidence_threshold and (
-            not second or (best["confidence_score"] - second["confidence_score"]) >= 0.05
-        ):
-            replace_show_mappings_auto(
-                show_id=show_id,
-                season_number=sn,
-                items=[
-                    {
-                        "part": 1,
-                        "aw_link": best["aw_link"],
-                        "aw_title": best["aw_title"],
-                        "aw_episode_count": best["aw_episode_count"],
-                        "aw_total_episodes": best["aw_total_episodes"],
-                        "aw_status": best.get("aw_status", ""),
-                        "aw_category": best.get("aw_category", ""),
-                        "confidence_score": best["confidence_score"],
-                        "confidence_factors": json.dumps(best["confidence_factors"]),
-                        "linked_with_season": None,
-                    }
-                ],
-            )
-            mapped_seasons.append(sn)
-            handled.add(sn)
-
-            next_season = next((item for item in eligible_seasons if item["season_number"] == sn + 1), None)
-            best_count = int(best.get("aw_episode_count") or 0)
-            if next_season and next_season["season_number"] not in handled:
-                combined = target_count + int(next_season.get("episode_count") or 0)
-                if combined and best_count >= combined:
-                    replace_show_mappings_auto(
-                        show_id=show_id,
-                        season_number=next_season["season_number"],
-                        items=[
-                            {
-                                "part": 1,
-                                "aw_link": best["aw_link"],
-                                "aw_title": best["aw_title"],
-                                "aw_episode_count": best["aw_episode_count"],
-                                "aw_total_episodes": best["aw_total_episodes"],
-                                "aw_status": best.get("aw_status", ""),
-                                "aw_category": best.get("aw_category", ""),
-                                "confidence_score": best["confidence_score"],
-                                "confidence_factors": json.dumps({**best["confidence_factors"], "linked": sn}),
-                                "linked_with_season": sn,
-                            }
-                        ],
-                    )
-                    mapped_seasons.append(next_season["season_number"])
-                    handled.add(next_season["season_number"])
-            continue
-
-        split_pair = None
-        if target_count:
-            for first in season_scores:
-                for second_candidate in season_scores:
-                    if first["aw_link"] == second_candidate["aw_link"]:
-                        continue
-                    combined = int(first.get("aw_episode_count") or 0) + int(second_candidate.get("aw_episode_count") or 0)
-                    if combined == target_count and min(first["confidence_score"], second_candidate["confidence_score"]) >= 0.65:
-                        split_pair = [first, second_candidate]
-                        break
-                if split_pair:
-                    break
-
+        split_pair = _detect_split_cour_pair(season_scores, target_count)
         if split_pair:
             replace_show_mappings_auto(
                 show_id=show_id,
@@ -305,7 +262,7 @@ def automap_show(show_id: int, season_number: int | None = None, force: bool = F
                         "aw_total_episodes": candidate["aw_total_episodes"],
                         "aw_status": candidate.get("aw_status", ""),
                         "aw_category": candidate.get("aw_category", ""),
-                        "confidence_score": candidate["confidence_score"],
+                        "confidence_score": max(item["confidence_score"] for item in split_pair),
                         "confidence_factors": json.dumps({**candidate["confidence_factors"], "split_cour": True}),
                         "linked_with_season": None,
                     }
@@ -314,6 +271,22 @@ def automap_show(show_id: int, season_number: int | None = None, force: bool = F
             )
             mapped_seasons.append(sn)
             handled.add(sn)
+            for candidate in split_pair:
+                reserved_links.add(candidate["aw_link"])
+            continue
+
+        if best and best["confidence_score"] >= settings.automap_confidence_threshold and (
+            not second or (best["confidence_score"] - second["confidence_score"]) >= 0.05
+        ):
+            _propagate_single_link(
+                show_id=show_id,
+                eligible_seasons=eligible_seasons,
+                start_index=index,
+                best=best,
+                mapped_seasons=mapped_seasons,
+                handled=handled,
+                reserved_links=reserved_links,
+            )
             continue
 
         ambiguous.append({"season": sn, "candidates": season_scores[:5]})

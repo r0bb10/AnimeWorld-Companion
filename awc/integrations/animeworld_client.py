@@ -201,9 +201,12 @@ class AnimeWorldClient:
             return []
         episodes = []
         for anchor in soup.select("li.episode a[data-episode-num]"):
+            number = anchor.get("data-episode-num") or anchor.get("data-num") or ""
+            raw_number = anchor.get("data-num") or anchor.get("data-base") or number
             episodes.append(
                 {
-                    "number": anchor.get("data-episode-num") or anchor.get("data-num") or "",
+                    "number": number,
+                    "number_raw": raw_number,
                     "episode_id": anchor.get("data-episode-id") or anchor.get("data-id") or "",
                     "href": anchor.get("href", ""),
                 }
@@ -273,13 +276,25 @@ class AnimeWorldClient:
         ]
 
     def count_non_special_episodes(self, episodes: list[dict]) -> tuple[int, int, int]:
-        total = len(episodes)
+        total = 0
         non_special = 0
         for item in episodes:
-            number = item.get("number", "")
+            number = str(item.get("number_raw") or item.get("number") or "").strip()
+            match = re.fullmatch(r"(\d+)\s*-\s*(\d+)", number)
+            if match:
+                start = int(match.group(1))
+                end = int(match.group(2))
+                if end >= start:
+                    span = end - start + 1
+                    total += span
+                    non_special += span
+                    continue
             try:
                 if float(number).is_integer():
+                    total += 1
                     non_special += 1
+                    continue
             except Exception:
-                non_special += 1
+                pass
+            total += 1
         return non_special, total, total - non_special

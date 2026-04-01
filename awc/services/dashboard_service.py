@@ -71,6 +71,166 @@ def _movie_payload(movie_id: int) -> dict | None:
     }
 
 
+def _show_card(show: dict) -> dict:
+    mappings = show.get("mappings", {})
+    totals = {
+        "total": 0,
+        "mapped": 0,
+        "ignored": 0,
+        "unaired": 0,
+    }
+    rows: list[dict] = []
+    for season in sorted(show.get("seasons", []), key=lambda item: item.get("season_number", 0)):
+        season_number = int(season.get("season_number", 0) or 0)
+        if season_number <= 0:
+            continue
+        aired = season_has_aired(season)
+        ignored = bool(season.get("ignored"))
+        mapping_list = mappings.get(season_number) or []
+        has_mapping = bool(mapping_list)
+        if aired:
+            totals["total"] += 1
+            if has_mapping:
+                totals["mapped"] += 1
+            elif ignored:
+                totals["ignored"] += 1
+        else:
+            totals["unaired"] += 1
+            if has_mapping:
+                totals["total"] += 1
+                totals["mapped"] += 1
+            elif ignored:
+                totals["ignored"] += 1
+
+        if ignored:
+            status_badge = {"class": "badge-ignored", "text": "ignored"}
+        elif has_mapping:
+            first_mapping = mapping_list[0]
+            confidence = first_mapping.get("confidence_score")
+            if not aired:
+                text = "pre"
+                if first_mapping.get("mapping_type") == "auto" and confidence:
+                    text += f" {int(confidence * 100)}%"
+                status_badge = {"class": "badge-prerelease", "text": text}
+            else:
+                text = str(first_mapping.get("mapping_type") or "mapped")
+                if first_mapping.get("mapping_type") == "auto" and confidence:
+                    text += f" {int(confidence * 100)}%"
+                status_badge = {"class": f"badge-{first_mapping.get('mapping_type')}", "text": text}
+        elif not aired:
+            status_badge = {"class": "badge-unaired", "text": "unaired"}
+        else:
+            status_badge = None
+
+        row_links = []
+        for index, mapping in enumerate(mapping_list, start=1):
+            episode_meta = ""
+            episode_count = mapping.get("aw_episode_count")
+            total_episodes = mapping.get("aw_total_episodes")
+            if episode_count:
+                episode_meta = f"{episode_count} eps"
+                try:
+                    if total_episodes and int(total_episodes) > int(episode_count):
+                        episode_meta += f" (+{int(total_episodes) - int(episode_count)} specials)"
+                except (TypeError, ValueError):
+                    pass
+            row_links.append(
+                {
+                    "part": mapping.get("part") or index,
+                    "show_part": len(mapping_list) > 1,
+                    "aw_link": str(mapping.get("aw_link") or ""),
+                    "url": slug_to_url(str(mapping.get("aw_link") or "")),
+                    "episode_meta": episode_meta,
+                }
+            )
+
+        rows.append(
+            {
+                "item_kind": "show",
+                "item_id": int(show["id"]),
+                "season_number": season_number,
+                "label": f"S{season_number:02d}",
+                "mapped": has_mapping,
+                "ignored": ignored,
+                "aired": aired,
+                "status_badge": status_badge,
+                "links": row_links,
+                "map_placeholder": "Paste AW link(s) (separate with newline/comma)...",
+            }
+        )
+
+    effective_total = totals["total"] - totals["ignored"]
+    if totals["mapped"] == effective_total and effective_total > 0:
+        status = {"key": "mapped", "label": "all mapped"}
+    elif totals["mapped"] > 0:
+        status = {"key": "partial", "label": f"{totals['mapped']}/{effective_total}"}
+    else:
+        status = {"key": "unmapped", "label": "unmapped"}
+
+    return {
+        "kind": "show",
+        "id": int(show["id"]),
+        "title": str(show.get("title") or ""),
+        "alternate_titles": list(show.get("alternate_titles") or []),
+        "manager_label": "Sonarr",
+        "manager_badge_class": "badge-sonarr",
+        "meta_label": f"{totals['total']} seasons",
+        "status": status,
+        "has_unaired": totals["unaired"] > 0,
+        "rows": rows,
+        "discover_target": int(show["id"]),
+        "discover_panel_id": f"disc-show-{show['id']}",
+        "automap_label": "Automap This Show",
+        "delete_label": "Delete Show",
+    }
+
+
+def _movie_card(movie: dict) -> dict:
+    mapping = movie.get("mapping")
+    ignored = bool(movie.get("ignored"))
+    row_links = []
+    if mapping:
+        row_links.append(
+            {
+                "part": 1,
+                "show_part": False,
+                "aw_link": str(mapping.get("aw_link") or ""),
+                "url": slug_to_url(str(mapping.get("aw_link") or "")),
+                "episode_meta": "",
+            }
+        )
+    status_badge = {"class": "badge-ignored", "text": "ignored"} if ignored else None
+    return {
+        "kind": "movie",
+        "id": int(movie["id"]),
+        "title": str(movie.get("title") or ""),
+        "alternate_titles": list(movie.get("alternate_titles") or []),
+        "manager_label": "Radarr",
+        "manager_badge_class": "badge-radarr",
+        "meta_label": str(movie.get("year") or ""),
+        "status": {"key": "mapped", "label": "all mapped"} if mapping else {"key": "unmapped", "label": "unmapped"},
+        "has_unaired": False,
+        "rows": [
+            {
+                "item_kind": "movie",
+                "item_id": int(movie["id"]),
+                "season_number": None,
+                "label": "Film",
+                "mapped": bool(mapping),
+                "ignored": ignored,
+                "aired": True,
+                "status_badge": status_badge,
+                "links": row_links,
+                "map_placeholder": "Paste AW movie link...",
+            }
+        ],
+        "discover_target": int(movie["id"]),
+        "discover_panel_id": f"disc-movie-{movie['id']}",
+        "automap_label": "Automap",
+        "delete_label": "Delete Movie",
+    }
+
+
 def build_dashboard_snapshot() -> dict:
     health = build_health_report()
     managers = build_manager_snapshot()
@@ -138,14 +298,8 @@ def build_dashboard_context() -> dict:
     movies = [_movie_payload(movie["id"]) for movie in catalog["movies"]]
     show_items = [item for item in shows if item]
     movie_items = [item for item in movies if item]
-    library_items = [
-        {**item, "_kind": "show"}
-        for item in show_items
-    ] + [
-        {**item, "_kind": "movie"}
-        for item in movie_items
-    ]
-    library_items.sort(key=lambda item: (str(item.get("title") or "").casefold(), item.get("_kind") != "show"))
+    library_items = [_show_card(item) for item in show_items] + [_movie_card(item) for item in movie_items]
+    library_items.sort(key=lambda item: (str(item.get("title") or "").casefold(), item.get("kind") != "show"))
 
     mapped_count = 0
     unmapped_count = 0

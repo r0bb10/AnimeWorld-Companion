@@ -250,103 +250,66 @@ a{color:#58a6ff;text-decoration:none}a:hover{text-decoration:underline}
 </div>
 {% endif %}
 
-{% for item in library_items %}
-{% if item._kind == 'show' %}
-{% set show = item %}
-{% set mappings = show.mappings %}
-{% set ns = namespace(total=0, mapped=0, ignored=0, unaired=0) %}
-{% for s in show.seasons if s.season_number > 0 %}
-  {% if season_has_aired(s) %}
-    {% set ns.total = ns.total + 1 %}
-    {% if s.season_number in mappings %}{% set ns.mapped = ns.mapped + 1 %}
-    {% elif s.ignored %}{% set ns.ignored = ns.ignored + 1 %}{% endif %}
-  {% else %}
-    {% set ns.unaired = ns.unaired + 1 %}
-    {% if s.season_number in mappings %}
-      {% set ns.total = ns.total + 1 %}
-      {% set ns.mapped = ns.mapped + 1 %}
-    {% elif s.ignored %}
-      {% set ns.ignored = ns.ignored + 1 %}
-    {% endif %}
-  {% endif %}
-{% endfor %}
-{% set total_seasons = ns.total %}
-{% set effective_total = ns.total - ns.ignored %}
-<div class="card" data-title="{{ show.title|lower }}" data-status="{{ 'mapped' if ns.mapped == effective_total and effective_total > 0 else ('partial' if ns.mapped > 0 else 'unmapped') }}" data-has-unaired="{{ 'true' if ns.unaired > 0 else 'false' }}">
+{% for card in library_items %}
+<div class="card" data-title="{{ card.title|lower }}" data-status="{{ card.status.key }}" data-type="{{ card.kind }}" data-has-unaired="{{ 'true' if card.has_unaired else 'false' }}">
   <div class="card-header" onclick="toggle(this)">
     <div>
-      <span class="card-title">{{ show.title }}</span>
-      {% if show.alternate_titles %}
-      <div class="alt-titles">{{ show.alternate_titles[:3]|join(' / ') }}{% if show.alternate_titles|length > 3 %} +{{ show.alternate_titles|length - 3 }} more{% endif %}</div>
+      <span class="card-title">{{ card.title }}</span>
+      {% if card.alternate_titles %}
+      <div class="alt-titles">{{ card.alternate_titles[:3]|join(' / ') }}{% if card.alternate_titles|length > 3 %} +{{ card.alternate_titles|length - 3 }} more{% endif %}</div>
       {% endif %}
     </div>
     <div class="card-meta">
-      <span class="badge badge-sonarr">Sonarr</span>
-      <span>{{ total_seasons }} seasons</span>
-      {% if ns.mapped == effective_total and effective_total > 0 %}
-      <span class="badge badge-mapped card-status-badge">all mapped</span>
-      {% elif ns.mapped > 0 %}
-      <span class="badge badge-partial card-status-badge">{{ ns.mapped }}/{{ effective_total }}</span>
-      {% else %}
-      <span class="badge badge-unmapped card-status-badge">unmapped</span>
-      {% endif %}
+      <span class="badge {{ card.manager_badge_class }}">{{ card.manager_label }}</span>
+      {% if card.meta_label %}<span>{{ card.meta_label }}</span>{% endif %}
+      <span class="badge badge-{{ card.status.key }} card-status-badge">{{ card.status.label }}</span>
       <span class="arrow">&#9654;</span>
     </div>
   </div>
   <div class="card-body">
-    {% for s in show.seasons|sort(attribute='season_number') if s.season_number > 0 %}
-    {% set aired = season_has_aired(s) %}
-    {% set ignored = s.ignored %}
-    {% set mlist = mappings.get(s.season_number) %}
-    {% set m = mlist[0] if mlist else None %}
-    <div class="season-row{% if (not aired and not m) or ignored %} season-unaired{% endif %}"
-         data-showid="{{ show.id }}" data-season="{{ s.season_number }}"
-         data-mapped="{{ 'true' if m else 'false' }}"
-         data-ignored="{{ 'true' if ignored else 'false' }}"
-         data-aired="{{ 'true' if aired else 'false' }}">
-      <div class="season-label">S{{ '%02d'|format(s.season_number) }}</div>
+    {% for row in card.rows %}
+    <div class="season-row{% if (not row.aired and not row.mapped) or row.ignored %} season-unaired{% endif %}"
+         data-kind="{{ row.item_kind }}"
+         data-itemid="{{ row.item_id }}"
+         {% if row.item_kind == 'show' %}data-showid="{{ row.item_id }}" data-season="{{ row.season_number }}"{% else %}data-movieid="{{ row.item_id }}"{% endif %}
+         data-mapped="{{ 'true' if row.mapped else 'false' }}"
+         data-ignored="{{ 'true' if row.ignored else 'false' }}"
+         data-aired="{{ 'true' if row.aired else 'false' }}">
+      <div class="season-label">{{ row.label }}</div>
       <div class="season-status">
-        {% if ignored %}
-          <span class="badge badge-ignored">ignored</span>
-        {% elif m %}
-          {% if not aired %}
-          <span class="badge badge-prerelease">pre{% if m.mapping_type == 'auto' and m.confidence_score %} {{ (m.confidence_score * 100) | int }}%{% endif %}</span>
-          {% else %}
-          <span class="badge badge-{{ m.mapping_type }}">{{ m.mapping_type }}{% if m.mapping_type == 'auto' and m.confidence_score %} {{ (m.confidence_score * 100) | int }}%{% endif %}</span>
-          {% endif %}
-        {% elif not aired %}
-          <span class="badge badge-unaired">unaired</span>
+        {% if row.status_badge %}
+        <span class="badge {{ row.status_badge.class }}">{{ row.status_badge.text }}</span>
         {% else %}
-          <span style="color:#8b949e">--</span>
+        <span style="color:#8b949e">--</span>
         {% endif %}
       </div>
       <div class="season-link">
-        {% if mlist %}
-          {% for p in mlist %}
-            <div style="margin-left:8px;margin-top:4px">
-              {% if mlist|length > 1 %}
-                <span style="font-weight:600;margin-right:6px">P{{ p.part }}</span>
-              {% endif %}
-              <a href="{{ slug_to_url(p.aw_link) }}" target="_blank">{{ slug_to_url(p.aw_link) }}</a>
-              {% if p.aw_episode_count %}
-                <span style="font-size:11px;color:#8b949e;margin-left:8px">{{ p.aw_episode_count }} eps{% if p.aw_total_episodes and (p.aw_total_episodes|int) > (p.aw_episode_count|int) %} (+{{ (p.aw_total_episodes|int) - (p.aw_episode_count|int) }} specials){% endif %}</span>
-              {% endif %}
-            </div>
+        {% if row.links %}
+          {% for link in row.links %}
+          <div style="margin-left:8px;margin-top:4px">
+            {% if link.show_part %}
+            <span style="font-weight:600;margin-right:6px">P{{ link.part }}</span>
+            {% endif %}
+            <a href="{{ link.url }}" target="_blank">{{ link.url }}</a>
+            {% if link.episode_meta %}
+            <span style="font-size:11px;color:#8b949e;margin-left:8px">{{ link.episode_meta }}</span>
+            {% endif %}
+          </div>
           {% endfor %}
-        {% elif not ignored %}
-          <form class="map-form" onsubmit="mapSeason(event,{{ show.id }},{{ s.season_number }})">
-            <input type="text" name="aw_link" placeholder="Paste AW link(s) (separate with newline/comma)...">
-            <button type="submit" class="btn btn-primary">Map</button>
-          </form>
+        {% elif not row.ignored %}
+        <form class="map-form" onsubmit="mapItem(event,'{{ row.item_kind }}',{{ row.item_id }},{{ 'null' if row.season_number is none else row.season_number }})">
+          <input type="text" name="aw_link" placeholder="{{ row.map_placeholder }}">
+          <button type="submit" class="btn btn-primary">Map</button>
+        </form>
         {% endif %}
       </div>
       <div class="season-actions">
-        {% if m %}
-          <button class="btn btn-danger" onclick="unmapSeason({{ show.id }},{{ s.season_number }},this)">Remove</button>
-        {% elif not ignored %}
-          <button class="btn" style="color:#8b949e;border-color:#30363d" onclick="ignoreSeason({{ show.id }},{{ s.season_number }},this)">Ignore</button>
+        {% if row.mapped %}
+        <button class="btn btn-danger" onclick="unmapItem('{{ row.item_kind }}',{{ row.item_id }},{{ 'null' if row.season_number is none else row.season_number }},this)">Remove</button>
+        {% elif not row.ignored %}
+        <button class="btn" style="color:#8b949e;border-color:#30363d" onclick="setIgnored('{{ row.item_kind }}',{{ row.item_id }},{{ 'null' if row.season_number is none else row.season_number }},true,this)">Ignore</button>
         {% else %}
-          <button class="btn" style="color:#8b949e;border-color:#30363d" onclick="unignoreSeason({{ show.id }},{{ s.season_number }},this)">Unignore</button>
+        <button class="btn" style="color:#8b949e;border-color:#30363d" onclick="setIgnored('{{ row.item_kind }}',{{ row.item_id }},{{ 'null' if row.season_number is none else row.season_number }},false,this)">Unignore</button>
         {% endif %}
       </div>
     </div>
@@ -354,84 +317,14 @@ a{color:#58a6ff;text-decoration:none}a:hover{text-decoration:underline}
 
     <div class="card-footer">
       <div style="display:flex;gap:4px">
-        <button class="btn discover-btn" data-showid="{{ show.id }}">Discover AW Links</button>
-        <button class="btn btn-primary automap-btn" data-showid="{{ show.id }}" style="font-size:12px">Automap This Show</button>
+        <button class="btn" style="font-size:12px" onclick="discoverItem('{{ card.kind }}',{{ card.id }},this)">Discover AW Links</button>
+        <button class="btn btn-primary" style="font-size:12px" onclick="automapItem('{{ card.kind }}',{{ card.id }},this)">{{ card.automap_label }}</button>
       </div>
-      <button class="btn btn-danger" style="font-size:12px" onclick="deleteShow({{ show.id }},{{ show.title|tojson }},this)">Delete Show</button>
+      <button class="btn btn-danger" style="font-size:12px" onclick='deleteItem({{ card.kind|tojson }},{{ card.id }},{{ card.title|tojson }},this)'>{{ card.delete_label }}</button>
     </div>
-    <div id="disc-{{ show.id }}" class="discover-panel" style="display:none"></div>
+    <div id="{{ card.discover_panel_id }}" class="discover-panel" style="display:none"></div>
   </div>
 </div>
-{% else %}
-{% set movie = item %}
-{% set mapping = movie.mapping %}
-{% set ignored = movie.ignored %}
-<div class="card" data-title="{{ movie.title|lower }}" data-status="{{ 'mapped' if mapping else ('ignored' if ignored else 'unmapped') }}" data-type="movie">
-  <div class="card-header" onclick="toggle(this)">
-    <div>
-      <span class="card-title">{{ movie.title }}</span>
-      {% if movie.alternate_titles %}
-      <div class="alt-titles">{{ movie.alternate_titles[:3]|join(' / ') }}{% if movie.alternate_titles|length > 3 %} +{{ movie.alternate_titles|length - 3 }} more{% endif %}</div>
-      {% endif %}
-    </div>
-    <div class="card-meta">
-      <span class="badge badge-radarr">Radarr</span>
-      {% if movie.year %}<span>{{ movie.year }}</span>{% endif %}
-      {% if ignored %}
-      <span class="badge badge-ignored card-status-badge">ignored</span>
-      {% elif mapping %}
-      <span class="badge badge-{{ mapping.mapping_type }} card-status-badge">{{ mapping.mapping_type }}{% if mapping.mapping_type == 'auto' and mapping.confidence_score %} {{ (mapping.confidence_score * 100) | int }}%{% endif %}</span>
-      {% else %}
-      <span class="badge badge-unmapped card-status-badge">unmapped</span>
-      {% endif %}
-      <span class="arrow">&#9654;</span>
-    </div>
-  </div>
-  <div class="card-body">
-    <div class="season-row{% if ignored %} season-unaired{% endif %}" style="flex-wrap:wrap;gap:10px;padding:8px 0" data-movieid="{{ movie.id }}" data-ignored="{{ 'true' if ignored else 'false' }}">
-      <div style="width:50px;font-weight:600;color:#f0f6fc">Film</div>
-      <div style="width:70px">
-        {% if ignored %}
-        <span class="badge badge-ignored">ignored</span>
-        {% elif mapping %}
-        <span class="badge badge-{{ mapping.mapping_type }}">{{ mapping.mapping_type }}{% if mapping.mapping_type == 'auto' and mapping.confidence_score %} {{ (mapping.confidence_score * 100) | int }}%{% endif %}</span>
-        {% else %}
-        <span style="color:#8b949e">--</span>
-        {% endif %}
-      </div>
-      <div style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">
-        {% if mapping %}
-        <a href="{{ slug_to_url(mapping.aw_link) }}" target="_blank">{{ slug_to_url(mapping.aw_link) }}</a>
-        {% elif ignored %}
-        
-        {% else %}
-        <form class="map-form" onsubmit="mapMovie(event,{{ movie.id }})">
-          <input type="text" name="aw_link" placeholder="Paste AW movie link...">
-          <button type="submit" class="btn btn-primary">Map</button>
-        </form>
-        {% endif %}
-      </div>
-      <div style="display:flex;gap:4px;flex-shrink:0">
-        {% if mapping %}
-        <button class="btn btn-danger" onclick="unmapMovie({{ movie.id }},this)">Remove</button>
-        {% elif not ignored %}
-        <button class="btn" style="color:#8b949e;border-color:#30363d" onclick="ignoreMovie({{ movie.id }},this)">Ignore</button>
-        {% else %}
-        <button class="btn" style="color:#8b949e;border-color:#30363d" onclick="unignoreMovie({{ movie.id }},this)">Unignore</button>
-        {% endif %}
-      </div>
-    </div>
-    <div class="card-footer">
-      <div style="display:flex;gap:4px">
-        <button class="btn movie-discover-btn" data-movieid="{{ movie.id }}" style="font-size:12px">Discover AW Links</button>
-        <button class="btn btn-primary" onclick="automapMovie({{ movie.id }},this)" style="font-size:12px">Automap</button>
-      </div>
-      <div></div>
-    </div>
-    <div id="movie-disc-{{ movie.id }}" class="discover-panel" style="display:none"></div>
-  </div>
-</div>
-{% endif %}
 {% endfor %}
 
 <script>
@@ -560,63 +453,121 @@ async function automapAll(btn){
   }catch(e){_automapLaunched=false;_btnErr(btn,'Automap Library');}
 }
 
-async function unmapSeason(showId,seasonNum,btn){
+function _mapPlaceholder(kind){
+  return kind==='show'
+    ? 'Paste AW link(s) (separate with newline/comma)...'
+    : 'Paste AW movie link...';
+}
+
+function _panelId(kind,id){
+  return 'disc-'+kind+'-'+id;
+}
+
+function _discoverEndpoint(kind,id){
+  return kind==='show' ? '/api/discover/'+id+_kp() : '/api/discover/movie/'+id+_kp();
+}
+
+function _automapEndpoint(kind,id){
+  return kind==='show' ? '/automap/'+id+_kp() : '/automap/movie/'+id+_kp();
+}
+
+function _mapEndpoint(kind,id,seasonNum,link){
+  const suffix=AWC_KEY?'?apikey='+encodeURIComponent(AWC_KEY)+'&aw_link=':'?aw_link=';
+  return kind==='show'
+    ? '/map?show_id='+id+'&season_number='+seasonNum+'&aw_link='+encodeURIComponent(link)
+    : '/map/movie/'+id+suffix+encodeURIComponent(link);
+}
+
+function _unmapEndpoint(kind,id,seasonNum){
+  return kind==='show'
+    ? '/unmap?show_id='+id+'&season_number='+seasonNum
+    : '/unmap/movie/'+id+_kp();
+}
+
+function _ignoreEndpoint(kind,id,seasonNum,ignored){
+  if(kind==='show'){
+    return (ignored?'/ignore-season':'/unignore-season')+'?show_id='+id+'&season_number='+seasonNum;
+  }
+  return (ignored?'/ignore-movie':'/unignore-movie')+'?movie_id='+id;
+}
+
+function _deleteEndpoint(kind,id){
+  return kind==='show' ? '/delete-show?show_id='+id : '/delete-movie?movie_id='+id;
+}
+
+function _buildLinkRows(mappings){
+  let html='';
+  mappings.forEach((p,i)=>{
+    const url=_slugToUrl(p.aw_link||'');
+    html+='<div style="margin-left:8px;margin-top:4px">';
+    if((mappings.length>1))html+='<span style="font-weight:600;margin-right:6px">P'+(p.part||i+1)+'</span>';
+    html+='<a href="'+url+'" target="_blank">'+url+'</a>';
+    if(p.aw_episode_count){
+      html+='<span style="font-size:11px;color:#8b949e;margin-left:8px">'+p.aw_episode_count+' eps';
+      if(p.aw_total_episodes&&Number(p.aw_total_episodes)>Number(p.aw_episode_count)){
+        html+=' (+'+(Number(p.aw_total_episodes)-Number(p.aw_episode_count))+' specials)';
+      }
+      html+='</span>';
+    }
+    html+='</div>';
+  });
+  return html||'<span style="color:#8b949e">mapped</span>';
+}
+
+function _mapFormHtml(kind,id,seasonNum){
+  const seasonArg=seasonNum===null?'null':String(seasonNum);
+  return '<form class="map-form" onsubmit="mapItem(event,\''+kind+'\','+id+','+seasonArg+')">'
+    +'<input type="text" name="aw_link" placeholder="'+_mapPlaceholder(kind)+'">'
+    +'<button type="submit" class="btn btn-primary">Map</button></form>';
+}
+
+function _ignoreButtonHtml(kind,id,seasonNum,ignored){
+  const seasonArg=seasonNum===null?'null':String(seasonNum);
+  if(ignored){
+    return '<button class="btn" style="color:#8b949e;border-color:#30363d" onclick="setIgnored(\''+kind+'\','+id+','+seasonArg+',false,this)">Unignore</button>';
+  }
+  return '<button class="btn" style="color:#8b949e;border-color:#30363d" onclick="setIgnored(\''+kind+'\','+id+','+seasonArg+',true,this)">Ignore</button>';
+}
+
+function _removeButtonHtml(kind,id,seasonNum){
+  const seasonArg=seasonNum===null?'null':String(seasonNum);
+  return '<button class="btn btn-danger" onclick="unmapItem(\''+kind+'\','+id+','+seasonArg+',this)">Remove</button>';
+}
+
+async function unmapItem(kind,id,seasonNum,btn){
   btn.disabled=true;
   try{
-    const r=await fetch('/unmap?show_id='+showId+'&season_number='+seasonNum,{method:'POST',headers:_kh()});
+    const r=await fetch(_unmapEndpoint(kind,id,seasonNum),{method:'POST',headers:_kh()});
     if(!r.ok)throw new Error('unmap failed');
     const row=btn.closest('.season-row');
     row.dataset.mapped='false';
     row.querySelector('.season-status').innerHTML='<span style="color:#8b949e">--</span>';
-    row.querySelector('.season-link').innerHTML=
-      '<form class="map-form" onsubmit="mapSeason(event,'+showId+','+seasonNum+')">'
-      +'<input type="text" name="aw_link" placeholder="Paste AW link(s) (separate with newline/comma)...">'
-      +'<button type="submit" class="btn btn-primary">Map</button></form>';
-    row.querySelector('.season-actions').innerHTML=
-      '<button class="btn" style="color:#8b949e;border-color:#30363d" onclick="ignoreSeason('+showId+','+seasonNum+',this)">Ignore</button>';
+    row.querySelector('.season-link').innerHTML=row.dataset.ignored==='true'?'':_mapFormHtml(kind,id,seasonNum);
+    row.querySelector('.season-actions').innerHTML=_ignoreButtonHtml(kind,id,seasonNum,row.dataset.ignored==='true');
     _refreshCardBadge(row.closest('.card'));
     _refreshGlobalStats();
   }catch(e){_btnErr(btn,'Remove');}
 }
 
-async function ignoreSeason(showId,seasonNum,btn){
+async function setIgnored(kind,id,seasonNum,ignored,btn){
   btn.disabled=true;
   try{
-    const r=await fetch('/ignore-season?show_id='+showId+'&season_number='+seasonNum,{method:'POST',headers:_kh()});
+    const r=await fetch(_ignoreEndpoint(kind,id,seasonNum,ignored),{method:'POST',headers:_kh()});
     if(!r.ok)throw new Error('ignore failed');
     const row=btn.closest('.season-row');
-    row.dataset.ignored='true';
-    row.classList.add('season-unaired');
-    row.querySelector('.season-status').innerHTML='<span class="badge badge-ignored">ignored</span>';
-    row.querySelector('.season-link').innerHTML='';
-    row.querySelector('.season-actions').innerHTML=
-      '<button class="btn" style="color:#8b949e;border-color:#30363d" onclick="unignoreSeason('+showId+','+seasonNum+',this)">Unignore</button>';
+    row.dataset.ignored=ignored?'true':'false';
+    if(ignored)row.classList.add('season-unaired'); else row.classList.remove('season-unaired');
+    row.querySelector('.season-status').innerHTML=ignored
+      ? '<span class="badge badge-ignored">ignored</span>'
+      : '<span style="color:#8b949e">--</span>';
+    row.querySelector('.season-link').innerHTML=ignored?'':_mapFormHtml(kind,id,seasonNum);
+    row.querySelector('.season-actions').innerHTML=_ignoreButtonHtml(kind,id,seasonNum,ignored);
     _refreshCardBadge(row.closest('.card'));
     _refreshGlobalStats();
-  }catch(e){_btnErr(btn,'Ignore');}
+  }catch(e){_btnErr(btn,ignored?'Ignore':'Unignore');}
 }
 
-async function unignoreSeason(showId,seasonNum,btn){
-  btn.disabled=true;
-  try{
-    const r=await fetch('/unignore-season?show_id='+showId+'&season_number='+seasonNum,{method:'POST',headers:_kh()});
-    if(!r.ok)throw new Error('unignore failed');
-    const row=btn.closest('.season-row');
-    row.dataset.ignored='false';
-    row.classList.remove('season-unaired');
-    row.querySelector('.season-status').innerHTML='<span style="color:#8b949e">--</span>';
-    row.querySelector('.season-link').innerHTML=
-      '<form class="map-form" onsubmit="mapSeason(event,'+showId+','+seasonNum+')">'
-      +'<input type="text" name="aw_link" placeholder="Paste AW link(s) (separate with newline/comma)...">'
-      +'<button type="submit" class="btn btn-primary">Map</button></form>';
-    row.querySelector('.season-actions').innerHTML=
-      '<button class="btn" style="color:#8b949e;border-color:#30363d" onclick="ignoreSeason('+showId+','+seasonNum+',this)">Ignore</button>';
-    _refreshCardBadge(row.closest('.card'));
-    _refreshGlobalStats();
-  }catch(e){_btnErr(btn,'Unignore');}
-}
-
-async function mapSeason(evt,showId,seasonNum){
+async function mapItem(evt,kind,id,seasonNum){
   evt.preventDefault();
   const form=evt.target;
   const input=form.querySelector('input[name="aw_link"]');
@@ -625,98 +576,45 @@ async function mapSeason(evt,showId,seasonNum){
   if(!link)return;
   submitBtn.disabled=true;submitBtn.textContent='Mapping...';
   try{
-    const fd=new FormData();
-    fd.append('show_id',showId);fd.append('season_number',seasonNum);fd.append('aw_link',link);
-    const r=await fetch('/map?show_id='+showId+'&season_number='+seasonNum+'&aw_link='+encodeURIComponent(link),{method:'POST',headers:_kh()});
+    const r=await fetch(_mapEndpoint(kind,id,seasonNum,link),{method:'POST',headers:_kh()});
     const d=await r.json();
     if(!(d.updated||d.status==='ok')){_btnErr(submitBtn,'Map');return;}
     const row=form.closest('.season-row');
     row.dataset.mapped='true';
+    row.dataset.ignored='false';
     row.classList.remove('season-unaired');
-    const _aired=row.dataset.aired==='true';
-    row.querySelector('.season-status').innerHTML=_aired
-      ?'<span class="badge badge-manual">manual</span>'
-      :'<span class="badge badge-prerelease">pre</span>';
-    const mappings=d.mappings||[];
-    let linksHtml='';
-    mappings.forEach((p,i)=>{
-      const url=_slugToUrl(p.aw_link);
-      linksHtml+='<div style="margin-left:8px;margin-top:4px">';
-      if(mappings.length>1)linksHtml+='<span style="font-weight:600;margin-right:6px">P'+(p.part||i+1)+'</span>';
-      linksHtml+='<a href="'+url+'" target="_blank">'+url+'</a>';
-      if(p.aw_episode_count)linksHtml+='<span style="font-size:11px;color:#8b949e;margin-left:8px">'+p.aw_episode_count+' eps</span>';
-      linksHtml+='</div>';
-    });
-    row.querySelector('.season-link').innerHTML=linksHtml||'<span style="color:#8b949e">mapped</span>';
-    row.querySelector('.season-actions').innerHTML=
-      '<button class="btn btn-danger" onclick="unmapSeason('+showId+','+seasonNum+',this)">Remove</button>';
+    const aired=row.dataset.aired==='true';
+    const statusHtml=kind==='show'
+      ? (aired?'<span class="badge badge-manual">manual</span>':'<span class="badge badge-prerelease">pre</span>')
+      : '<span style="color:#8b949e">--</span>';
+    row.querySelector('.season-status').innerHTML=statusHtml;
+    const mappings=d.mappings||[d.mapping].filter(Boolean);
+    row.querySelector('.season-link').innerHTML=_buildLinkRows(mappings);
+    row.querySelector('.season-actions').innerHTML=_removeButtonHtml(kind,id,seasonNum);
     _refreshCardBadge(row.closest('.card'));
     _refreshGlobalStats();
   }catch(e){_btnErr(submitBtn,'Map');}
 }
 
-async function deleteShow(showId,title,btn){
-  if(!confirm('Delete '+title+'? Sonarr sync will re-add it.'))return;
+async function deleteItem(kind,id,title,btn){
+  if(!confirm('Delete '+title+'? '+(kind==='show'?'Sonarr':'Radarr')+' sync will re-add it.'))return;
   btn.disabled=true;
   try{
-    const r=await fetch('/delete-show?show_id='+showId,{method:'POST',headers:_kh()});
+    const r=await fetch(_deleteEndpoint(kind,id),{method:'POST',headers:_kh()});
     if(!r.ok)throw new Error('delete failed');
     btn.closest('.card').remove();
-  }catch(e){_btnErr(btn,'Delete Show');}
+    _refreshGlobalStats();
+  }catch(e){_btnErr(btn,kind==='show'?'Delete Show':'Delete Movie');}
 }
 
-async function mapMovie(evt,movieId){
-  evt.preventDefault();
-  const form=evt.target;
-  const input=form.querySelector('input[name="aw_link"]');
-  const submitBtn=form.querySelector('button[type="submit"]');
-  const link=input.value.trim();
-  if(!link)return;
-  submitBtn.disabled=true;submitBtn.textContent='Mapping...';
-  try{
-    const fd=new FormData();fd.append('aw_link',link);
-    const r=await fetch('/map/movie/'+movieId+_kp()+'&aw_link='+encodeURIComponent(link),{method:'POST',headers:_kh()});
-    const d=await r.json();
-    if(!(d.updated||d.status==='ok')){_btnErr(submitBtn,'Map');return;}
-    setTimeout(()=>location.reload(),500);
-  }catch(e){_btnErr(submitBtn,'Map');}
-}
-
-async function unmapMovie(movieId,btn){
-  btn.disabled=true;
-  try{
-    const r=await fetch('/unmap/movie/'+movieId+_kp(),{method:'POST',headers:_kh()});
-    if(!r.ok)throw new Error('unmap failed');
-    setTimeout(()=>location.reload(),300);
-  }catch(e){_btnErr(btn,'Remove');}
-}
-
-async function ignoreMovie(movieId,btn){
-  btn.disabled=true;
-  try{
-    const r=await fetch('/ignore-movie?movie_id='+movieId,{method:'POST',headers:_kh()});
-    if(!r.ok)throw new Error('ignore failed');
-    setTimeout(()=>location.reload(),300);
-  }catch(e){_btnErr(btn,'Ignore');}
-}
-
-async function unignoreMovie(movieId,btn){
-  btn.disabled=true;
-  try{
-    const r=await fetch('/unignore-movie?movie_id='+movieId,{method:'POST',headers:_kh()});
-    if(!r.ok)throw new Error('unignore failed');
-    setTimeout(()=>location.reload(),300);
-  }catch(e){_btnErr(btn,'Unignore');}
-}
-
-async function discoverMovie(movieId,btn){
-  const panel=document.getElementById('movie-disc-'+movieId);
+async function discoverItem(kind,id,btn){
+  const panel=document.getElementById(_panelId(kind,id));
   if(panel.style.display==='block'){panel.style.display='none';return;}
   panel.style.display='block';
   panel.innerHTML=_statusLine('Searching AnimeWorld...','discover');
   btn.disabled=true;
   try{
-    const r=await fetch('/api/discover/movie/'+movieId+_kp());
+    const r=await fetch(_discoverEndpoint(kind,id));
     const data=await r.json();
     const links=(data.links||data.results||[]).map(l=>({link:l.link||l.url||_slugToUrl(l.aw_link||l.slug||''),eps:l.eps||l.aw_episode_count||0}));
     if(!links||links.length===0){panel.innerHTML='<span style="color:#8b949e">No results found</span>';return;}
@@ -725,34 +623,44 @@ async function discoverMovie(movieId,btn){
       html+=_discoverRow(l.link,l.eps+' eps',l.link);
     }
     panel.innerHTML=html;
-  }catch(e){panel.innerHTML='<span style="color:#f85149">Error: '+e.message+'</span>';}
-  finally{btn.disabled=false;}
+  }catch(e){
+    panel.innerHTML='<span style="color:#f85149">Error: '+e.message+'</span>';
+  }finally{btn.disabled=false;}
 }
 
-async function automapMovie(movieId,btn){
-  const panel=document.getElementById('movie-disc-'+movieId);
+async function automapItem(kind,id,btn){
+  const panel=document.getElementById(_panelId(kind,id));
   panel.style.display='block';
-  panel.innerHTML='<em style="color:#8b949e">Running automap...</em>';
+  panel.innerHTML=_statusLine('Running automap with confidence scoring...','automap');
   btn.disabled=true;
   try{
-    const r=await fetch('/automap/movie/'+movieId+_kp(),{method:'POST',headers:_kh()});
+    const r=await fetch(_automapEndpoint(kind,id),{method:'POST',headers:_kh()});
     const data=await r.json();
-    if(data.status==='success'){
-      panel.innerHTML='<div style="color:#3fb950;font-weight:bold">✓ Mapped!</div><div style="color:#8b949e;margin-top:4px">'+data.mapping?.aw_link+'</div>';
-      setTimeout(()=>location.reload(),1500);
-    }else if(data.status==='ambiguous'){
-      let html='<div style="color:#d29922;font-weight:bold">Multiple candidates — map manually</div>';
-      if(data.candidates){for(const c of data.candidates){const url=_slugToUrl(c.aw_link||'');html+='<div style="font-size:12px;margin-top:4px"><a href="'+url+'" target="_blank">'+url+'</a> <span style="color:#8b949e">'+((c.confidence_score||0)*100).toFixed(1)+'%</span></div>';}}
-      panel.innerHTML=html;
-    }else if(data.status==='not_found'){
-      panel.innerHTML='<span style="color:#8b949e">No match found on AnimeWorld</span>';
-    }else if(data.status==='already_mapped'){
-      panel.innerHTML='<span style="color:#8b949e">Already mapped</span>';
-    }else{
-      panel.innerHTML='<span style="color:#f85149">'+(data.message||'Error')+'</span>';
+    if(kind==='movie'){
+      if(data.status==='success'){
+        panel.innerHTML='<div class="automap-note-title success">Successfully mapped!</div><div class="automap-note-link"><a href="'+_slugToUrl(data.mapping?.aw_link||'')+'" target="_blank">'+_slugToUrl(data.mapping?.aw_link||'')+'</a></div>';
+        setTimeout(()=>location.reload(),1200);
+      }else if(data.status==='ambiguous'){
+        let html='<div class="automap-note-title">Multiple high-confidence candidates found!</div><div class="automap-note-subtitle">Please use Discover AW Links and manually copy and paste the correct one.</div>';
+        for(const c of (data.candidates||[])){
+          const url=_slugToUrl(c.aw_link||'');
+          const meta=((c.aw_episode_count||0)+' eps | confidence: '+(((c.confidence_score||0)*100).toFixed(1))+'%');
+          html+=_discoverRow(url,meta,url);
+        }
+        panel.innerHTML=html;
+      }else if(data.status==='not_found'){
+        panel.innerHTML='<span style="color:#8b949e">No match found on AnimeWorld</span>';
+      }else if(data.status==='already_mapped'){
+        panel.innerHTML='<span style="color:#8b949e">Already mapped</span>';
+      }else{
+        panel.innerHTML='<span style="color:#f85149">'+(data.message||'Error')+'</span>';
+      }
+      return;
     }
-  }catch(e){panel.innerHTML='<span style="color:#f85149">Error: '+e.message+'</span>';}
-  finally{btn.disabled=false;}
+    renderAutomapPanel(id,data);
+  }catch(e){
+    panel.innerHTML='<span style="color:#f85149">Error: '+e.message+'</span>';
+  }finally{btn.disabled=false;}
 }
 
 document.addEventListener('click',function(e){
@@ -772,113 +680,66 @@ document.addEventListener('click',function(e){
       setTimeout(()=>{e.target.textContent='Copy'},1500);
     }
   }
-  if(e.target.classList.contains('discover-btn')){
-    const id=e.target.dataset.showid;
-    discover(id,e.target);
-  }
-  if(e.target.classList.contains('automap-btn')){
-    const id=e.target.dataset.showid;
-    automap(id,e.target);
-  }
-  if(e.target.classList.contains('movie-discover-btn')){
-    const id=e.target.dataset.movieid;
-    discoverMovie(id,e.target);
-  }
 });
 
-async function discover(showId,btn){
-  const panel=document.getElementById('disc-'+showId);
-  if(panel.style.display==='block'){panel.style.display='none';return}
-  panel.style.display='block';
-  panel.innerHTML=_statusLine('Searching AnimeWorld...','discover');
-  btn.disabled=true;
-  try{
-    const r=await fetch('/api/discover/'+showId+_kp());
-    const data=await r.json();
-    const links=(data.links||data.results||[]).map(l=>({link:l.link||l.url||_slugToUrl(l.aw_link||l.slug||''),eps:l.eps||l.aw_episode_count||0}));
-    if(!links||links.length===0){
-      panel.innerHTML='<span style="color:#8b949e">No results found</span>';
-      return;
+function renderAutomapPanel(showId,data){
+  const panel=document.getElementById(_panelId('show',showId));
+  if(!panel)return;
+  if(data.status==='success'){
+    let html='<div class="automap-note-title success">Successfully mapped!</div>';
+    let meta='';
+    if(data.mapped_seasons&&data.mapped_seasons.length>0){
+      meta+='<span>Seasons: '+data.mapped_seasons.join(', ')+'</span>';
     }
-    let html='';
-    for(const l of links){
-      html+=_discoverRow(l.link,l.eps+' eps',l.link);
+    if(data.mapping&&data.mapping.confidence_score){
+      meta+='<span>Confidence: '+(data.mapping.confidence_score*100).toFixed(1)+'%</span>';
+    }
+    if(meta){
+      html+='<div class="automap-note-meta">'+meta+'</div>';
+    }
+    if(data.mapping&&data.mapping.aw_link){
+      const mapUrl=_slugToUrl(data.mapping.aw_link);
+      html+='<div class="automap-note-link"><a href="'+mapUrl+'" target="_blank">'+mapUrl+'</a></div>';
     }
     panel.innerHTML=html;
-  }catch(e){
-    panel.innerHTML='<span style="color:#f85149">Error: '+e.message+'</span>';
-  }finally{btn.disabled=false}
-}
-
-async function automap(showId,btn){
-  const panel=document.getElementById('disc-'+showId);
-  if(panel.style.display==='block'){panel.style.display='none';return}
-  panel.style.display='block';
-  panel.innerHTML=_statusLine('Running automap with confidence scoring...','automap');
-  btn.disabled=true;
-  try{
-    const r=await fetch('/automap/'+showId+_kp(),{method:'POST',headers:_kh()});
-    const data=await r.json();
-
-    if(data.status==='success'){
-      let html='<div class="automap-note-title success">Successfully mapped!</div>';
-      let meta='';
-      if(data.mapped_seasons&&data.mapped_seasons.length>0){
-        meta+='<span>Seasons: '+data.mapped_seasons.join(', ')+'</span>';
-      }
-      if(data.mapping&&data.mapping.confidence_score){
-        meta+='<span>Confidence: '+(data.mapping.confidence_score*100).toFixed(1)+'%</span>';
-      }
-      if(meta){
-        html+='<div class="automap-note-meta">'+meta+'</div>';
-      }
-      if(data.mapping&&data.mapping.aw_link){
-        const mapUrl=_slugToUrl(data.mapping.aw_link);
-        html+='<div class="automap-note-link"><a href="'+mapUrl+'" target="_blank">'+mapUrl+'</a></div>';
-      }
-      panel.innerHTML=html;
-      // Reload page after 2 seconds to show updated mapping
-      setTimeout(()=>location.reload(),2000);
-    }else if(data.status==='ambiguous'){
-      let html='<div class="automap-note-title">Multiple high-confidence candidates found!</div>';
-      html+='<div class="automap-note-subtitle">Please use Discover AW Links and manually copy and paste the correct one.</div>';
-      if(data.candidates&&data.candidates.length>0){
-        for(const c of data.candidates){
-          let meta=(c.aw_episode_count||0)+' eps';
-          if(c.confidence_score){
-            meta+=' | confidence: '+(c.confidence_score*100).toFixed(1)+'%';
-          }
-          html+=_discoverRow(_slugToUrl(c.aw_link||''),meta,c.aw_link,'#d29922');
+    setTimeout(()=>location.reload(),2000);
+  }else if(data.status==='ambiguous'){
+    let html='<div class="automap-note-title">Multiple high-confidence candidates found!</div>';
+    html+='<div class="automap-note-subtitle">Please use Discover AW Links and manually copy and paste the correct one.</div>';
+    if(data.candidates&&data.candidates.length>0){
+      for(const c of data.candidates){
+        let meta=(c.aw_episode_count||0)+' eps';
+        if(c.confidence_score){
+          meta+=' | confidence: '+(c.confidence_score*100).toFixed(1)+'%';
         }
+        html+=_discoverRow(_slugToUrl(c.aw_link||''),meta,c.aw_link,'#d29922');
       }
-      panel.innerHTML=html;
-    }else if(data.status==='partial'){
-      let html='<div class="automap-note-title">Partially mapped</div>';
-      html+='<div class="automap-note-subtitle">Some seasons were mapped automatically, but a few still need manual review.</div>';
-      let meta='';
-      if(data.mapped_seasons&&data.mapped_seasons.length>0){
-        meta+='<span>Mapped: '+data.mapped_seasons.join(', ')+'</span>';
-      }
-      if(data.ambiguous&&data.ambiguous.length>0){
-        meta+='<span>Needs review: '+data.ambiguous.map(x=>'S'+String(x.season).padStart(2,'0')).join(', ')+'</span>';
-      }
-      if(meta){
-        html+='<div class="automap-note-meta">'+meta+'</div>';
-      }
-      panel.innerHTML=html;
-      setTimeout(()=>location.reload(),2000);
-    }else if(data.status==='not_found'){
-      panel.innerHTML='<span style="color:#8b949e">No high-confidence matches found on AnimeWorld</span>';
-    }else if(data.status==='already_mapped'){
-      panel.innerHTML='<span style="color:#8b949e">All seasons already mapped</span>';
-    }else if(data.status==='error'){
-      panel.innerHTML='<span style="color:#f85149">Error: '+(data.message||'Unknown error')+'</span>';
-    }else{
-      panel.innerHTML='<span style="color:#8b949e">'+data.message+'</span>';
     }
-  }catch(e){
-    panel.innerHTML='<span style="color:#f85149">Error: '+e.message+'</span>';
-  }finally{btn.disabled=false}
+    panel.innerHTML=html;
+  }else if(data.status==='partial'){
+    let html='<div class="automap-note-title">Partially mapped</div>';
+    html+='<div class="automap-note-subtitle">Some seasons were mapped automatically, but a few still need manual review.</div>';
+    let meta='';
+    if(data.mapped_seasons&&data.mapped_seasons.length>0){
+      meta+='<span>Mapped: '+data.mapped_seasons.join(', ')+'</span>';
+    }
+    if(data.ambiguous&&data.ambiguous.length>0){
+      meta+='<span>Needs review: '+data.ambiguous.map(x=>'S'+String(x.season).padStart(2,'0')).join(', ')+'</span>';
+    }
+    if(meta){
+      html+='<div class="automap-note-meta">'+meta+'</div>';
+    }
+    panel.innerHTML=html;
+    setTimeout(()=>location.reload(),2000);
+  }else if(data.status==='not_found'){
+    panel.innerHTML='<span style="color:#8b949e">No high-confidence matches found on AnimeWorld</span>';
+  }else if(data.status==='already_mapped'){
+    panel.innerHTML='<span style="color:#8b949e">All seasons already mapped</span>';
+  }else if(data.status==='error'){
+    panel.innerHTML='<span style="color:#f85149">Error: '+(data.message||'Unknown error')+'</span>';
+  }else{
+    panel.innerHTML='<span style="color:#8b949e">'+data.message+'</span>';
+  }
 }
 
 function fmtAgo(ts){

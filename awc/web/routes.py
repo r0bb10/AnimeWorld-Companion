@@ -1,5 +1,6 @@
 """Minimal route surface for the clean rebuild."""
 
+import logging
 import os
 import threading
 import time
@@ -8,6 +9,7 @@ from fastapi import APIRouter, Body, Depends, HTTPException, Query, Request
 from fastapi.responses import HTMLResponse, Response, StreamingResponse
 
 from ..core.config import settings
+from ..core.log_events import log_block
 from ..core.logging import get_logger
 from ..services.catalog_service import (
     build_catalog_snapshot,
@@ -45,6 +47,7 @@ from ..services.mutation_service import (
     ignore_movie,
     map_movie,
     map_show_season,
+    remove_movie,
     remove_show,
     unmap_movie,
     unmap_show_season,
@@ -143,7 +146,13 @@ def api_ignore_movie(
     result = ignore_movie(movie_id, True)
     if not result["updated"]:
         raise HTTPException(status_code=404, detail="Movie not found")
-    logger.info("Movie ignored: movie_id=%s", movie_id)
+    movie = build_movie_snapshot(movie_id)
+    log_block(
+        logger,
+        logging.INFO,
+        str((movie or {}).get("title") or f"movie:{movie_id}"),
+        ["ignored"],
+    )
     return result
 
 
@@ -155,16 +164,43 @@ def api_unignore_movie(
     result = ignore_movie(movie_id, False)
     if not result["updated"]:
         raise HTTPException(status_code=404, detail="Movie not found")
-    logger.info("Movie unignored: movie_id=%s", movie_id)
+    movie = build_movie_snapshot(movie_id)
+    log_block(
+        logger,
+        logging.INFO,
+        str((movie or {}).get("title") or f"movie:{movie_id}"),
+        ["unignored"],
+    )
     return result
 
 
 @api_router.post("/delete-show", tags=["Mutation"])
 def api_delete_show(show_id: int, _: str = Depends(require_api_key)) -> dict:
+    show = build_show_snapshot(show_id)
     result = remove_show(show_id)
     if not result["removed"]:
         raise HTTPException(status_code=404, detail="Show not found")
-    logger.info("Show deleted: show_id=%s", show_id)
+    log_block(
+        logger,
+        logging.INFO,
+        str((show or {}).get("title") or f"show:{show_id}"),
+        ["deleted"],
+    )
+    return result
+
+
+@api_router.post("/delete-movie", tags=["Mutation"])
+def api_delete_movie(movie_id: int, _: str = Depends(require_api_key)) -> dict:
+    movie = build_movie_snapshot(movie_id)
+    result = remove_movie(movie_id)
+    if not result["removed"]:
+        raise HTTPException(status_code=404, detail="Movie not found")
+    log_block(
+        logger,
+        logging.INFO,
+        str((movie or {}).get("title") or f"movie:{movie_id}"),
+        ["deleted"],
+    )
     return result
 
 

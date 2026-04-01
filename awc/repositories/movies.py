@@ -230,3 +230,9 @@ def set_movie_ignored(movie_id: int, ignored: bool) -> bool:
             (1 if ignored else 0, movie_id),
         )
     return bool(cursor.rowcount)
+
+
+def delete_movie(movie_id: int) -> bool:
+    with get_db(write=True) as conn:
+        cursor = conn.execute("DELETE FROM movies WHERE id = ?", (movie_id,))
+    return bool(cursor.rowcount)

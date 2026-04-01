@@ -6,7 +6,7 @@ from ..repositories.mappings import (
     replace_movie_mapping,
     replace_show_mapping,
 )
-from ..repositories.movies import get_movie_detail, set_movie_ignored
+from ..repositories.movies import delete_movie, get_movie_detail, set_movie_ignored
 from ..repositories.shows import delete_show, get_show_detail, set_season_ignored
 
 
@@ -112,3 +112,8 @@ def ignore_show_season(show_id: int, season_number: int, ignored: bool = True) -
 def remove_show(show_id: int) -> dict:
     removed = delete_show(show_id)
     return {"removed": removed, "show_id": show_id}
+
+
+def remove_movie(movie_id: int) -> dict:
+    removed = delete_movie(movie_id)
+    return {"removed": removed, "movie_id": movie_id}

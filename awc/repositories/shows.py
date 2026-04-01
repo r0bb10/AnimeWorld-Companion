@@ -1,17 +1,7 @@
 """Show repository for the clean rebuild."""
 
-import re
-
 from .db import get_db
-
-
-def _normalize_title(title: str) -> str:
-    if not title:
-        return ""
-    title = title.lower().strip()
-    title = re.sub(r"[^\w\s]", " ", title)
-    title = re.sub(r"\s+", " ", title)
-    return title.strip()
+from .title_normalization import normalize_title
 
 
 def count_shows() -> int:
@@ -141,7 +131,7 @@ def get_show_detail(show_id: int) -> dict | None:
 
 
 def find_show_by_title(title: str) -> dict | None:
-    normalized = _normalize_title(title)
+    normalized = normalize_title(title)
     if not normalized:
         return None
 

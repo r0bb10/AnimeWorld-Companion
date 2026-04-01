@@ -1,20 +1,13 @@
 """Write-side repositories for manager sync."""
 
 from datetime import UTC, datetime
-import re
 
 from .db import get_db
+from .title_normalization import normalize_title
 
 
 def _now() -> str:
     return datetime.now(UTC).isoformat()
-
-
-def _normalize_title(title: str) -> str:
-    title = (title or "").lower().strip()
-    title = re.sub(r"[^\w\s]", " ", title)
-    title = re.sub(r"\s+", " ", title)
-    return title.strip()
 
 
 def set_sync_meta(key: str, value: str) -> None:
@@ -105,7 +98,7 @@ def replace_show_alternate_titles(show_id: int, titles: list[dict]) -> None:
             title = item.get("title")
             if not title:
                 continue
-            normalized = _normalize_title(title)
+            normalized = normalize_title(title)
             if normalized in seen:
                 continue
             seen.add(normalized)
@@ -213,7 +206,7 @@ def replace_movie_alternate_titles(movie_id: int, titles: list[dict]) -> None:
             title = item.get("title")
             if not title:
                 continue
-            normalized = _normalize_title(title)
+            normalized = normalize_title(title)
             if normalized in seen:
                 continue
             seen.add(normalized)

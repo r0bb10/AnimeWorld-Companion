@@ -1,17 +1,7 @@
 """Movie repository for the clean rebuild."""
 
-import re
-
 from .db import get_db
-
-
-def _normalize_title(title: str) -> str:
-    if not title:
-        return ""
-    title = title.lower().strip()
-    title = re.sub(r"[^\w\s]", " ", title)
-    title = re.sub(r"\s+", " ", title)
-    return title.strip()
+from .title_normalization import normalize_title
 
 
 def count_movies() -> int:
@@ -104,7 +94,7 @@ def get_movie_detail(movie_id: int) -> dict | None:
 
 
 def find_movie_by_title(title: str) -> dict | None:
-    normalized = _normalize_title(title)
+    normalized = normalize_title(title)
     if not normalized:
         return None
 

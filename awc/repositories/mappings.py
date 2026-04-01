@@ -2,7 +2,12 @@
 
 from datetime import UTC, datetime
 
+from ..integrations.animeworld_client import AnimeWorldClient
 from .db import get_db
+
+
+def _normalize_aw_link(value: str) -> str:
+    return AnimeWorldClient().url_to_slug((value or "").strip())
 
 
 def count_show_mappings() -> int:
@@ -73,6 +78,7 @@ def list_show_mappings(show_id: int, season_number: int | None = None) -> list[d
 
 
 def get_mapping_scenario(show_id: int, aw_link: str) -> str:
+    aw_link = _normalize_aw_link(aw_link)
     with get_db() as conn:
         row = conn.execute(
             """
@@ -129,6 +135,7 @@ def replace_show_mapping(
     aw_category: str = "",
     linked_with_season: int | None = None,
 ) -> list[dict]:
+    aw_link = _normalize_aw_link(aw_link)
     now = datetime.now(UTC).isoformat()
     with get_db(write=True) as conn:
         conn.execute(
@@ -193,6 +200,7 @@ def replace_movie_mapping(
     aw_status: str = "",
     aw_category: str = "",
 ) -> dict | None:
+    aw_link = _normalize_aw_link(aw_link)
     now = datetime.now(UTC).isoformat()
     with get_db(write=True) as conn:
         conn.execute("DELETE FROM aw_movie_mappings WHERE movie_id = ?", (movie_id,))
@@ -285,7 +293,7 @@ def replace_show_mappings_auto(
                     show_id,
                     season_number,
                     item.get("part", 1),
-                    item.get("aw_link", ""),
+                    _normalize_aw_link(item.get("aw_link", "")),
                     item.get("aw_title", ""),
                     item.get("aw_episode_count", 0),
                     item.get("aw_total_episodes", 0),
@@ -312,6 +320,7 @@ def replace_movie_mapping_auto(
     confidence_score: float = 0.0,
     confidence_factors: str | None = None,
 ) -> dict | None:
+    aw_link = _normalize_aw_link(aw_link)
     now = datetime.now(UTC).isoformat()
     with get_db(write=True) as conn:
         conn.execute("DELETE FROM aw_movie_mappings WHERE movie_id = ?", (movie_id,))

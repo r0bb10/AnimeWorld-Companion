@@ -260,3 +260,27 @@ def sync_all() -> dict:
 
 def sync_status() -> dict:
     return dict(_sync_status)
+
+
+def sync_now_sonarr() -> dict:
+    with _sync_lock:
+        _sync_status["running"] = True
+        _sync_status["last_started_at"] = datetime.now(UTC).isoformat()
+        try:
+            sonarr_count = sync_sonarr_library()
+            return {"sonarr": sonarr_count, "radarr": 0}
+        finally:
+            _sync_status["running"] = False
+            _sync_status["last_finished_at"] = datetime.now(UTC).isoformat()
+
+
+def sync_now_radarr() -> dict:
+    with _sync_lock:
+        _sync_status["running"] = True
+        _sync_status["last_started_at"] = datetime.now(UTC).isoformat()
+        try:
+            radarr_count = sync_radarr_library()
+            return {"sonarr": 0, "radarr": radarr_count}
+        finally:
+            _sync_status["running"] = False
+            _sync_status["last_finished_at"] = datetime.now(UTC).isoformat()

@@ -138,6 +138,14 @@ def build_dashboard_context() -> dict:
     movies = [_movie_payload(movie["id"]) for movie in catalog["movies"]]
     show_items = [item for item in shows if item]
     movie_items = [item for item in movies if item]
+    library_items = [
+        {**item, "_kind": "show"}
+        for item in show_items
+    ] + [
+        {**item, "_kind": "movie"}
+        for item in movie_items
+    ]
+    library_items.sort(key=lambda item: (str(item.get("title") or "").casefold(), item.get("_kind") != "show"))
 
     mapped_count = 0
     unmapped_count = 0
@@ -162,6 +170,7 @@ def build_dashboard_context() -> dict:
     return {
         "shows": show_items,
         "movies": movie_items,
+        "library_items": library_items,
         "mapped_count": mapped_count,
         "unmapped_count": unmapped_count,
         "automap_running": bool(automap_status().get("running")),

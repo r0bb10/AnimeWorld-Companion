@@ -40,7 +40,7 @@ a{color:#58a6ff;text-decoration:none}a:hover{text-decoration:underline}
 .badge-prerelease{background:#6e40c9;color:#fff}
 .badge-ignored{background:#30363d;color:#8b949e}
 .badge-sonarr{background:#2193b5;color:#fff}
-.badge-radarr{background:#ffc230;color:#111827}
+.badge-radarr{background:#ffc230;color:#fff}
 
 .card-body{display:none;padding:0 14px 12px;border-top:1px solid #21262d}
 .card.open .card-body{display:block}
@@ -62,6 +62,10 @@ a{color:#58a6ff;text-decoration:none}a:hover{text-decoration:underline}
 .btn-warning:hover{background:#e29a3a}
 .btn-sync{background:#1f6feb;border-color:#1f6feb;color:#fff}
 .btn-sync:hover{background:#388bfd}
+.btn-sonarr{background:#2193b5;border-color:#2193b5;color:#fff}
+.btn-sonarr:hover{filter:brightness(1.08)}
+.btn-radarr{background:#ffc230;border-color:#ffc230;color:#fff}
+.btn-radarr:hover{filter:brightness(1.02)}
 .btn-warn{background:#9e6a03;border-color:#9e6a03;color:#fff}
 .btn-warn:hover{background:#bb8009}
 
@@ -162,7 +166,8 @@ a{color:#58a6ff;text-decoration:none}a:hover{text-decoration:underline}
     <div class="header">
   <h1>AnimeWorld Companion</h1>
   <div class="header-actions">
-    <button class="btn btn-sync" id="sync-btn" onclick="syncNow(this)">Sync Sonarr</button>
+    <button class="btn btn-sonarr" id="sync-sonarr-btn" onclick="syncManager(this,'sonarr')">Sync Sonarr</button>
+    <button class="btn btn-radarr" id="sync-radarr-btn" onclick="syncManager(this,'radarr')">Sync Radarr</button>
     <button class="btn btn-primary" id="automap-all-btn" onclick="automapAll(this)" {% if automap_running %}disabled{% endif %}>
       {{ "Auto-mapping..." if automap_running else "Automap Library" }}
     </button>
@@ -215,14 +220,16 @@ a{color:#58a6ff;text-decoration:none}a:hover{text-decoration:underline}
 
 
 
-{% if shows|length == 0 %}
+{% if library_items|length == 0 %}
 <div style="text-align:center;padding:48px;color:#8b949e">
   <p style="font-size:16px">No shows in database yet.</p>
-  <p>Configure Sonarr and click "Sync Sonarr" to populate.</p>
+  <p>Configure Sonarr or Radarr and click sync to populate.</p>
 </div>
 {% endif %}
 
-{% for show in shows %}
+{% for item in library_items %}
+{% if item._kind == 'show' %}
+{% set show = item %}
 {% set mappings = show.mappings %}
 {% set ns = namespace(total=0, mapped=0, ignored=0, unaired=0) %}
 {% for s in show.seasons if s.season_number > 0 %}
@@ -332,10 +339,8 @@ a{color:#58a6ff;text-decoration:none}a:hover{text-decoration:underline}
     <div id="disc-{{ show.id }}" class="discover-panel" style="display:none"></div>
   </div>
 </div>
-{% endfor %}
-
-{% if movies is defined and movies|length > 0 %}
-{% for movie in movies %}
+{% else %}
+{% set movie = item %}
 {% set mapping = movie.mapping %}
 <div class="card" data-title="{{ movie.title|lower }}" data-status="{{ 'mapped' if mapping else 'unmapped' }}" data-type="movie">
   <div class="card-header" onclick="toggle(this)">
@@ -392,8 +397,8 @@ a{color:#58a6ff;text-decoration:none}a:hover{text-decoration:underline}
     <div id="movie-disc-{{ movie.id }}" class="discover-panel" style="display:none"></div>
   </div>
 </div>
-{% endfor %}
 {% endif %}
+{% endfor %}
 
 <script>
 const AWC_KEY={{ api_key|tojson }};
@@ -473,10 +478,16 @@ function _btnErr(btn,label){
 
 function _fd(obj){const f=new FormData();Object.entries(obj).forEach(([k,v])=>f.append(k,v));return f;}
 
-async function syncNow(btn){
+async function syncManager(btn,manager){
+  const label=manager==='radarr'?'Sync Radarr':'Sync Sonarr';
   btn.disabled=true;btn.textContent='Syncing...';
-  try{await fetch('/sync',{method:'POST',headers:_kh()});}catch(e){_btnErr(btn,'Sync Sonarr');return;}
-  btn.textContent='Sync Sonarr';btn.disabled=false;
+  try{
+    await fetch('/sync/'+manager,{method:'POST',headers:_kh()});
+  }catch(e){
+    _btnErr(btn,label);
+    return;
+  }
+  btn.textContent=label;btn.disabled=false;
 }
 
 let _automapLaunched=false;

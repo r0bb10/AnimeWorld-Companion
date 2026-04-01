@@ -8,6 +8,7 @@ from fastapi import APIRouter, Body, Depends, HTTPException, Query, Request
 from fastapi.responses import HTMLResponse, Response, StreamingResponse
 
 from ..core.config import settings
+from ..core.logging import get_logger
 from ..services.catalog_service import (
     build_catalog_snapshot,
     build_movie_snapshot,
@@ -54,10 +55,11 @@ from ..services.rss_service import build_rss_snapshot, clear_rss_cache
 from ..services.sync_service import build_sync_overview
 from ..services.torznab_service import build_caps_xml, build_search_xml
 from ..services.webhook_service import normalize_webhook
-from ..services.sync_runner_service import sync_all, sync_single_movie, sync_single_show, sync_status
+from ..services.sync_runner_service import sync_all, sync_now_radarr, sync_now_sonarr, sync_single_movie, sync_single_show, sync_status
 from .auth import require_api_key
 
 api_router = APIRouter()
+logger = get_logger(__name__)
 
 
 @api_router.get("/", tags=["UI"])
@@ -438,16 +440,55 @@ def manager_webhook(
     if not normalized["accepted"]:
         raise HTTPException(status_code=400, detail="Unsupported webhook payload")
     if normalized["event_family"] == "add" and normalized.get("manager_entity_id"):
-        if normalized["manager"] == "sonarr":
-            sync_single_show(int(normalized["manager_entity_id"]))
-        elif normalized["manager"] == "radarr":
-            sync_single_movie(int(normalized["manager_entity_id"]))
+        manager = str(normalized.get("manager") or "")
+        manager_entity_id = int(normalized["manager_entity_id"])
+
+        def _run() -> None:
+            try:
+                if manager == "sonarr":
+                    show_id = sync_single_show(manager_entity_id)
+                    if show_id:
+                        result = automap_show(int(show_id), force=False)
+                        logger.info(
+                            "Webhook Sonarr add sync+automap completed: manager_id=%s show_id=%s status=%s",
+                            manager_entity_id,
+                            show_id,
+                            result.get("status"),
+                        )
+                    else:
+                        logger.warning("Webhook Sonarr add sync failed: manager_id=%s", manager_entity_id)
+                elif manager == "radarr":
+                    movie_id = sync_single_movie(manager_entity_id)
+                    if movie_id:
+                        result = automap_movie(int(movie_id), force=False)
+                        logger.info(
+                            "Webhook Radarr add sync+automap completed: manager_id=%s movie_id=%s status=%s",
+                            manager_entity_id,
+                            movie_id,
+                            result.get("status"),
+                        )
+                    else:
+                        logger.warning("Webhook Radarr add sync failed: manager_id=%s", manager_entity_id)
+            except Exception:
+                logger.exception("Webhook add handler failed: manager=%s manager_id=%s", manager, manager_entity_id)
+
+        threading.Thread(target=_run, name=f"awc-webhook-{manager or 'manager'}", daemon=True).start()
     return normalized
 
 
 @api_router.post("/sync", tags=["Integration"])
 def manual_sync(_: str = Depends(require_api_key)) -> dict:
     return {"status": "ok", "result": sync_all()}
+
+
+@api_router.post("/sync/sonarr", tags=["Integration"])
+def manual_sync_sonarr(_: str = Depends(require_api_key)) -> dict:
+    return {"status": "ok", "result": sync_now_sonarr()}
+
+
+@api_router.post("/sync/radarr", tags=["Integration"])
+def manual_sync_radarr(_: str = Depends(require_api_key)) -> dict:
+    return {"status": "ok", "result": sync_now_radarr()}
 
 
 @api_router.api_route("/api", methods=["GET", "POST"], tags=["Indexer"])

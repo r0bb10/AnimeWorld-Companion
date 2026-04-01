@@ -80,9 +80,13 @@ def _build_scored_candidates(show: dict, season: dict, candidates: list[dict], w
     return scored
 
 
-def _detect_split_cour_pair(season_scores: list[dict], target_count: int) -> list[dict] | None:
+def _detect_split_cour_pair(show: dict, season: dict, season_scores: list[dict], want_dubbed: bool) -> tuple[list[dict], float, dict] | None:
+    target_count = int(season.get("episode_count") or 0)
     if not target_count:
         return None
+
+    season_end = season.get("air_date_end") or ""
+    best_pair: tuple[list[dict], float, dict] | None = None
 
     for first in season_scores:
         first_count = int(first.get("aw_episode_count") or 0)
@@ -90,6 +94,7 @@ def _detect_split_cour_pair(season_scores: list[dict], target_count: int) -> lis
             continue
         if (first.get("aw_status") or "").lower() != "finito":
             continue
+        first_release = first.get("aw_release_datetime")
 
         for second in season_scores:
             if first["aw_link"] == second["aw_link"]:
@@ -99,14 +104,38 @@ def _detect_split_cour_pair(season_scores: list[dict], target_count: int) -> lis
                 continue
             if (first.get("aw_audio") or "").lower() != (second.get("aw_audio") or "").lower():
                 continue
+            second_release = second.get("aw_release_datetime")
+            if first_release and second_release and second_release <= first_release:
+                continue
+            if season_end and second_release:
+                try:
+                    last_aired_dt = datetime.fromisoformat(season_end.replace("Z", "+00:00"))
+                    if second_release > last_aired_dt:
+                        delta_days = (second_release - last_aired_dt).days
+                        if delta_days > 30:
+                            continue
+                except (TypeError, ValueError):
+                    pass
             combined = first_count + second_count
             if abs(combined - target_count) > 1:
                 continue
-            if min(first["confidence_score"], second["confidence_score"]) < 0.65:
-                continue
-            return [first, second]
 
-    return None
+            combined_candidate = {
+                **first,
+                "aw_title": f"{first.get('aw_title', '')} + {second.get('aw_title', '')}",
+                "aw_episode_count": combined,
+                "aw_total_episodes": int(first.get("aw_total_episodes") or first_count) + int(second.get("aw_total_episodes") or second_count),
+                "aw_release_datetime": first_release,
+            }
+            combined_score, combined_factors = calculate_show_confidence(
+                show, season, combined_candidate, want_dubbed=want_dubbed
+            )
+            if combined_score < settings.automap_confidence_threshold:
+                continue
+            if best_pair is None or combined_score > best_pair[1]:
+                best_pair = ([first, second], combined_score, combined_factors)
+
+    return best_pair
 
 
 def _propagate_single_link(
@@ -248,30 +277,31 @@ def automap_show(show_id: int, season_number: int | None = None, force: bool = F
         best = season_scores[0] if season_scores else None
         second = season_scores[1] if len(season_scores) > 1 else None
 
-        split_pair = _detect_split_cour_pair(season_scores, target_count)
+        split_pair = _detect_split_cour_pair(show, season, season_scores, want_dubbed)
         if split_pair:
+            parts, split_score, split_factors = split_pair
             replace_show_mappings_auto(
                 show_id=show_id,
                 season_number=sn,
                 items=[
                     {
-                        "part": index,
+                        "part": part_index,
                         "aw_link": candidate["aw_link"],
                         "aw_title": candidate["aw_title"],
                         "aw_episode_count": candidate["aw_episode_count"],
                         "aw_total_episodes": candidate["aw_total_episodes"],
                         "aw_status": candidate.get("aw_status", ""),
                         "aw_category": candidate.get("aw_category", ""),
-                        "confidence_score": max(item["confidence_score"] for item in split_pair),
-                        "confidence_factors": json.dumps({**candidate["confidence_factors"], "split_cour": True}),
+                        "confidence_score": split_score,
+                        "confidence_factors": json.dumps({**split_factors, "split_cour": True}),
                         "linked_with_season": None,
                     }
-                    for index, candidate in enumerate(split_pair, start=1)
+                    for part_index, candidate in enumerate(parts, start=1)
                 ],
             )
             mapped_seasons.append(sn)
             handled.add(sn)
-            for candidate in split_pair:
+            for candidate in parts:
                 reserved_links.add(candidate["aw_link"])
             continue
 

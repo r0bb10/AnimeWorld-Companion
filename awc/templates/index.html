@@ -810,6 +810,16 @@ async function automap(showId,btn){
         }
       }
       panel.innerHTML=html;
+    }else if(data.status==='partial'){
+      let html='<div style="color:#d29922;font-weight:bold">Partially mapped</div>';
+      if(data.mapped_seasons&&data.mapped_seasons.length>0){
+        html+='<div style="color:#8b949e;margin-top:4px">Mapped seasons: '+data.mapped_seasons.join(', ')+'</div>';
+      }
+      if(data.ambiguous&&data.ambiguous.length>0){
+        html+='<div style="color:#8b949e;margin-top:8px">Needs review: '+data.ambiguous.map(x=>'S'+String(x.season).padStart(2,'0')).join(', ')+'</div>';
+      }
+      panel.innerHTML=html;
+      setTimeout(()=>location.reload(),2000);
     }else if(data.status==='not_found'){
       panel.innerHTML='<span style="color:#8b949e">No high-confidence matches found on AnimeWorld</span>';
     }else if(data.status==='already_mapped'){

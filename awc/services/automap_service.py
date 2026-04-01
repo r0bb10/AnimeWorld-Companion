@@ -341,18 +341,69 @@ def automap_show(show_id: int, season_number: int | None = None, force: bool = F
                 reserved_links.add(best_preaired["aw_link"])
                 continue
 
+            if best and best["confidence_score"] >= settings.automap_confidence_threshold and (
+                not second or (best["confidence_score"] - second["confidence_score"]) >= 0.05
+            ):
+                replace_show_mappings_auto(
+                    show_id=show_id,
+                    season_number=sn,
+                    items=[
+                        {
+                            "part": 1,
+                            "aw_link": best["aw_link"],
+                            "aw_title": best["aw_title"],
+                            "aw_episode_count": best["aw_episode_count"],
+                            "aw_total_episodes": best["aw_total_episodes"],
+                            "aw_status": best.get("aw_status", ""),
+                            "aw_category": best.get("aw_category", ""),
+                            "confidence_score": best["confidence_score"],
+                            "confidence_factors": json.dumps(best["confidence_factors"]),
+                            "linked_with_season": None,
+                        }
+                    ],
+                )
+                mapped_seasons.append(sn)
+                handled.add(sn)
+                reserved_links.add(best["aw_link"])
+                continue
+
         if best and best["confidence_score"] >= settings.automap_confidence_threshold and (
             not second or (best["confidence_score"] - second["confidence_score"]) >= 0.05
         ):
-            _propagate_single_link(
+            if int(best.get("aw_episode_count") or 0) >= target_count > 0:
+                _propagate_single_link(
+                    show_id=show_id,
+                    eligible_seasons=eligible_seasons,
+                    start_index=index,
+                    best=best,
+                    mapped_seasons=mapped_seasons,
+                    handled=handled,
+                    reserved_links=reserved_links,
+                )
+                if sn in handled:
+                    continue
+
+            replace_show_mappings_auto(
                 show_id=show_id,
-                eligible_seasons=eligible_seasons,
-                start_index=index,
-                best=best,
-                mapped_seasons=mapped_seasons,
-                handled=handled,
-                reserved_links=reserved_links,
+                season_number=sn,
+                items=[
+                    {
+                        "part": 1,
+                        "aw_link": best["aw_link"],
+                        "aw_title": best["aw_title"],
+                        "aw_episode_count": best["aw_episode_count"],
+                        "aw_total_episodes": best["aw_total_episodes"],
+                        "aw_status": best.get("aw_status", ""),
+                        "aw_category": best.get("aw_category", ""),
+                        "confidence_score": best["confidence_score"],
+                        "confidence_factors": json.dumps(best["confidence_factors"]),
+                        "linked_with_season": None,
+                    }
+                ],
             )
+            mapped_seasons.append(sn)
+            handled.add(sn)
+            reserved_links.add(best["aw_link"])
             continue
 
         ambiguous.append({"season": sn, "candidates": season_scores[:5]})

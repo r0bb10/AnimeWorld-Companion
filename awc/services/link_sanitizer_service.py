@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime
+import json
 import threading
 
 import requests
@@ -10,6 +11,10 @@ import requests
 from ..core.config import settings
 from ..integrations.animeworld_client import AnimeWorldClient
 from ..repositories.db import get_db
+from ..repositories.movies import get_movie_detail
+from ..repositories.shows import get_show_detail
+from .automap_language import resolve_movie_language_preference, resolve_show_language_preference
+from .automap_scoring import calculate_movie_confidence, calculate_show_confidence, parse_italian_date
 
 _state_lock = threading.Lock()
 _state = {
@@ -39,6 +44,127 @@ def _verify_slug(client: AnimeWorldClient, slug: str) -> tuple[str, int]:
     return final_slug or slug, response.status_code
 
 
+def _has_aired(season: dict) -> bool:
+    start = str((season or {}).get("air_date_start") or "").strip()
+    if not start:
+        return False
+    return start[:10] <= datetime.now(UTC).date().isoformat()
+
+
+def _refresh_show_mapping_metadata(client: AnimeWorldClient, row: dict, new_slug: str, now: str) -> bool:
+    show = get_show_detail(int(row["show_id"]))
+    if not show:
+        return False
+    season = next((item for item in show.get("seasons", []) if int(item.get("season_number") or 0) == int(row["season_number"])), None)
+    if not season:
+        return False
+
+    info, episodes, _, is_placeholder = client.get_info_and_episodes_meta(new_slug)
+    non_special, total, _ = client.count_non_special_episodes(episodes)
+    release_value = str(info.get("Data di Uscita") or "")
+    release_dt = parse_italian_date(release_value) if release_value else None
+    candidate = {
+        "aw_link": new_slug,
+        "aw_title": row.get("aw_title") or show.get("title") or "",
+        "aw_jtitle": "",
+        "aw_status": str(info.get("Stato") or row.get("aw_status") or ""),
+        "aw_category": str(info.get("Categoria") or row.get("aw_category") or ""),
+        "aw_audio": str(info.get("Audio") or ""),
+        "aw_year": release_dt.year if release_dt else show.get("year"),
+        "aw_release_datetime": release_dt,
+        "aw_episode_count": non_special,
+        "aw_total_episodes": total,
+        "aw_is_placeholder": is_placeholder,
+    }
+    season_payload = {**season, "has_aired": _has_aired(season)}
+    want_dubbed = resolve_show_language_preference(show)
+    score, factors = calculate_show_confidence(show, season_payload, candidate, want_dubbed=want_dubbed)
+
+    with get_db(write=True) as conn:
+        conn.execute(
+            """
+            UPDATE aw_show_mappings
+            SET aw_link = ?,
+                aw_status = ?,
+                aw_category = ?,
+                aw_episode_count = ?,
+                aw_total_episodes = ?,
+                confidence_score = ?,
+                confidence_factors = ?,
+                link_check_failures = 0,
+                last_verified = ?,
+                updated_at = ?
+            WHERE id = ?
+            """,
+            (
+                new_slug,
+                candidate["aw_status"],
+                candidate["aw_category"],
+                candidate["aw_episode_count"],
+                candidate["aw_total_episodes"],
+                score,
+                json.dumps(factors),
+                now,
+                now,
+                row["id"],
+            ),
+        )
+    return new_slug != row["aw_link"] or bool(json.loads(row.get("confidence_factors") or "{}").get("preaired")) != bool(factors.get("preaired_placeholder"))
+
+
+def _refresh_movie_mapping_metadata(client: AnimeWorldClient, row: dict, new_slug: str, now: str) -> bool:
+    movie = get_movie_detail(int(row["movie_id"]))
+    if not movie:
+        return False
+
+    info, episodes, _, is_placeholder = client.get_info_and_episodes_meta(new_slug)
+    non_special, total, _ = client.count_non_special_episodes(episodes)
+    release_value = str(info.get("Data di Uscita") or "")
+    release_dt = parse_italian_date(release_value) if release_value else None
+    candidate = {
+        "aw_link": new_slug,
+        "aw_title": row.get("aw_title") or movie.get("title") or "",
+        "aw_jtitle": "",
+        "aw_status": str(info.get("Stato") or row.get("aw_status") or ""),
+        "aw_category": str(info.get("Categoria") or row.get("aw_category") or ""),
+        "aw_audio": str(info.get("Audio") or ""),
+        "aw_year": release_dt.year if release_dt else movie.get("year"),
+        "aw_release_datetime": release_dt,
+        "aw_episode_count": non_special,
+        "aw_total_episodes": total,
+        "aw_is_placeholder": is_placeholder,
+    }
+    want_dubbed = resolve_movie_language_preference(movie)
+    score, factors = calculate_movie_confidence(movie, candidate, want_dubbed=want_dubbed)
+
+    with get_db(write=True) as conn:
+        conn.execute(
+            """
+            UPDATE aw_movie_mappings
+            SET aw_link = ?,
+                aw_status = ?,
+                aw_category = ?,
+                confidence_score = ?,
+                confidence_factors = ?,
+                link_check_failures = 0,
+                last_verified = ?,
+                updated_at = ?
+            WHERE id = ?
+            """,
+            (
+                new_slug,
+                candidate["aw_status"],
+                candidate["aw_category"],
+                score,
+                json.dumps(factors),
+                now,
+                now,
+                row["id"],
+            ),
+        )
+    return new_slug != row["aw_link"]
+
+
 def sanitize_links_once() -> dict:
     client = AnimeWorldClient()
     now = datetime.now(UTC).isoformat()
@@ -47,7 +173,7 @@ def sanitize_links_once() -> dict:
     with get_db(write=True) as conn:
         show_rows = conn.execute(
             """
-            SELECT id, aw_link, link_check_failures
+            SELECT id, show_id, season_number, aw_link, aw_title, aw_status, aw_category, confidence_factors, link_check_failures
             FROM aw_show_mappings
             ORDER BY id
             """
@@ -56,15 +182,7 @@ def sanitize_links_once() -> dict:
             result["checked"] += 1
             try:
                 new_slug, _ = _verify_slug(client, row["aw_link"])
-                conn.execute(
-                    """
-                    UPDATE aw_show_mappings
-                    SET aw_link = ?, link_check_failures = 0, last_verified = ?, updated_at = ?
-                    WHERE id = ?
-                    """,
-                    (new_slug, now, now, row["id"]),
-                )
-                if new_slug != row["aw_link"]:
+                if _refresh_show_mapping_metadata(client, dict(row), new_slug, now):
                     result["updated"] += 1
             except Exception:
                 failures = int(row["link_check_failures"] or 0) + 1
@@ -84,7 +202,7 @@ def sanitize_links_once() -> dict:
 
         movie_rows = conn.execute(
             """
-            SELECT id, aw_link, link_check_failures
+            SELECT id, movie_id, aw_link, aw_title, aw_status, aw_category, confidence_factors, link_check_failures
             FROM aw_movie_mappings
             ORDER BY id
             """
@@ -93,15 +211,7 @@ def sanitize_links_once() -> dict:
             result["checked"] += 1
             try:
                 new_slug, _ = _verify_slug(client, row["aw_link"])
-                conn.execute(
-                    """
-                    UPDATE aw_movie_mappings
-                    SET aw_link = ?, link_check_failures = 0, last_verified = ?, updated_at = ?
-                    WHERE id = ?
-                    """,
-                    (new_slug, now, now, row["id"]),
-                )
-                if new_slug != row["aw_link"]:
+                if _refresh_movie_mapping_metadata(client, dict(row), new_slug, now):
                     result["updated"] += 1
             except Exception:
                 failures = int(row["link_check_failures"] or 0) + 1

@@ -28,11 +28,11 @@ _jinja = Environment(
 
 
 def season_has_aired(season: dict) -> bool:
-    end_value = (season or {}).get("air_date_end") or (season or {}).get("air_date_start")
-    if not end_value:
+    start_value = (season or {}).get("air_date_start")
+    if not start_value:
         return False
     try:
-        return date.fromisoformat(str(end_value)[:10]) <= datetime.now(UTC).date()
+        return date.fromisoformat(str(start_value)[:10]) <= datetime.now(UTC).date()
     except ValueError:
         return False
 

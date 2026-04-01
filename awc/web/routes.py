@@ -4,7 +4,7 @@ import os
 import threading
 import time
 
-from fastapi import APIRouter, Body, Depends, HTTPException, Query
+from fastapi import APIRouter, Body, Depends, HTTPException, Query, Request
 from fastapi.responses import HTMLResponse, Response, StreamingResponse
 
 from ..core.config import settings
@@ -452,6 +452,7 @@ def manual_sync(_: str = Depends(require_api_key)) -> dict:
 
 @api_router.api_route("/api", methods=["GET", "POST"], tags=["Indexer"])
 def torznab_api(
+    request: Request,
     _: str = Depends(require_api_key),
     t: str = Query(default="caps"),
     q: str = Query(default=""),
@@ -463,8 +464,9 @@ def torznab_api(
     tvdbid: int | None = Query(default=None),
 ) -> Response:
     request_type = (t or "caps").strip().lower()
+    base_url = str(request.base_url).rstrip("/")
     if request_type == "caps":
-        return Response(content=build_caps_xml(), media_type="application/xml")
+        return Response(content=build_caps_xml(base_url=base_url), media_type="application/xml")
     if request_type in {"search", "tvsearch"}:
         return Response(
             content=build_search_xml(
@@ -476,6 +478,7 @@ def torznab_api(
                 tvdb_id=tvdbid,
                 tmdb_id=tmdbid,
                 imdb_id=imdbid,
+                base_url=base_url,
             ),
             media_type="application/xml",
         )
@@ -487,6 +490,7 @@ def torznab_api(
                 category=cat,
                 tmdb_id=tmdbid,
                 imdb_id=imdbid,
+                base_url=base_url,
             ),
             media_type="application/xml",
         )

@@ -51,7 +51,7 @@ def _bencode(value) -> bytes:
 
 
 def _download_base_url() -> str:
-    return settings.awc_url or f"http://localhost:{settings.awc_port}"
+    return settings.awc_url
 
 
 def _encode_source_token(source: str) -> str:

@@ -1,5 +1,6 @@
 """Mapping-aware AnimeWorld search orchestration."""
 
+import re
 from urllib.parse import quote
 
 from ..core.config import settings
@@ -10,6 +11,10 @@ from ..repositories.shows import get_show_detail
 from .download_service import build_download_url
 from .mapping_service import resolve_scene_episode
 from .naming_service import build_release_name
+from .query_service import parse_query
+
+
+_QUALITY_MARKERS = re.compile(r"\b(bluray|bdrip|brrip|dvdrip|hdtv|web[- .]?dl|web[- .]?rip|remux|uhd|2160p|1080p|720p)\b", re.IGNORECASE)
 
 
 def _match_episode(episodes: list[dict], episode_number: int) -> dict | None:
@@ -110,12 +115,21 @@ def _series_items(show: dict, season_number: int, episode_number: int) -> list[d
 def build_show_search_items(query: str, season_number: int | None, episode_number: int | None, tvdb_id: int | None = None) -> list[dict]:
     from ..repositories.shows import find_show_by_title, find_show_by_tvdb_id
 
+    parsed = parse_query(query)
+    parsed_title = parsed.get("title", "")
+    if season_number is None:
+        season_number = parsed.get("season")
+    if episode_number is None:
+        episode_number = parsed.get("episode")
+
     if season_number is None or episode_number is None:
         return []
 
     show = find_show_by_tvdb_id(tvdb_id) if tvdb_id is not None else None
     if not show:
         show = find_show_by_title(query)
+    if not show and parsed_title and parsed_title != query:
+        show = find_show_by_title(parsed_title)
     if not show:
         return []
 
@@ -133,9 +147,13 @@ def build_show_search_items(query: str, season_number: int | None, episode_numbe
 def build_movie_search_items(query: str, tmdb_id: int | None = None, imdb_id: str = "") -> list[dict]:
     from ..repositories.movies import find_movie_by_external_ids, find_movie_by_title
 
+    parsed = parse_query(query)
+    parsed_title = parsed.get("title", "")
     movie = find_movie_by_external_ids(tmdb_id=tmdb_id, imdb_id=imdb_id) if (tmdb_id or imdb_id) else None
     if not movie:
         movie = find_movie_by_title(query)
+    if not movie and parsed_title and parsed_title != query:
+        movie = find_movie_by_title(parsed_title)
     if not movie:
         return []
 
@@ -160,6 +178,8 @@ def build_movie_search_items(query: str, tmdb_id: int | None = None, imdb_id: st
                 year=detail.get("year"),
             )
         )
+        if not _QUALITY_MARKERS.search(title):
+            title = title.removesuffix(".mp4") + ".WEBDL.mp4"
         source = file_info.get("url", "")
         results.append(
             {

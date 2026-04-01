@@ -24,6 +24,7 @@ def build_naming_preview(query: str, media: str = "show") -> dict:
             kind=MediaKind.MOVIE,
             title=result["title"],
             year=result.get("year"),
+            imdb_id=result.get("imdb_id"),
         )
     else:
         context = NamingContext(

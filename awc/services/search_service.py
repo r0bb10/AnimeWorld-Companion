@@ -1,6 +1,5 @@
 """Mapping-aware AnimeWorld search orchestration."""
 
-import re
 from urllib.parse import quote
 
 from ..core.config import settings
@@ -12,9 +11,6 @@ from .download_service import build_download_url
 from .mapping_service import resolve_scene_episode
 from .naming_service import build_release_name
 from .query_service import parse_query
-
-
-_QUALITY_MARKERS = re.compile(r"\b(bluray|bdrip|brrip|dvdrip|hdtv|web[- .]?dl|web[- .]?rip|remux|uhd|2160p|1080p|720p)\b", re.IGNORECASE)
 
 
 def _match_episode(episodes: list[dict], episode_number: int) -> dict | None:
@@ -176,10 +172,9 @@ def build_movie_search_items(query: str, tmdb_id: int | None = None, imdb_id: st
                 kind=MediaKind.MOVIE,
                 title=detail["title"],
                 year=detail.get("year"),
+                imdb_id=detail.get("imdb_id"),
             )
         )
-        if not _QUALITY_MARKERS.search(title):
-            title = title.removesuffix(".mp4") + ".WEBDL.mp4"
         source = file_info.get("url", "")
         results.append(
             {

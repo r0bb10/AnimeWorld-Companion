@@ -81,6 +81,7 @@ def _format_movie_name(context: NamingContext) -> str:
     title_cleaned = _apply_colon_replacement(title, colon_format)
     title_with_dots = title_cleaned.replace(" ", ".")
     year = context.year or ""
+    imdb_id = (context.imdb_id or "").strip()
 
     replacements = {
         r"\{Movie\.CleanTitle\}": title_with_dots,
@@ -90,7 +91,7 @@ def _format_movie_name(context: NamingContext) -> str:
         r"\{Release\.Year\}": str(year),
         r"\{Release\s+Year\}": str(year),
         r"\{Year\}": str(year),
-        r"\{ImdbId\}": "",
+        r"\{ImdbId\}": imdb_id,
     }
     result = format_string
     for pattern, replacement in replacements.items():

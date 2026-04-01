@@ -85,6 +85,7 @@ def api_map_show_season(
     linked_with_season: int | None = None,
     _: str = Depends(require_api_key),
 ) -> dict:
+    show = build_show_snapshot(show_id)
     result = map_show_season(
         show_id=show_id,
         season_number=season_number,
@@ -99,7 +100,13 @@ def api_map_show_season(
     )
     if not result["updated"]:
         raise HTTPException(status_code=404, detail=result["reason"])
-    logger.info("Manual map saved: show_id=%s season=%s part=%s link=%s", show_id, season_number, part, result.get("mapping", {}).get("aw_link", aw_link))
+    mapped_link = result.get("mapping", {}).get("aw_link", aw_link)
+    log_block(
+        logger,
+        logging.INFO,
+        str((show or {}).get("title") or f"show:{show_id}"),
+        [f"↳ S{season_number:02d} manual → {mapped_link}"],
+    )
     return result
 
 
@@ -109,8 +116,14 @@ def api_unmap_show_season(
     season_number: int,
     _: str = Depends(require_api_key),
 ) -> dict:
+    show = build_show_snapshot(show_id)
     result = unmap_show_season(show_id, season_number)
-    logger.info("Manual unmap: show_id=%s season=%s removed=%s", show_id, season_number, result.get("removed", 0))
+    log_block(
+        logger,
+        logging.INFO,
+        str((show or {}).get("title") or f"show:{show_id}"),
+        [f"↳ S{season_number:02d} removed"],
+    )
     return result
 
 
@@ -243,6 +256,7 @@ def api_map_movie(
     aw_category: str = "",
     _: str = Depends(require_api_key),
 ) -> dict:
+    movie = build_movie_snapshot(movie_id)
     result = map_movie(
         movie_id=movie_id,
         aw_link=aw_link,
@@ -252,14 +266,26 @@ def api_map_movie(
     )
     if not result["updated"]:
         raise HTTPException(status_code=404, detail=result["reason"])
-    logger.info("Manual movie map saved: movie_id=%s link=%s", movie_id, result.get("mapping", {}).get("aw_link", aw_link))
+    mapped_link = result.get("mapping", {}).get("aw_link", aw_link)
+    log_block(
+        logger,
+        logging.INFO,
+        str((movie or {}).get("title") or f"movie:{movie_id}"),
+        [f"↳ manual → {mapped_link}"],
+    )
     return result
 
 
 @api_router.post("/unmap/movie/{movie_id}", tags=["Mutation"])
 def api_unmap_movie(movie_id: int, _: str = Depends(require_api_key)) -> dict:
+    movie = build_movie_snapshot(movie_id)
     result = unmap_movie(movie_id)
-    logger.info("Manual movie unmap: movie_id=%s removed=%s", movie_id, result.get("removed", 0))
+    log_block(
+        logger,
+        logging.INFO,
+        str((movie or {}).get("title") or f"movie:{movie_id}"),
+        ["↳ removed"],
+    )
     return result
 
 
@@ -554,21 +580,21 @@ def manager_webhook(
 @api_router.post("/sync", tags=["Integration"])
 def manual_sync(_: str = Depends(require_api_key)) -> dict:
     result = sync_all()
-    logger.info("Manual sync completed")
+    logger.info("Manual sync completed: sonarr=%s radarr=%s", result.get("sonarr", 0), result.get("radarr", 0))
     return {"status": "ok", "result": result}
 
 
 @api_router.post("/sync/sonarr", tags=["Integration"])
 def manual_sync_sonarr(_: str = Depends(require_api_key)) -> dict:
     result = sync_now_sonarr()
-    logger.info("Manual Sonarr sync completed")
+    logger.info("Manual Sonarr sync completed: %s show(s)", result.get("processed", 0))
     return {"status": "ok", "result": result}
 
 
 @api_router.post("/sync/radarr", tags=["Integration"])
 def manual_sync_radarr(_: str = Depends(require_api_key)) -> dict:
     result = sync_now_radarr()
-    logger.info("Manual Radarr sync completed")
+    logger.info("Manual Radarr sync completed: %s movie(s)", result.get("processed", 0))
     return {"status": "ok", "result": result}
 
 

@@ -165,10 +165,43 @@ def _refresh_movie_mapping_metadata(client: AnimeWorldClient, row: dict, new_slu
     return new_slug != row["aw_link"]
 
 
+def _needs_show_mapping_refresh(show: dict, season: dict) -> bool:
+    mappings = list(season.get("mappings") or [])
+    if not mappings:
+        return False
+    if any((mapping.get("mapping_type") or "") != "auto" for mapping in mappings):
+        return False
+
+    markers = [dict(item) for item in (season.get("segment_markers") or []) if int(item.get("count") or 0) > 0]
+    if len(markers) <= 1:
+        return False
+
+    ordered_mappings = sorted(mappings, key=lambda item: int(item.get("part") or 0))
+    marker_counts = [int(item.get("count") or 0) for item in markers]
+    mapping_counts = [int(item.get("aw_episode_count") or 0) for item in ordered_mappings]
+    if len(marker_counts) != len(mapping_counts):
+        return True
+    if any(abs(left - right) > 1 for left, right in zip(marker_counts, mapping_counts)):
+        return True
+
+    season_total = int(season.get("episode_count") or 0)
+    if season_total and abs(sum(mapping_counts) - season_total) > 1:
+        return True
+
+    factors = []
+    for mapping in ordered_mappings:
+        try:
+            factors.append(json.loads(mapping.get("confidence_factors") or "{}"))
+        except (TypeError, ValueError):
+            factors.append({})
+    return not all(bool(item.get("split_cour")) for item in factors)
+
+
 def sanitize_links_once() -> dict:
     client = AnimeWorldClient()
     now = datetime.now(UTC).isoformat()
     result = {"checked": 0, "updated": 0, "removed": 0, "failed": 0}
+    show_seasons_to_refresh: set[tuple[int, int]] = set()
 
     with get_db(write=True) as conn:
         show_rows = conn.execute(
@@ -200,6 +233,16 @@ def sanitize_links_once() -> dict:
                     )
                     result["failed"] += 1
 
+        for row in conn.execute(
+            """
+            SELECT DISTINCT show_id, season_number
+            FROM aw_show_mappings
+            WHERE mapping_type = 'auto'
+            ORDER BY show_id, season_number
+            """
+        ).fetchall():
+            show_seasons_to_refresh.add((int(row["show_id"]), int(row["season_number"])))
+
         movie_rows = conn.execute(
             """
             SELECT id, movie_id, aw_link, aw_title, aw_status, aw_category, confidence_factors, link_check_failures
@@ -228,6 +271,19 @@ def sanitize_links_once() -> dict:
                         (failures, now, row["id"]),
                     )
                     result["failed"] += 1
+
+    for show_id, season_number in sorted(show_seasons_to_refresh):
+        show = get_show_detail(show_id)
+        if not show:
+            continue
+        season = next((item for item in show.get("seasons", []) if int(item.get("season_number") or 0) == season_number), None)
+        if not season or not _needs_show_mapping_refresh(show, season):
+            continue
+        from .automap_service import automap_show
+
+        response = automap_show(show_id, season_number=season_number, force=True)
+        if response.get("status") in {"success", "partial"}:
+            result["updated"] += 1
 
     _set_state(last_result=result, last_error="", last_finished_at=now, running=False)
     return result

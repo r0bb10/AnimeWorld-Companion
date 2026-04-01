@@ -20,7 +20,7 @@ from ..integrations.sonarr_client import SonarrClient
 from ..repositories.db import get_db
 from ..repositories.rss_cache import cleanup_rss_items, has_movie_rss_item, has_rss_item, save_movie_rss_item, save_rss_item
 from .download_service import completed_downloads, mark_imported, restore_on_startup
-from .link_sanitizer_service import sanitize_links_once, sanitizer_status
+from .sanitizer_service import sanitize_links_once, sanitizer_status
 from .search_service import build_movie_search_items, build_show_search_items
 from .sync_runner_service import sync_all
 

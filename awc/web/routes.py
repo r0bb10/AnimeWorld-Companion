@@ -34,7 +34,7 @@ from ..services.download_service import (
 from ..services.discovery_service import discover_movie, discover_show, search_animeworld
 from ..services.events_service import stream_events
 from ..services.health_service import build_health_report
-from ..services.link_sanitizer_service import sanitizer_status, start_link_sanitizer
+from ..services.sanitizer_service import sanitizer_status, start_link_sanitizer
 from ..services.mapping_service import (
     build_show_mapping_snapshot,
     resolve_absolute_episode,

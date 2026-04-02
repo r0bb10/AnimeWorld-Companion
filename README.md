@@ -40,10 +40,16 @@ AWC_API_KEY=cambia_questa_chiave
 # --- Sonarr ---
 SONARR_URL=http://<ip-sonarr>:8989
 SONARR_API_KEY=la_tua_api_key_sonarr
-SONARR_ANIME_TAG=anime
 SONARR_DUB_TAG=ita
 
+# --- Radarr ---
+RADARR_URL=http://<ip-radarr>:7878
+RADARR_API_KEY=la_tua_api_key_radarr
+
 # --- Shared ---
+ANIME_TAG=anime
+DUB_TAG=ita
+SYNC_INTERVAL=30
 IMPORT_POLL_INTERVAL=60
 UNMONITOR_IMPORTED=true
 IGNORE_TAG=ghibli

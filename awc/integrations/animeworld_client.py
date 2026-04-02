@@ -130,12 +130,15 @@ class AnimeWorldClient:
             return url.split("/play/", 1)[1].split("/")[0]
         return url.strip("/")
 
-    def _search_v2(self, query: str, limit: int) -> list[dict]:
+    def _search_v2(self, query: str, limit: int | None = None) -> list[dict]:
         response = self._post("/api/search/v2", params={"keyword": query.strip()})
         response.raise_for_status()
         payload = response.json()
         results = []
-        for item in payload.get("animes", [])[:limit]:
+        items = payload.get("animes", [])
+        if limit is not None:
+            items = items[:limit]
+        for item in items:
             slug = item.get("link") or ""
             identifier = item.get("identifier") or ""
             full_slug = f"{slug}.{identifier}" if slug and identifier and "." not in slug else slug
@@ -155,7 +158,7 @@ class AnimeWorldClient:
             )
         return results
 
-    def _search_scrape(self, query: str, limit: int) -> list[dict]:
+    def _search_scrape(self, query: str, limit: int | None = None) -> list[dict]:
         response = self._session().get(
             f"{self.base_url}/search",
             params={"keyword": query.strip()},
@@ -164,7 +167,10 @@ class AnimeWorldClient:
         response.raise_for_status()
         soup = BeautifulSoup(response.text, "html.parser")
         results = []
-        for item in soup.select(".film-list .item")[:limit]:
+        items = soup.select(".film-list .item")
+        if limit is not None:
+            items = items[:limit]
+        for item in items:
             name_link = item.select_one("a.name")
             poster_link = item.select_one("a.poster")
             image = item.select_one("img")
@@ -183,7 +189,7 @@ class AnimeWorldClient:
             )
         return results
 
-    def search(self, query: str, limit: int = 10) -> list[dict]:
+    def search(self, query: str, limit: int | None = None) -> list[dict]:
         if not self.base_url or not query.strip():
             return []
 
@@ -202,7 +208,9 @@ class AnimeWorldClient:
                 seen.add(key)
                 merged.append(item)
 
-        return merged[:limit]
+        if limit is not None:
+            return merged[:limit]
+        return merged
 
     def get_episodes(self, slug_or_url: str) -> list[dict]:
         target = slug_or_url if slug_or_url.startswith("http") else self.slug_to_url(slug_or_url)

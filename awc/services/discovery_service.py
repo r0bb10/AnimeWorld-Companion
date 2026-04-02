@@ -8,7 +8,7 @@ from ..repositories.shows import get_show_detail
 from .query_helper import build_query_variants
 
 
-def _collect_queries(title: str, alternate_titles: list[dict], limit: int = 24) -> list[str]:
+def _collect_queries(title: str, alternate_titles: list[dict]) -> list[str]:
     raw_values = [str(title or ""), *[str(item.get("title") or "") for item in alternate_titles]]
     queries: list[str] = []
     seen: set[str] = set()
@@ -22,17 +22,16 @@ def _collect_queries(title: str, alternate_titles: list[dict], limit: int = 24) 
             return False
         seen.add(key)
         queries.append(query)
-        return len(queries) >= limit
+        return False
 
     for value in raw_values:
         variants = build_query_variants(value)
-        if variants and add(variants[0]):
-            return queries
+        if variants:
+            add(variants[0])
 
     for value in raw_values:
         for query in build_query_variants(value)[1:]:
-            if add(query):
-                return queries
+            add(query)
 
     return queries
 
@@ -49,8 +48,10 @@ def _dedupe_results(results: list[dict]) -> list[dict]:
     return unique
 
 
-def _enrich_results(client: AnimeWorldClient, results: list[dict], limit: int) -> tuple[list[dict], list[dict]]:
-    unique = _dedupe_results(results)[:limit]
+def _enrich_results(client: AnimeWorldClient, results: list[dict], limit: int | None) -> tuple[list[dict], list[dict]]:
+    unique = _dedupe_results(results)
+    if limit is not None:
+        unique = unique[:limit]
 
     def enrich(item: dict) -> dict:
         target = item.get("url") or item.get("slug") or ""
@@ -115,7 +116,7 @@ def discover_show(show_id: int, limit: int = 10) -> dict | None:
     used_queries = _collect_queries(show["title"], show.get("alternate_titles", []))
     results: list[dict] = []
     for query in used_queries:
-        results.extend(client.search(query, limit=limit))
+        results.extend(client.search(query, limit=None))
 
     enriched_results, legacy_links = _enrich_results(client, results, limit)
 
@@ -137,7 +138,7 @@ def discover_movie(movie_id: int, limit: int = 10) -> dict | None:
     used_queries = _collect_queries(movie["title"], movie.get("alternate_titles", []))
     results: list[dict] = []
     for query in used_queries:
-        results.extend(client.search(query, limit=limit))
+        results.extend(client.search(query, limit=None))
 
     enriched_results, legacy_links = _enrich_results(client, results, limit)
 

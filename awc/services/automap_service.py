@@ -48,7 +48,7 @@ def _show_alternate_titles(show: dict) -> list[str]:
     return [item.get("title", "") for item in show.get("alternate_titles", []) if item.get("title")]
 
 
-def _discovery_candidates(title: str, alternates: list[str], limit: int = 12) -> list[dict]:
+def _discovery_candidates(title: str, alternates: list[str], limit: int | None = None) -> list[dict]:
     alt_payload = [{"title": value} for value in alternates if value]
     return discover_candidates_for_titles(title, alt_payload, limit=limit)
 

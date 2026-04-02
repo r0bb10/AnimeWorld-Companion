@@ -9,7 +9,7 @@ from .query_helper import build_query_variants
 from .automap_scoring import parse_italian_date
 
 
-def _collect_titles(primary_title: str, alternate_titles: list[dict], limit: int = 24) -> list[str]:
+def _collect_titles(primary_title: str, alternate_titles: list[dict]) -> list[str]:
     raw_values = [str(primary_title or ""), *[str(item.get("title") or "") for item in alternate_titles]]
     titles: list[str] = []
     seen: set[str] = set()
@@ -23,17 +23,16 @@ def _collect_titles(primary_title: str, alternate_titles: list[dict], limit: int
             return False
         seen.add(key)
         titles.append(query)
-        return len(titles) >= limit
+        return False
 
     for value in raw_values:
         variants = build_query_variants(value)
-        if variants and add(variants[0]):
-            return titles
+        if variants:
+            add(variants[0])
 
     for value in raw_values:
         for query in build_query_variants(value)[1:]:
-            if add(query):
-                return titles
+            add(query)
     return titles
 
 
@@ -72,12 +71,14 @@ def _enrich_result(client: AnimeWorldClient, item: dict) -> dict:
     }
 
 
-def discover_candidates_for_titles(primary_title: str, alternate_titles: list[dict], limit: int = 20) -> list[dict]:
+def discover_candidates_for_titles(primary_title: str, alternate_titles: list[dict], limit: int | None = None) -> list[dict]:
     client = AnimeWorldClient()
     raw_results: list[dict] = []
-    for query in _collect_titles(primary_title, alternate_titles, limit=max(24, limit)):
-        raw_results.extend(client.search(query, limit=limit))
-    unique = _dedupe_by_slug(client, raw_results)[:limit]
+    for query in _collect_titles(primary_title, alternate_titles):
+        raw_results.extend(client.search(query, limit=None))
+    unique = _dedupe_by_slug(client, raw_results)
+    if limit is not None:
+        unique = unique[:limit]
 
     enriched: list[dict] = []
     with ThreadPoolExecutor(max_workers=min(len(unique), 6) or 1) as pool:

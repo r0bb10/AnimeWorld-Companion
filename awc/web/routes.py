@@ -37,11 +37,6 @@ from ..services.discovery_service import discover_movie, discover_show, search_a
 from ..services.events_service import stream_events
 from ..services.health_service import build_health_report
 from ..services.sanitizer_service import sanitizer_status, start_link_sanitizer
-from ..services.mapping_service import (
-    build_show_mapping_snapshot,
-    resolve_absolute_episode,
-    resolve_scene_episode,
-)
 from ..services.mutation_service import (
     ignore_show_season,
     ignore_movie,
@@ -52,11 +47,7 @@ from ..services.mutation_service import (
     unmap_movie,
     unmap_show_season,
 )
-from ..services.manager_service import build_manager_snapshot
-from ..services.preview_service import build_naming_preview
-from ..services.query_service import parse_query, resolve_local_query
 from ..services.rss_service import build_rss_snapshot, clear_rss_cache
-from ..services.sync_service import build_sync_overview
 from ..services.torznab_service import build_caps_xml, build_search_xml
 from ..services.webhook_service import normalize_webhook
 from ..services.sync_runner_service import sync_all, sync_now_radarr, sync_now_sonarr, sync_single_movie, sync_single_show, sync_status
@@ -66,12 +57,12 @@ api_router = APIRouter()
 logger = get_logger("routes")
 
 
-@api_router.get("/", tags=["UI"])
+@api_router.get("/", tags=["UI"], summary="Dashboard", description="Serve the main AnimeWorld Companion web UI.", include_in_schema=False)
 def dashboard() -> HTMLResponse:
     return HTMLResponse(build_dashboard_html())
 
 
-@api_router.post("/map", tags=["Mutation"])
+@api_router.post("/map", tags=["Mutation"], summary="Map show season", description="Create or replace a manual AnimeWorld mapping for a Sonarr show season.")
 def api_map_show_season(
     show_id: int,
     season_number: int,
@@ -110,7 +101,7 @@ def api_map_show_season(
     return result
 
 
-@api_router.post("/unmap", tags=["Mutation"])
+@api_router.post("/unmap", tags=["Mutation"], summary="Unmap show season", description="Remove all mappings for a specific Sonarr show season.")
 def api_unmap_show_season(
     show_id: int,
     season_number: int,
@@ -127,7 +118,7 @@ def api_unmap_show_season(
     return result
 
 
-@api_router.post("/ignore-season", tags=["Mutation"])
+@api_router.post("/ignore-season", tags=["Mutation"], summary="Ignore show season", description="Mark a show season as ignored so it is excluded from normal mapping workflows.")
 def api_ignore_show_season(
     show_id: int,
     season_number: int,
@@ -146,7 +137,7 @@ def api_ignore_show_season(
     return result
 
 
-@api_router.post("/unignore-season", tags=["Mutation"])
+@api_router.post("/unignore-season", tags=["Mutation"], summary="Unignore show season", description="Restore a previously ignored show season to normal mapping workflows.")
 def api_unignore_show_season(
     show_id: int,
     season_number: int,
@@ -165,7 +156,7 @@ def api_unignore_show_season(
     return result
 
 
-@api_router.post("/ignore-movie", tags=["Mutation"])
+@api_router.post("/ignore-movie", tags=["Mutation"], summary="Ignore movie", description="Mark a movie as ignored so it is excluded from normal mapping workflows.")
 def api_ignore_movie(
     movie_id: int,
     _: str = Depends(require_api_key),
@@ -183,7 +174,7 @@ def api_ignore_movie(
     return result
 
 
-@api_router.post("/unignore-movie", tags=["Mutation"])
+@api_router.post("/unignore-movie", tags=["Mutation"], summary="Unignore movie", description="Restore a previously ignored movie to normal mapping workflows.")
 def api_unignore_movie(
     movie_id: int,
     _: str = Depends(require_api_key),
@@ -201,7 +192,7 @@ def api_unignore_movie(
     return result
 
 
-@api_router.post("/delete-show", tags=["Mutation"])
+@api_router.post("/delete-show", tags=["Mutation"], summary="Delete show", description="Remove a synced show and all related local AWC state.")
 def api_delete_show(show_id: int, _: str = Depends(require_api_key)) -> dict:
     show = build_show_snapshot(show_id)
     result = remove_show(show_id)
@@ -216,7 +207,7 @@ def api_delete_show(show_id: int, _: str = Depends(require_api_key)) -> dict:
     return result
 
 
-@api_router.post("/delete-movie", tags=["Mutation"])
+@api_router.post("/delete-movie", tags=["Mutation"], summary="Delete movie", description="Remove a synced movie and all related local AWC state.")
 def api_delete_movie(movie_id: int, _: str = Depends(require_api_key)) -> dict:
     movie = build_movie_snapshot(movie_id)
     result = remove_movie(movie_id)
@@ -231,7 +222,12 @@ def api_delete_movie(movie_id: int, _: str = Depends(require_api_key)) -> dict:
     return result
 
 
-@api_router.post("/automap", tags=["Automap"])
+@api_router.post(
+    "/automap",
+    tags=["Automap"],
+    summary="Run automap",
+    description="Run automap for the whole library, one show, one movie, or one show season depending on `kind`, `item_id`, and `season_number`.",
+)
 def api_automap(
     kind: str | None = Query(default=None),
     item_id: int | None = Query(default=None),
@@ -251,7 +247,7 @@ def api_automap(
     return automap_show(item_id, season_number=season_number, force=force)
 
 
-@api_router.post("/map/movie/{movie_id}", tags=["Mutation"])
+@api_router.post("/map/movie/{movie_id}", tags=["Mutation"], summary="Map movie", description="Create or replace a manual AnimeWorld mapping for a Radarr movie.")
 def api_map_movie(
     movie_id: int,
     aw_link: str,
@@ -280,7 +276,7 @@ def api_map_movie(
     return result
 
 
-@api_router.post("/unmap/movie/{movie_id}", tags=["Mutation"])
+@api_router.post("/unmap/movie/{movie_id}", tags=["Mutation"], summary="Unmap movie", description="Remove the current AnimeWorld mapping for a Radarr movie.")
 def api_unmap_movie(movie_id: int, _: str = Depends(require_api_key)) -> dict:
     movie = build_movie_snapshot(movie_id)
     result = unmap_movie(movie_id)
@@ -293,10 +289,9 @@ def api_unmap_movie(movie_id: int, _: str = Depends(require_api_key)) -> dict:
     return result
 
 
-@api_router.get("/api/rebuild/status", tags=["System"])
-def rebuild_status() -> dict:
+@api_router.get("/api/status", tags=["System"], summary="Runtime status", description="Return high-level runtime, sync, automap, and sanitizer status.")
+def api_status() -> dict:
     return {
-        "phase": "foundation",
         "sonarr_configured": bool(settings.sonarr_url and settings.sonarr_api_key),
         "radarr_configured": bool(settings.radarr_url and settings.radarr_api_key),
         "sync": sync_status(),
@@ -306,73 +301,47 @@ def rebuild_status() -> dict:
     }
 
 
-@api_router.get("/api/rebuild/health", tags=["System"])
-def rebuild_health() -> dict:
+@api_router.get("/api/system/health", tags=["System"], summary="Detailed health", description="Return the structured internal health report used by the dashboard and diagnostics.")
+def api_system_health() -> dict:
     return build_health_report()
 
 
-@api_router.get("/api/heartbeat", tags=["System"])
+@api_router.get("/api/heartbeat", tags=["System"], summary="Heartbeat snapshot", description="Return lightweight live dashboard heartbeat data.")
 def api_heartbeat() -> dict:
     return build_heartbeat_snapshot()
 
 
-@api_router.get("/api/rebuild/managers", tags=["System"])
-def rebuild_managers() -> dict:
-    return build_manager_snapshot()
-
-
-@api_router.get("/api/rebuild/sync-overview", tags=["System"])
-def rebuild_sync_overview() -> dict:
-    return build_sync_overview()
-
-
-@api_router.get("/api/rebuild/catalog", tags=["System"])
-def rebuild_catalog(show_limit: int = 10, movie_limit: int = 10) -> dict:
-    return build_catalog_snapshot(show_limit=show_limit, movie_limit=movie_limit)
-
-
-@api_router.get("/api/shows", tags=["Catalog"])
+@api_router.get("/api/shows", tags=["Catalog"], summary="List shows", description="List synced Sonarr shows currently present in the AWC catalog.")
 def api_shows(limit: int = 100, _: str = Depends(require_api_key)) -> list[dict]:
     return build_catalog_snapshot(show_limit=limit, movie_limit=0)["shows"]
 
 
-@api_router.get("/api/rebuild/shows/{show_id}", tags=["System"])
-def rebuild_show_detail(show_id: int) -> dict:
+@api_router.get("/api/shows/{show_id}", tags=["Catalog"], summary="Get show", description="Return one synced show with seasons, mappings, and alternate titles.")
+def api_show_detail(show_id: int, _: str = Depends(require_api_key)) -> dict:
     show = build_show_snapshot(show_id)
     if not show:
         raise HTTPException(status_code=404, detail="Show not found")
     return show
 
 
-@api_router.get("/api/shows/{show_id}", tags=["Catalog"])
-def api_show_detail(show_id: int, _: str = Depends(require_api_key)) -> dict:
-    return rebuild_show_detail(show_id)
-
-
-@api_router.get("/api/movies", tags=["Catalog"])
+@api_router.get("/api/movies", tags=["Catalog"], summary="List movies", description="List synced Radarr movies currently present in the AWC catalog.")
 def api_movies(limit: int = 100, _: str = Depends(require_api_key)) -> list[dict]:
     return build_catalog_snapshot(show_limit=0, movie_limit=limit)["movies"]
 
-
-@api_router.get("/api/rebuild/movies/{movie_id}", tags=["System"])
-def rebuild_movie_detail(movie_id: int) -> dict:
+@api_router.get("/api/movies/{movie_id}", tags=["Catalog"], summary="Get movie", description="Return one synced movie with mapping and alternate titles.")
+def api_movie_detail(movie_id: int, _: str = Depends(require_api_key)) -> dict:
     movie = build_movie_snapshot(movie_id)
     if not movie:
         raise HTTPException(status_code=404, detail="Movie not found")
     return movie
 
 
-@api_router.get("/api/movies/{movie_id}", tags=["Catalog"])
-def api_movie_detail(movie_id: int, _: str = Depends(require_api_key)) -> dict:
-    return rebuild_movie_detail(movie_id)
-
-
-@api_router.get("/api/search/aw", tags=["Discovery"])
+@api_router.get("/api/search/aw", tags=["Discovery"], summary="Search AnimeWorld", description="Run a raw AnimeWorld search and return merged API + scrape candidate links.")
 def api_search_aw(q: str, limit: int = 10, _: str = Depends(require_api_key)) -> dict:
     return search_animeworld(q, limit=limit)
 
 
-@api_router.get("/api/discover/{show_id}", tags=["Discovery"])
+@api_router.get("/api/discover/{show_id}", tags=["Discovery"], summary="Discover show candidates", description="Discover raw AnimeWorld candidates and metadata for one synced show.")
 def api_discover_show(show_id: int, limit: int = 10, _: str = Depends(require_api_key)) -> dict:
     result = discover_show(show_id, limit=limit)
     if not result:
@@ -380,7 +349,7 @@ def api_discover_show(show_id: int, limit: int = 10, _: str = Depends(require_ap
     return result
 
 
-@api_router.get("/api/discover/movie/{movie_id}", tags=["Discovery"])
+@api_router.get("/api/discover/movie/{movie_id}", tags=["Discovery"], summary="Discover movie candidates", description="Discover raw AnimeWorld candidates and metadata for one synced movie.")
 def api_discover_movie(movie_id: int, limit: int = 10, _: str = Depends(require_api_key)) -> dict:
     result = discover_movie(movie_id, limit=limit)
     if not result:
@@ -388,54 +357,17 @@ def api_discover_movie(movie_id: int, limit: int = 10, _: str = Depends(require_
     return result
 
 
-@api_router.get("/api/rss/cache", tags=["System"])
+@api_router.get("/api/rss/cache", tags=["System"], summary="RSS cache snapshot", description="Inspect the current cached RSS items that AWC may republish to Arr clients.")
 def api_rss_cache(limit: int = 100, _: str = Depends(require_api_key)) -> dict:
     return build_rss_snapshot(limit=limit)
 
 
-@api_router.get("/api/rebuild/shows/{show_id}/mappings", tags=["System"])
-def rebuild_show_mappings(show_id: int) -> dict:
-    snapshot = build_show_mapping_snapshot(show_id)
-    if not snapshot:
-        raise HTTPException(status_code=404, detail="Show not found")
-    return snapshot
-
-
-@api_router.get("/api/rebuild/shows/{show_id}/resolve-scene", tags=["System"])
-def rebuild_resolve_scene(show_id: int, season: int, episode: int) -> dict:
-    return resolve_scene_episode(show_id, season, episode)
-
-
-@api_router.get("/api/rebuild/shows/{show_id}/resolve-absolute", tags=["System"])
-def rebuild_resolve_absolute(show_id: int, absolute_episode: int) -> dict:
-    return resolve_absolute_episode(show_id, absolute_episode)
-
-
-@api_router.get("/api/rebuild/parse-query", tags=["System"])
-def rebuild_parse_query(q: str) -> dict:
-    return parse_query(q)
-
-
-@api_router.get("/api/rebuild/resolve-query", tags=["System"])
-def rebuild_resolve_query(q: str, media: str = "show") -> dict:
-    return resolve_local_query(q, media=media)
-
-
-@api_router.get("/api/rebuild/preview-name", tags=["System"])
-def rebuild_preview_name(q: str, media: str = "show") -> dict:
-    return build_naming_preview(q, media=media)
-
-
-@api_router.get("/api/rebuild/placeholder/{item_id}", tags=["System"])
-def rebuild_placeholder(item_id: str) -> dict:
-    return {
-        "item_id": item_id,
-        "status": "placeholder",
-        "detail": "Search contract is wired, download execution is not rebuilt yet.",
-    }
-
-
-@api_router.get("/download", tags=["Download"])
+@api_router.get(
+    "/download",
+    tags=["Download"],
+    summary="Torrent handoff",
+    description="Return the fake torrent handoff used by Sonarr and Radarr. Supports both the current internal parameters and the old `url/save_name/aw_link` contract.",
+)
 def download_handoff(
     request: Request,
     manager: str = "",
@@ -482,12 +414,12 @@ def download_handoff(
     return Response(content=torrent_bytes, media_type="application/x-bittorrent", headers=headers)
 
 
-@api_router.get("/api/downloads", tags=["Download"])
+@api_router.get("/api/downloads", tags=["Download"], summary="List downloads", description="Return tracked AWC download jobs with progress, status, and summary counts.")
 def api_downloads(limit: int = 100, _: str = Depends(require_api_key)) -> dict:
     return build_download_snapshot(limit=limit)
 
 
-@api_router.post("/api/downloads/{download_id}/cancel", tags=["Download"])
+@api_router.post("/api/downloads/{download_id}/cancel", tags=["Download"], summary="Pause download", description="Pause an active download and keep its partial file for later resume.")
 def api_cancel_download(download_id: str, _: str = Depends(require_api_key)) -> dict:
     download = cancel_download(download_id)
     if not download:
@@ -495,7 +427,7 @@ def api_cancel_download(download_id: str, _: str = Depends(require_api_key)) -> 
     return download
 
 
-@api_router.post("/api/downloads/{download_id}/resume", tags=["Download"])
+@api_router.post("/api/downloads/{download_id}/resume", tags=["Download"], summary="Resume download", description="Resume a paused download from its current partial file.")
 def api_resume_download(download_id: str, _: str = Depends(require_api_key)) -> dict:
     download = resume_download(download_id)
     if not download:
@@ -503,7 +435,7 @@ def api_resume_download(download_id: str, _: str = Depends(require_api_key)) -> 
     return download
 
 
-@api_router.post("/api/downloads/{download_id}/remove", tags=["Download"])
+@api_router.post("/api/downloads/{download_id}/remove", tags=["Download"], summary="Remove download", description="Remove a tracked download row and its local partial/final file when applicable.")
 def api_remove_download(download_id: str, _: str = Depends(require_api_key)) -> dict:
     removed = remove_download(download_id)
     if not removed:
@@ -511,38 +443,38 @@ def api_remove_download(download_id: str, _: str = Depends(require_api_key)) -> 
     return {"removed": True, "download_id": download_id}
 
 
-@api_router.post("/api/downloads/clear", tags=["Download"])
+@api_router.post("/api/downloads/clear", tags=["Download"], summary="Clear finished downloads", description="Remove finished or terminal download history entries from AWC.")
 def api_clear_downloads(_: str = Depends(require_api_key)) -> dict:
     return {"removed": clear_download_history()}
 
 
-@api_router.get("/api/events", tags=["System"])
+@api_router.get("/api/events", tags=["System"], summary="Server-sent events", description="Stream dashboard events and runtime updates over SSE.")
 def api_events(_: str = Depends(require_api_key)) -> StreamingResponse:
     return StreamingResponse(stream_events(), media_type="text/event-stream")
 
 
-@api_router.post("/api/rss/cache/clear", tags=["System"])
+@api_router.post("/api/rss/cache/clear", tags=["System"], summary="Clear RSS cache", description="Delete cached RSS entries currently stored by AWC.")
 def api_clear_rss_cache(_: str = Depends(require_api_key)) -> dict:
     result = clear_rss_cache()
     logger.info("RSS cache cleared: removed=%s", result.get("removed", 0))
     return result
 
 
-@api_router.post("/api/rss/update", tags=["System"])
+@api_router.post("/api/rss/update", tags=["System"], summary="Update RSS cache", description="Fetch the AnimeWorld RSS feed now and republish any matching items into the local cache.")
 def api_update_rss_cache(_: str = Depends(require_api_key)) -> dict:
     result = update_rss_cache()
     logger.info("RSS cache update requested: cached=%s", result.get("cached", 0))
     return result
 
 
-@api_router.post("/api/links/sanitize", tags=["System"])
+@api_router.post("/api/links/sanitize", tags=["System"], summary="Run sanitizer", description="Trigger a background sanitizer run to verify mappings, refresh metadata, and follow live redirects.")
 def api_sanitize_links(_: str = Depends(require_api_key)) -> dict:
     result = start_link_sanitizer()
     logger.info("Sanitizer requested")
     return result
 
 
-@api_router.post("/restart", tags=["System"])
+@api_router.post("/restart", tags=["System"], summary="Restart container", description="Gracefully stop the app process so Docker can restart the container.")
 def api_restart(_: str = Depends(require_api_key)) -> dict:
     def _graceful_exit() -> None:
         from ..services.events_service import stop_sse_streams
@@ -556,7 +488,7 @@ def api_restart(_: str = Depends(require_api_key)) -> dict:
     return {"ok": True, "message": "Restart scheduled"}
 
 
-@api_router.post("/api/webhook", tags=["Integration"])
+@api_router.post("/api/webhook", tags=["Integration"], summary="Manager webhook", description="Accept Sonarr/Radarr webhook payloads and trigger the matching sync and automap flows.")
 def manager_webhook(
     payload: dict = Body(default_factory=dict),
     _: str = Depends(require_api_key),
@@ -601,31 +533,29 @@ def manager_webhook(
     return normalized
 
 
-@api_router.post("/sync", tags=["Integration"])
+@api_router.post("/sync", tags=["Integration"], summary="Sync all managers", description="Run a full Sonarr + Radarr sync immediately.")
 def manual_sync(_: str = Depends(require_api_key)) -> dict:
     result = sync_all()
     logger.info("Manual sync completed: sonarr=%s radarr=%s", result.get("sonarr", 0), result.get("radarr", 0))
     return {"status": "ok", "result": result}
 
 
-@api_router.post("/sync/sonarr", tags=["Integration"])
+@api_router.post("/sync/sonarr", tags=["Integration"], summary="Sync Sonarr", description="Run a Sonarr-only sync immediately.")
 def manual_sync_sonarr(_: str = Depends(require_api_key)) -> dict:
     result = sync_now_sonarr()
     logger.info("Manual Sonarr sync completed: %s show(s)", result.get("processed", 0))
     return {"status": "ok", "result": result}
 
 
-@api_router.post("/sync/radarr", tags=["Integration"])
+@api_router.post("/sync/radarr", tags=["Integration"], summary="Sync Radarr", description="Run a Radarr-only sync immediately.")
 def manual_sync_radarr(_: str = Depends(require_api_key)) -> dict:
     result = sync_now_radarr()
     logger.info("Manual Radarr sync completed: %s movie(s)", result.get("processed", 0))
     return {"status": "ok", "result": result}
 
 
-@api_router.api_route("/api", methods=["GET", "POST"], tags=["Indexer"])
-def torznab_api(
+def _torznab_response(
     request: Request,
-    _: str = Depends(require_api_key),
     t: str = Query(default="caps"),
     q: str = Query(default=""),
     season: int | None = Query(default=None),
@@ -678,3 +608,40 @@ def torznab_api(
             media_type="application/xml",
         )
     raise HTTPException(status_code=400, detail=f"Unsupported Torznab operation: {t}")
+
+
+@api_router.get(
+    "/api",
+    tags=["Indexer"],
+    summary="Torznab endpoint",
+    description="Torznab-compatible indexer endpoint used by Sonarr and Radarr for caps, search, tvsearch, movie search, and cached RSS.",
+)
+def torznab_api(
+    request: Request,
+    _: str = Depends(require_api_key),
+    t: str = Query(default="caps"),
+    q: str = Query(default=""),
+    season: int | None = Query(default=None),
+    ep: int | None = Query(default=None),
+    cat: str = Query(default=""),
+    imdbid: str = Query(default=""),
+    tmdbid: int | None = Query(default=None),
+    tvdbid: int | None = Query(default=None),
+) -> Response:
+    return _torznab_response(request, t=t, q=q, season=season, ep=ep, cat=cat, imdbid=imdbid, tmdbid=tmdbid, tvdbid=tvdbid)
+
+
+@api_router.post("/api", include_in_schema=False)
+def torznab_api_post(
+    request: Request,
+    _: str = Depends(require_api_key),
+    t: str = Query(default="caps"),
+    q: str = Query(default=""),
+    season: int | None = Query(default=None),
+    ep: int | None = Query(default=None),
+    cat: str = Query(default=""),
+    imdbid: str = Query(default=""),
+    tmdbid: int | None = Query(default=None),
+    tvdbid: int | None = Query(default=None),
+) -> Response:
+    return _torznab_response(request, t=t, q=q, season=season, ep=ep, cat=cat, imdbid=imdbid, tmdbid=tmdbid, tvdbid=tvdbid)

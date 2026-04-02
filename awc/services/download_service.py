@@ -526,8 +526,6 @@ def queue_download(download_id: str) -> dict | None:
     entry = get_download(download_id)
     if not entry:
         return None
-    if entry["url"].startswith(f"{_download_base_url().rstrip('/')}/api/rebuild/placeholder"):
-        return entry
     with _download_lock:
         current = _download_threads.get(download_id)
         if current and current.is_alive():

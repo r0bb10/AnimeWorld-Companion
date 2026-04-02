@@ -23,15 +23,13 @@ def build_caps_xml(base_url: str | None = None) -> bytes:
     resolved_base = (base_url or settings.awc_url).rstrip("/")
 
     server = SubElement(root, "server")
-    server.set("version", "1.0")
+    server.set("version", "local")
     server.set("title", "AnimeWorld Companion")
-    server.set("strapline", "Clean rebuild in progress")
-    server.set("email", "noreply@example.invalid")
-    server.set("url", resolved_base)
+    server.set("url", f"{resolved_base}/api")
 
     limits = SubElement(root, "limits")
     limits.set("default", "100")
-    limits.set("max", "100")
+    limits.set("max", "500")
 
     searching = SubElement(root, "searching")
 
@@ -92,8 +90,9 @@ def _build_rss_root(base_url: str | None = None) -> tuple[Element, Element]:
 
     channel = SubElement(root, "channel")
     SubElement(channel, "title").text = "AnimeWorld Companion"
-    SubElement(channel, "description").text = "Clean rebuild in progress"
-    SubElement(channel, "link").text = resolved_base
+    SubElement(channel, "description").text = "Torznab indexer bridging Sonarr with AnimeWorld"
+    SubElement(channel, "link").text = f"{resolved_base}/api"
+    SubElement(channel, "pubDate").text = format_datetime(datetime.now(UTC))
     return root, channel
 
 
@@ -110,6 +109,7 @@ def _add_item(
     title: str,
     category_id: int,
     download_url: str,
+    aw_link: str = "",
     base_url: str | None = None,
     season: int | None = None,
     episode: int | None = None,
@@ -119,21 +119,20 @@ def _add_item(
 ) -> None:
     item = SubElement(channel, "item")
     SubElement(item, "title").text = title
-    link = _resolve_download_url(download_url, guid, title, base_url=base_url)
+    link = _resolve_download_url(download_url, guid, title, aw_link=aw_link, base_url=base_url)
     SubElement(item, "guid").text = guid
     SubElement(item, "link").text = link
-    SubElement(item, "comments").text = link
     SubElement(item, "pubDate").text = pub_date or format_datetime(datetime.now(UTC))
-    SubElement(item, "category").text = "Anime" if category_id == 5070 else "Movies"
+    SubElement(item, "category").text = str(category_id)
     SubElement(item, "size").text = str(size)
     enclosure = SubElement(item, "enclosure")
     enclosure.set("url", link)
     enclosure.set("length", str(size))
     enclosure.set("type", "application/x-bittorrent")
 
+    _add_attr(item, "seeders", 100)
+    _add_attr(item, "peers", 100)
     _add_attr(item, "category", category_id)
-    _add_attr(item, "downloadvolumefactor", 0)
-    _add_attr(item, "uploadvolumefactor", 1)
 
     if category_id == 5070:
         if season is not None:
@@ -144,18 +143,29 @@ def _add_item(
         _add_attr(item, "year", year)
 
 
-def _build_download_url(guid: str, title: str, *, base_url: str | None = None) -> str:
+def _build_download_url(guid: str, title: str, *, aw_link: str = "", base_url: str | None = None) -> str:
     base = (base_url or settings.awc_url).rstrip("/")
     params = [f"url={quote(guid, safe='')}"]
     if title:
         params.append(f"save_name={quote(title, safe='')}")
+    if aw_link:
+        params.append(f"aw_link={quote(aw_link, safe='')}")
     if settings.awc_api_key:
         params.append(f"apikey={quote(settings.awc_api_key, safe='')}")
     return f"{base}/download?{'&'.join(params)}"
 
 
-def _resolve_download_url(download_url: str, guid: str, title: str, *, base_url: str | None = None) -> str:
-    fallback = _build_download_url(guid, title, base_url=base_url)
+def _resolve_download_url(
+    download_url: str,
+    guid: str,
+    title: str,
+    *,
+    aw_link: str = "",
+    base_url: str | None = None,
+) -> str:
+    fallback = _build_download_url(guid, title, aw_link=aw_link, base_url=base_url)
+    if aw_link:
+        return fallback
     if not download_url:
         return fallback
     if not base_url:
@@ -194,8 +204,11 @@ def build_search_xml(
                 title=item["title"],
                 category_id=category_id,
                 download_url="",
+                aw_link=item.get("aw_episode_link", ""),
+                base_url=base_url,
                 season=item.get("season_number"),
                 episode=item.get("episode_number"),
+                year=item.get("year"),
                 size=item.get("size", 0),
                 pub_date=item.get("pub_date"),
             )
@@ -235,10 +248,11 @@ def build_search_xml(
             title=item["title"],
             category_id=category_id,
             download_url=item.get("download_url", ""),
+            aw_link=item.get("aw_link", ""),
             base_url=base_url,
             season=season,
             episode=episode,
-            year=None,
+            year=item.get("year"),
             size=item.get("size", 0),
             pub_date=item.get("pubDate"),
         )

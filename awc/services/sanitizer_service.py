@@ -48,6 +48,19 @@ def _verify_slug(client: AnimeWorldClient, slug: str) -> tuple[str, int]:
     return final_slug or slug, response.status_code
 
 
+def _is_transient_aw_error(exc: Exception) -> bool:
+    if isinstance(exc, (requests.Timeout, requests.ConnectionError)):
+        return True
+    if isinstance(exc, requests.HTTPError):
+        status = getattr(getattr(exc, "response", None), "status_code", None)
+        if status is None:
+            return True
+        return int(status) >= 500 or int(status) == 429
+    if isinstance(exc, requests.RequestException):
+        return True
+    return False
+
+
 def _has_aired(season: dict) -> bool:
     start = str((season or {}).get("air_date_start") or "").strip()
     if not start:
@@ -229,9 +242,16 @@ def _needs_show_mapping_refresh(show: dict, season: dict) -> bool:
 def sanitize_links_once() -> dict:
     client = AnimeWorldClient()
     now = datetime.now(UTC).isoformat()
-    result = {"checked": 0, "updated": 0, "removed": 0, "failed": 0}
+    result = {"checked": 0, "updated": 0, "removed": 0, "failed": 0, "skipped": 0}
     show_seasons_to_refresh: set[tuple[int, int]] = set()
     logger.info("Sanitizer cycle started")
+
+    health = client.health()
+    if not health.ok:
+        message = f"AnimeWorld unreachable: {health.url}"
+        logger.warning("Sanitizer skipped: %s", message)
+        _set_state(last_result=result, last_error=message, last_finished_at=now, running=False)
+        return result
 
     with get_db(write=True) as conn:
         show_rows = conn.execute(
@@ -247,7 +267,11 @@ def sanitize_links_once() -> dict:
                 new_slug, _ = _verify_slug(client, row["aw_link"])
                 if _refresh_show_mapping_metadata(client, dict(row), new_slug, now):
                     result["updated"] += 1
-            except Exception:
+            except Exception as exc:
+                if _is_transient_aw_error(exc):
+                    result["skipped"] += 1
+                    logger.warning("Show mapping verification skipped: %s (transient AnimeWorld error)", display_aw_link(row["aw_link"]))
+                    continue
                 failures = int(row["link_check_failures"] or 0) + 1
                 if failures >= 2:
                     conn.execute("DELETE FROM aw_show_mappings WHERE id = ?", (row["id"],))
@@ -288,7 +312,11 @@ def sanitize_links_once() -> dict:
                 new_slug, _ = _verify_slug(client, row["aw_link"])
                 if _refresh_movie_mapping_metadata(client, dict(row), new_slug, now):
                     result["updated"] += 1
-            except Exception:
+            except Exception as exc:
+                if _is_transient_aw_error(exc):
+                    result["skipped"] += 1
+                    logger.warning("Movie mapping verification skipped: %s (transient AnimeWorld error)", display_aw_link(row["aw_link"]))
+                    continue
                 failures = int(row["link_check_failures"] or 0) + 1
                 if failures >= 2:
                     conn.execute("DELETE FROM aw_movie_mappings WHERE id = ?", (row["id"],))
@@ -335,6 +363,7 @@ def sanitize_links_once() -> dict:
             f"updated={result['updated']}",
             f"removed={result['removed']}",
             f"failed={result['failed']}",
+            f"skipped={result['skipped']}",
         ],
     )
     return result

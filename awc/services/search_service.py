@@ -102,6 +102,8 @@ def _series_items(show: dict, season_number: int, episode_number: int) -> list[d
                         episode=episode_number,
                         source=source,
                         manager_id=show.get("sonarr_id"),
+                        aw_link=mapping["aw_link"],
+                        filename=title,
                     ),
                     "aw_link": mapping["aw_link"],
                 }
@@ -207,8 +209,11 @@ def build_movie_search_items(query: str, tmdb_id: int | None = None, imdb_id: st
                     year=detail.get("year"),
                     source=source,
                     manager_id=detail.get("radarr_id"),
+                    aw_link=detail["mapping"]["aw_link"],
+                    filename=title,
                 ),
                 "aw_link": detail["mapping"]["aw_link"],
+                "year": detail.get("year"),
             }
         )
     logger.debug("Movie search resolved: title=%s items=%s", detail.get("title"), len(results))

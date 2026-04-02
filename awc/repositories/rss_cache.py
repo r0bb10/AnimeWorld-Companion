@@ -13,7 +13,7 @@ def list_rss_items(limit: int = 100) -> list[dict]:
             SELECT *
             FROM (
                 SELECT
-                    id,
+                    show_rss_cache.id AS id,
                     show_id,
                     NULL AS movie_id,
                     season_number,
@@ -23,24 +23,27 @@ def list_rss_items(limit: int = 100) -> list[dict]:
                     size,
                     pub_date,
                     aw_episode_link,
-                    created_at,
+                    NULL AS year,
+                    show_rss_cache.created_at AS created_at,
                     '5070' AS category_id
                 FROM show_rss_cache
                 UNION ALL
                 SELECT
-                    id,
+                    movie_rss_cache.id AS id,
                     NULL AS show_id,
-                    movie_id,
+                    movie_rss_cache.movie_id AS movie_id,
                     NULL AS season_number,
                     NULL AS episode_number,
-                    title,
-                    guid,
-                    size,
-                    pub_date,
-                    aw_episode_link,
-                    created_at,
+                    movie_rss_cache.title AS title,
+                    movie_rss_cache.guid AS guid,
+                    movie_rss_cache.size AS size,
+                    movie_rss_cache.pub_date AS pub_date,
+                    movie_rss_cache.aw_episode_link AS aw_episode_link,
+                    m.year AS year,
+                    movie_rss_cache.created_at AS created_at,
                     '2000' AS category_id
                 FROM movie_rss_cache
+                JOIN movies m ON m.id = movie_rss_cache.movie_id
             )
             ORDER BY datetime(created_at) DESC, id DESC
             LIMIT ?

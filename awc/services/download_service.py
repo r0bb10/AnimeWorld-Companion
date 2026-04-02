@@ -15,6 +15,7 @@ from ..core.config import settings
 from ..core.log_events import extract_remote_filename, log_block
 from ..core.logging import get_logger
 from ..domain.media import MediaKind, MediaManager, NamingContext
+from ..repositories.db import get_db
 from ..repositories.downloads import (
     clear_finished_downloads,
     create_download,
@@ -125,6 +126,123 @@ def _release_context(
     )
 
 
+def _legacy_query_name(save_name: str) -> str:
+    return Path(save_name or "").stem.replace(".", " ").strip()
+
+
+def resolve_legacy_download_request(*, url: str = "", save_name: str = "", aw_link: str = "") -> dict | None:
+    normalized_link = (aw_link or "").strip()
+    source = (url or "").strip()
+    filename = (save_name or "").strip()
+    if not (normalized_link or source or filename):
+        return None
+
+    with get_db() as conn:
+        if normalized_link:
+            row = conn.execute(
+                """
+                SELECT
+                    'sonarr' AS manager,
+                    s.title,
+                    src.season_number,
+                    src.episode_number,
+                    NULL AS year,
+                    s.sonarr_id AS manager_id
+                FROM show_rss_cache src
+                JOIN shows s ON s.id = src.show_id
+                WHERE src.aw_episode_link = ?
+                  AND (? = '' OR src.guid = ?)
+                ORDER BY datetime(src.created_at) DESC, src.id DESC
+                LIMIT 1
+                """,
+                (normalized_link, source, source),
+            ).fetchone()
+            if row:
+                resolved = dict(row)
+                resolved["source"] = source
+                resolved["filename"] = filename
+                resolved["aw_link"] = normalized_link
+                return resolved
+
+            row = conn.execute(
+                """
+                SELECT
+                    'radarr' AS manager,
+                    m.title,
+                    NULL AS season_number,
+                    NULL AS episode_number,
+                    m.year,
+                    m.radarr_id AS manager_id
+                FROM movie_rss_cache src
+                JOIN movies m ON m.id = src.movie_id
+                WHERE src.aw_episode_link = ?
+                  AND (? = '' OR src.guid = ?)
+                ORDER BY datetime(src.created_at) DESC, src.id DESC
+                LIMIT 1
+                """,
+                (normalized_link, source, source),
+            ).fetchone()
+            if row:
+                resolved = dict(row)
+                resolved["source"] = source
+                resolved["filename"] = filename
+                resolved["aw_link"] = normalized_link
+                return resolved
+
+            row = conn.execute(
+                """
+                SELECT
+                    'radarr' AS manager,
+                    m.title,
+                    NULL AS season_number,
+                    NULL AS episode_number,
+                    m.year,
+                    m.radarr_id AS manager_id
+                FROM aw_movie_mappings amm
+                JOIN movies m ON m.id = amm.movie_id
+                WHERE amm.aw_link = ?
+                LIMIT 1
+                """,
+                (normalized_link,),
+            ).fetchone()
+            if row:
+                resolved = dict(row)
+                resolved["source"] = source
+                resolved["filename"] = filename
+                resolved["aw_link"] = normalized_link
+                return resolved
+
+            row = conn.execute(
+                """
+                SELECT
+                    'sonarr' AS manager,
+                    s.title,
+                    s.sonarr_id AS manager_id
+                FROM aw_show_mappings asm
+                JOIN shows s ON s.id = asm.show_id
+                WHERE asm.aw_link = ?
+                ORDER BY asm.show_id, asm.season_number
+                LIMIT 1
+                """,
+                (normalized_link,),
+            ).fetchone()
+            if row and filename:
+                from .query_service import parse_query
+
+                parsed = parse_query(_legacy_query_name(filename))
+                if parsed.get("season") is not None and parsed.get("episode") is not None:
+                    resolved = dict(row)
+                    resolved["season_number"] = parsed["season"]
+                    resolved["episode_number"] = parsed["episode"]
+                    resolved["year"] = None
+                    resolved["source"] = source
+                    resolved["filename"] = filename
+                    resolved["aw_link"] = normalized_link
+                    return resolved
+
+    return None
+
+
 def build_download_url(
     *,
     manager: str,
@@ -134,13 +252,31 @@ def build_download_url(
     year: int | None = None,
     source: str = "",
     manager_id: int | None = None,
+    aw_link: str = "",
+    filename: str | None = None,
+    base_url: str | None = None,
 ) -> str:
-    params: dict[str, str | int] = {
-        "manager": manager,
-        "title": title,
-    }
+    resolved_source = _decode_source_token(source) or source
+    legacy_name = filename or build_release_name(
+        _release_context(
+            manager=manager,
+            title=title,
+            season=season,
+            episode=episode,
+            year=year,
+        )
+    )
+    params: dict[str, str | int] = {}
+    if resolved_source:
+        params["url"] = resolved_source
+    if legacy_name:
+        params["save_name"] = legacy_name
+    if aw_link:
+        params["aw_link"] = aw_link
     if settings.awc_api_key:
         params["apikey"] = settings.awc_api_key
+    params["manager"] = manager
+    params["title"] = title
     if season is not None:
         params["season"] = season
     if episode is not None:
@@ -152,7 +288,7 @@ def build_download_url(
     if source:
         params["source"] = _encode_source_token(source)
     query = urlencode(params)
-    return f"{_download_base_url().rstrip('/')}/download?{query}"
+    return f"{(base_url or _download_base_url()).rstrip('/')}/download?{query}"
 
 
 def create_fake_torrent(
@@ -164,8 +300,11 @@ def create_fake_torrent(
     year: int | None = None,
     source: str = "",
     manager_id: int | None = None,
+    aw_link: str = "",
+    filename: str | None = None,
+    base_url: str | None = None,
 ) -> tuple[dict, bytes, str]:
-    release_name = build_release_name(
+    release_name = filename or build_release_name(
         _release_context(
             manager=manager,
             title=title,
@@ -181,6 +320,9 @@ def create_fake_torrent(
         episode=episode,
         year=year,
         manager_id=manager_id,
+        aw_link=aw_link,
+        filename=release_name,
+        base_url=base_url,
     )
     existing = next(
         (
@@ -230,6 +372,9 @@ def create_fake_torrent(
             year=year,
             source=source,
             manager_id=manager_id,
+            aw_link=aw_link,
+            filename=release_name,
+            base_url=base_url,
         ),
         "comment": "AWC rebuild fake torrent handoff",
         "created by": "AnimeWorld Companion",

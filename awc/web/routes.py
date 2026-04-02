@@ -30,6 +30,7 @@ from ..services.download_service import (
     clear_download_history,
     create_fake_torrent,
     remove_download,
+    resolve_legacy_download_request,
     resume_download,
 )
 from ..services.discovery_service import discover_movie, discover_show, search_animeworld
@@ -436,23 +437,43 @@ def rebuild_placeholder(item_id: str) -> dict:
 
 @api_router.get("/download", tags=["Download"])
 def download_handoff(
-    manager: str,
-    title: str,
+    request: Request,
+    manager: str = "",
+    title: str = "",
     season: int | None = None,
     episode: int | None = None,
     year: int | None = None,
     manager_id: int | None = None,
     source: str = "",
+    url: str = "",
+    save_name: str = "",
+    aw_link: str = "",
     _: str = Depends(require_api_key),
 ) -> Response:
+    if not manager or not title:
+        resolved = resolve_legacy_download_request(url=url, save_name=save_name, aw_link=aw_link)
+        if not resolved:
+            raise HTTPException(status_code=422, detail="Missing download context")
+        manager = str(resolved.get("manager") or manager)
+        title = str(resolved.get("title") or title)
+        season = resolved.get("season_number", season)
+        episode = resolved.get("episode_number", episode)
+        year = resolved.get("year", year)
+        manager_id = resolved.get("manager_id", manager_id)
+        source = str(resolved.get("source") or url or source)
+        save_name = str(resolved.get("filename") or save_name)
+        aw_link = str(resolved.get("aw_link") or aw_link)
     download, torrent_bytes, torrent_name = create_fake_torrent(
         manager=manager,
         title=title,
         season=season,
         episode=episode,
         year=year,
-        source=source,
+        source=source or url,
         manager_id=manager_id,
+        aw_link=aw_link,
+        filename=save_name or None,
+        base_url=str(request.base_url).rstrip("/"),
     )
     headers = {
         "Content-Disposition": f'attachment; filename="{torrent_name}"',

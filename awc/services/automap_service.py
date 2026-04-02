@@ -67,6 +67,35 @@ def _existing_links_by_show(show: dict) -> set[str]:
     return links
 
 
+def _filter_language_candidates(candidates: list[dict], want_dubbed: bool) -> list[dict]:
+    if not candidates:
+        return candidates
+
+    def is_italian(candidate: dict) -> bool:
+        return "ital" in str(candidate.get("aw_audio") or "").lower()
+
+    def is_japanese(candidate: dict) -> bool:
+        audio = str(candidate.get("aw_audio") or "").lower()
+        return "giapp" in audio or "japan" in audio
+
+    if want_dubbed:
+        dubbed = [candidate for candidate in candidates if bool(candidate.get("dub"))]
+        if dubbed:
+            return dubbed
+        italian = [candidate for candidate in candidates if is_italian(candidate)]
+        if italian:
+            return italian
+        return candidates
+
+    non_dubbed = [candidate for candidate in candidates if not bool(candidate.get("dub"))]
+    japanese = [candidate for candidate in non_dubbed if is_japanese(candidate)]
+    if japanese:
+        return japanese
+    if non_dubbed:
+        return non_dubbed
+    return candidates
+
+
 def _build_scored_candidates(show: dict, season: dict, candidates: list[dict], want_dubbed: bool, reserved_links: set[str]) -> list[dict]:
     own_links = {
         (mapping.get("aw_link") or "").strip()
@@ -74,8 +103,9 @@ def _build_scored_candidates(show: dict, season: dict, candidates: list[dict], w
         if mapping.get("aw_link")
     }
     blocked_links = reserved_links - own_links
+    filtered = _filter_language_candidates(candidates, want_dubbed)
     scored: list[dict] = []
-    for candidate in candidates:
+    for candidate in filtered:
         if candidate.get("aw_link", "") in blocked_links:
             continue
         score, factors = calculate_show_confidence(show, season, candidate, want_dubbed=want_dubbed)
@@ -273,10 +303,10 @@ def automap_movie(movie_id: int, force: bool = False) -> dict:
 
     want_dubbed = resolve_movie_language_preference(movie)
     candidates = []
-    for candidate in _discovery_candidates(
+    for candidate in _filter_language_candidates(_discovery_candidates(
         movie["title"],
         [item.get("title", "") for item in movie.get("alternate_titles", [])],
-    ):
+    ), want_dubbed):
         score, factors = calculate_movie_confidence(movie, candidate, want_dubbed=want_dubbed)
         candidates.append({**candidate, "confidence_score": score, "confidence_factors": factors})
     candidates.sort(key=lambda item: item["confidence_score"], reverse=True)

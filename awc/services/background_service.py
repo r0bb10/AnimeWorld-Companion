@@ -36,7 +36,7 @@ _state = {
     "sync": {"running": False, "last_run_at": None, "last_error": ""},
     "rss": {"enabled": False, "running": False, "last_run_at": None, "last_error": "", "last_cached": 0},
     "imports": {"running": False, "last_run_at": None, "last_error": "", "last_marked": 0},
-    "links": {"running": False, "last_run_at": None, "last_error": "", "last_result": None},
+    "links": {"enabled": False, "running": False, "last_run_at": None, "last_error": "", "last_result": None},
     "startup": {"restored": 0, "fixed": 0},
 }
 
@@ -411,6 +411,10 @@ def _run_import_loop() -> None:
 
 
 def _run_link_loop() -> None:
+    _set_state("links", enabled=settings.sanitizer_enabled, running=False, last_error="")
+    if not settings.sanitizer_enabled:
+        logger.info("Sanitizer loop disabled by env")
+        return
     logger.info("Sanitizer loop scheduled: first_run=600s interval=86400s")
     if _stop_event.wait(60 * 10):
         return
@@ -453,12 +457,14 @@ def start_background_workers() -> dict:
     _stop_event.clear()
     startup = restore_on_startup()
     _set_state("startup", **startup)
+    _set_state("links", enabled=settings.sanitizer_enabled, running=False, last_error="")
 
     workers = {
         "sync": _run_sync_loop,
         "imports": _run_import_loop,
-        "links": _run_link_loop,
     }
+    if settings.sanitizer_enabled:
+        workers["links"] = _run_link_loop
     if settings.rss_enabled:
         workers["rss"] = _run_rss_loop
 

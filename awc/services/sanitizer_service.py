@@ -22,6 +22,7 @@ from .automap_scoring import calculate_movie_confidence, calculate_show_confiden
 _state_lock = threading.Lock()
 logger = get_logger("sanitizer")
 _state = {
+    "enabled": settings.sanitizer_enabled,
     "running": False,
     "last_started_at": None,
     "last_finished_at": None,
@@ -366,8 +367,13 @@ def sanitize_links_once() -> dict:
 
 
 def start_link_sanitizer() -> dict:
+    if not settings.sanitizer_enabled:
+        _set_state(enabled=False, running=False, last_error="")
+        logger.info("Sanitizer request ignored: disabled by env")
+        return {"ok": False, "disabled": True, "message": "Sanitizer disabled by env"}
+
     def worker():
-        _set_state(running=True, last_started_at=datetime.now(UTC).isoformat(), last_error="")
+        _set_state(enabled=True, running=True, last_started_at=datetime.now(UTC).isoformat(), last_error="")
         try:
             sanitize_links_once()
         except Exception as exc:

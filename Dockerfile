@@ -22,6 +22,7 @@ ENV PYTHONUNBUFFERED=1 \
 LABEL org.opencontainers.image.version="${VERSION}"
 LABEL org.opencontainers.image.revision="${COMMIT_SHA}"
 LABEL org.opencontainers.image.authors="AnimeWorld Companion"
+LABEL org.opencontainers.image.source="https://github.com/r0bb10/AnimeWorld-Companion"
 
 EXPOSE 7004
 

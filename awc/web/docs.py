@@ -15,10 +15,11 @@ Authentication:
 - pass `X-Api-Key` as a header
 
 Most automation happens through:
-- `/automap`
-- `/sync`, `/sync/sonarr`, `/sync/radarr`
+- `/api/automap`
+- `/api/sync`, `/api/sync/sonarr`, `/api/sync/radarr`
 - `/api/webhook`
 - `/api/downloads`
+- `/api/mappings/unmap-all`
 - `/api?t=caps|tvsearch|search|movie`
 """.strip()
 

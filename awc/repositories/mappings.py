@@ -196,6 +196,26 @@ def remove_show_mapping(show_id: int, season_number: int) -> int:
     return int(cursor.rowcount or 0)
 
 
+def remove_all_show_mappings() -> dict:
+    with get_db(write=True) as conn:
+        row = conn.execute(
+            """
+            SELECT
+                COUNT(*) AS rows,
+                COUNT(DISTINCT show_id) AS shows,
+                COUNT(DISTINCT printf('%s:%s', show_id, season_number)) AS seasons
+            FROM aw_show_mappings
+            """
+        ).fetchone()
+        conn.execute("DELETE FROM aw_show_mappings")
+        conn.execute("DELETE FROM sanitizer_show_retries")
+    return {
+        "rows": int((row or {})["rows"] if row else 0),
+        "shows": int((row or {})["shows"] if row else 0),
+        "seasons": int((row or {})["seasons"] if row else 0),
+    }
+
+
 def replace_movie_mapping(
     *,
     movie_id: int,
@@ -257,6 +277,24 @@ def remove_movie_mapping(movie_id: int) -> int:
     with get_db(write=True) as conn:
         cursor = conn.execute("DELETE FROM aw_movie_mappings WHERE movie_id = ?", (movie_id,))
     return int(cursor.rowcount or 0)
+
+
+def remove_all_movie_mappings() -> dict:
+    with get_db(write=True) as conn:
+        row = conn.execute(
+            """
+            SELECT
+                COUNT(*) AS rows,
+                COUNT(DISTINCT movie_id) AS movies
+            FROM aw_movie_mappings
+            """
+        ).fetchone()
+        conn.execute("DELETE FROM aw_movie_mappings")
+        conn.execute("DELETE FROM sanitizer_movie_retries")
+    return {
+        "rows": int((row or {})["rows"] if row else 0),
+        "movies": int((row or {})["movies"] if row else 0),
+    }
 
 
 def replace_show_mappings_auto(

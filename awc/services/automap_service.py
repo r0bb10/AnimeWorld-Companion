@@ -297,6 +297,9 @@ def automap_movie(movie_id: int, force: bool = False) -> dict:
     if not movie:
         logger.warning("Movie automap failed: movie_id=%s not found", movie_id)
         return {"status": "error", "message": "movie_not_found", "movie_id": movie_id}
+    if bool(movie.get("ignored")):
+        logger.info("Movie automap skipped: %s ignored", movie.get("title"))
+        return {"status": "already_mapped", "movie_id": movie_id, "ignored": True}
     if movie.get("mapping") and not force:
         logger.info("Movie automap skipped: %s already mapped", movie.get("title"))
         return {"status": "already_mapped", "movie_id": movie_id}
@@ -353,17 +356,25 @@ def automap_show(show_id: int, season_number: int | None = None, force: bool = F
     ambiguous: list[dict] = []
     handled: set[int] = set()
     skipped_unaired: list[int] = []
+    ignored_seasons: list[int] = []
 
     target_seasons = []
     for season in show.get("seasons", []):
-        if season.get("season_number", 0) <= 0:
+        season_number_value = int(season.get("season_number", 0) or 0)
+        if season_number_value <= 0:
             continue
-        if season_number is not None and season["season_number"] != season_number:
+        if season_number is not None and season_number_value != season_number:
+            continue
+        if bool(season.get("ignored")):
+            ignored_seasons.append(season_number_value)
             continue
         target_seasons.append({**season, "has_aired": bool(season.get("air_date_start")) and str(season.get("air_date_start"))[:10] <= datetime.now(UTC).date().isoformat()})
     if not target_seasons:
+        if ignored_seasons:
+            logger.info("Show automap skipped: %s ignored", show.get("title"))
+            return {"status": "already_mapped", "show_id": show_id, "mapped_seasons": [], "ambiguous": [], "candidates": [], "ignored_seasons": sorted(ignored_seasons)}
         logger.warning("Show automap found no target seasons: %s", show.get("title"))
-        return {"status": "not_found", "show_id": show_id, "mapped_seasons": [], "ambiguous": [], "candidates": []}
+        return {"status": "not_found", "show_id": show_id, "mapped_seasons": [], "ambiguous": [], "candidates": [], "ignored_seasons": []}
 
     eligible_seasons = [
         season for season in target_seasons
@@ -371,7 +382,7 @@ def automap_show(show_id: int, season_number: int | None = None, force: bool = F
     ]
     if not eligible_seasons:
         logger.info("Show automap skipped: %s already mapped", show.get("title"))
-        return {"status": "already_mapped", "show_id": show_id, "mapped_seasons": [], "ambiguous": [], "candidates": []}
+        return {"status": "already_mapped", "show_id": show_id, "mapped_seasons": [], "ambiguous": [], "candidates": [], "ignored_seasons": sorted(ignored_seasons)}
 
     candidates = _discovery_candidates(show["title"], _show_alternate_titles(show))
 
@@ -541,6 +552,7 @@ def automap_show(show_id: int, season_number: int | None = None, force: bool = F
         "ambiguous": ambiguous,
         "candidates": scored_candidates[:10],
         "skipped_unaired": sorted(skipped_unaired),
+        "ignored_seasons": sorted(ignored_seasons),
     }
 
 
@@ -571,8 +583,48 @@ def _run_background(target, *args, **kwargs) -> dict:
 
 def automap_all(force: bool = False) -> dict:
     with get_db() as conn:
-        shows = [("show", row[0], row[1]) for row in conn.execute("SELECT id, title FROM shows").fetchall()]
-        movies = [("movie", row[0], row[1]) for row in conn.execute("SELECT id, title FROM movies").fetchall()]
+        if force:
+            show_rows = conn.execute(
+                """
+                SELECT DISTINCT s.id, s.title
+                FROM shows s
+                JOIN show_seasons ss ON ss.show_id = s.id
+                WHERE ss.season_number > 0
+                  AND COALESCE(ss.ignored, 0) = 0
+                """
+            ).fetchall()
+            movie_rows = conn.execute(
+                """
+                SELECT m.id, m.title
+                FROM movies m
+                WHERE COALESCE(m.ignored, 0) = 0
+                """
+            ).fetchall()
+        else:
+            show_rows = conn.execute(
+                """
+                SELECT DISTINCT s.id, s.title
+                FROM shows s
+                JOIN show_seasons ss ON ss.show_id = s.id
+                LEFT JOIN aw_show_mappings asm
+                    ON asm.show_id = ss.show_id
+                   AND asm.season_number = ss.season_number
+                WHERE ss.season_number > 0
+                  AND COALESCE(ss.ignored, 0) = 0
+                  AND asm.id IS NULL
+                """
+            ).fetchall()
+            movie_rows = conn.execute(
+                """
+                SELECT m.id, m.title
+                FROM movies m
+                LEFT JOIN aw_movie_mappings amm ON amm.movie_id = m.id
+                WHERE COALESCE(m.ignored, 0) = 0
+                  AND amm.id IS NULL
+                """
+            ).fetchall()
+        shows = [("show", row[0], row[1]) for row in show_rows]
+        movies = [("movie", row[0], row[1]) for row in movie_rows]
     combined = sorted(shows + movies, key=lambda item: (item[2] or "").lower())
     show_results = []
     movie_results = []

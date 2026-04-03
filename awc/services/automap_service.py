@@ -8,7 +8,7 @@ import logging
 import threading
 
 from ..core.config import settings
-from ..core.log_events import format_movie_automap_lines, format_show_automap_lines, log_block
+from ..core.log_events import format_movie_automap_lines, format_show_automap_lines, log_block, log_info, log_warning
 from ..core.logging import get_logger
 from ..repositories.db import get_db
 from ..repositories.mappings import (
@@ -295,15 +295,15 @@ def _propagate_single_link(
 def automap_movie(movie_id: int, force: bool = False, *, emit_logs: bool = True) -> dict:
     movie = get_movie_detail(movie_id)
     if not movie:
-        logger.warning("Movie automap failed: movie_id=%s not found", movie_id)
+        log_warning(logger, "automap.movie.not_found", "Movie automap failed: movie not found", details={"movie_id": movie_id}, entity_kind="movie", entity_id=movie_id)
         return {"status": "error", "message": "movie_not_found", "movie_id": movie_id}
     if bool(movie.get("ignored")):
         if emit_logs:
-            logger.info("Movie automap skipped: %s ignored", movie.get("title"))
+            log_info(logger, "automap.movie.ignored", "Movie automap skipped: ignored", entity_kind="movie", entity_id=movie_id, entity_title=movie.get("title"))
         return {"status": "already_mapped", "movie_id": movie_id, "ignored": True}
     if movie.get("mapping") and not force:
         if emit_logs:
-            logger.info("Movie automap skipped: %s already mapped", movie.get("title"))
+            log_info(logger, "automap.movie.already_mapped", "Movie automap skipped: already mapped", entity_kind="movie", entity_id=movie_id, entity_title=movie.get("title"))
         return {"status": "already_mapped", "movie_id": movie_id}
 
     want_dubbed = resolve_movie_language_preference(movie)
@@ -325,6 +325,10 @@ def automap_movie(movie_id: int, force: bool = False, *, emit_logs: bool = True)
                 logging.WARNING,
                 movie.get("title", f"movie:{movie_id}"),
                 ["No high-confidence movie match found"],
+                event_type="automap.movie.not_found",
+                entity_kind="movie",
+                entity_id=movie_id,
+                entity_title=movie.get("title"),
             )
         return {"status": "not_found", "movie_id": movie_id, "candidates": candidates[:5]}
 
@@ -344,6 +348,10 @@ def automap_movie(movie_id: int, force: bool = False, *, emit_logs: bool = True)
             logging.INFO,
             movie.get("title", f"movie:{movie_id}"),
             format_movie_automap_lines(mapping),
+            event_type="automap.movie.mapped",
+            entity_kind="movie",
+            entity_id=movie_id,
+            entity_title=movie.get("title"),
         )
     return {"status": "success", "movie_id": movie_id, "mapping": mapping, "candidates": candidates[:5]}
 
@@ -351,7 +359,7 @@ def automap_movie(movie_id: int, force: bool = False, *, emit_logs: bool = True)
 def automap_show(show_id: int, season_number: int | None = None, force: bool = False, *, emit_logs: bool = True) -> dict:
     show = get_show_detail(show_id)
     if not show:
-        logger.warning("Show automap failed: show_id=%s not found", show_id)
+        log_warning(logger, "automap.show.not_found", "Show automap failed: show not found", details={"show_id": show_id}, entity_kind="show", entity_id=show_id)
         return {"status": "error", "message": "show_not_found", "show_id": show_id}
 
     want_dubbed = resolve_show_language_preference(show)
@@ -376,10 +384,10 @@ def automap_show(show_id: int, season_number: int | None = None, force: bool = F
     if not target_seasons:
         if ignored_seasons:
             if emit_logs:
-                logger.info("Show automap skipped: %s ignored", show.get("title"))
+                log_info(logger, "automap.show.ignored", "Show automap skipped: ignored", entity_kind="show", entity_id=show_id, entity_title=show.get("title"))
             return {"status": "already_mapped", "show_id": show_id, "mapped_seasons": [], "ambiguous": [], "candidates": [], "ignored_seasons": sorted(ignored_seasons)}
         if emit_logs:
-            logger.warning("Show automap found no target seasons: %s", show.get("title"))
+            log_warning(logger, "automap.show.no_target_seasons", "Show automap found no target seasons", entity_kind="show", entity_id=show_id, entity_title=show.get("title"))
         return {"status": "not_found", "show_id": show_id, "mapped_seasons": [], "ambiguous": [], "candidates": [], "ignored_seasons": []}
 
     eligible_seasons = [
@@ -388,7 +396,7 @@ def automap_show(show_id: int, season_number: int | None = None, force: bool = F
     ]
     if not eligible_seasons:
         if emit_logs:
-            logger.info("Show automap skipped: %s already mapped", show.get("title"))
+            log_info(logger, "automap.show.already_mapped", "Show automap skipped: already mapped", entity_kind="show", entity_id=show_id, entity_title=show.get("title"))
         return {"status": "already_mapped", "show_id": show_id, "mapped_seasons": [], "ambiguous": [], "candidates": [], "ignored_seasons": sorted(ignored_seasons)}
 
     candidates = _discovery_candidates(show["title"], _show_alternate_titles(show))
@@ -531,6 +539,10 @@ def automap_show(show_id: int, season_number: int | None = None, force: bool = F
                 logging.INFO,
                 show.get("title", f"show:{show_id}"),
                 format_show_automap_lines(refreshed_show or show, mapped_seasons, []),
+                event_type="automap.show.success",
+                entity_kind="show",
+                entity_id=show_id,
+                entity_title=show.get("title"),
             )
         elif status == "partial":
             log_block(
@@ -538,6 +550,10 @@ def automap_show(show_id: int, season_number: int | None = None, force: bool = F
                 logging.WARNING,
                 show.get("title", f"show:{show_id}"),
                 format_show_automap_lines(refreshed_show or show, mapped_seasons, ambiguous),
+                event_type="automap.show.partial",
+                entity_kind="show",
+                entity_id=show_id,
+                entity_title=show.get("title"),
             )
         elif status == "ambiguous":
             log_block(
@@ -545,6 +561,10 @@ def automap_show(show_id: int, season_number: int | None = None, force: bool = F
                 logging.WARNING,
                 show.get("title", f"show:{show_id}"),
                 format_show_automap_lines(show, [], ambiguous),
+                event_type="automap.show.ambiguous",
+                entity_kind="show",
+                entity_id=show_id,
+                entity_title=show.get("title"),
             )
         elif status == "not_found":
             log_block(
@@ -552,6 +572,10 @@ def automap_show(show_id: int, season_number: int | None = None, force: bool = F
                 logging.WARNING,
                 show.get("title", f"show:{show_id}"),
                 ["No high-confidence AnimeWorld match found"],
+                event_type="automap.show.not_found",
+                entity_kind="show",
+                entity_id=show_id,
+                entity_title=show.get("title"),
             )
     return {
         "status": status,

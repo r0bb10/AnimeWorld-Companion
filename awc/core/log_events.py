@@ -11,10 +11,92 @@ from urllib.parse import unquote, urlsplit
 from .config import settings
 
 
-def log_block(logger: logging.Logger, level: int, header: str, lines: list[str] | None = None) -> None:
-    logger.log(level, header)
-    for line in lines or []:
-        logger.log(level, "  ↳ %s", line)
+def _event_extra(
+    *,
+    event_type: str,
+    lines: list[str] | None = None,
+    details: dict | None = None,
+    entity_kind: str | None = None,
+    entity_id: str | int | None = None,
+    entity_title: str | None = None,
+) -> dict:
+    return {
+        "awc_event_type": event_type,
+        "awc_lines": [str(line) for line in (lines or []) if str(line).strip()],
+        "awc_details": dict(details or {}),
+        "awc_entity_kind": entity_kind,
+        "awc_entity_id": None if entity_id is None else str(entity_id),
+        "awc_entity_title": entity_title,
+    }
+
+
+def emit_event(
+    logger: logging.Logger,
+    level: int,
+    event_type: str,
+    message: str,
+    *,
+    lines: list[str] | None = None,
+    details: dict | None = None,
+    entity_kind: str | None = None,
+    entity_id: str | int | None = None,
+    entity_title: str | None = None,
+    exc_info=None,
+) -> None:
+    logger.log(
+        level,
+        message,
+        exc_info=exc_info,
+        extra=_event_extra(
+            event_type=event_type,
+            lines=lines,
+            details=details,
+            entity_kind=entity_kind,
+            entity_id=entity_id,
+            entity_title=entity_title,
+        ),
+    )
+
+
+def log_debug(logger: logging.Logger, event_type: str, message: str, *, details: dict | None = None, entity_kind: str | None = None, entity_id: str | int | None = None, entity_title: str | None = None) -> None:
+    emit_event(logger, logging.DEBUG, event_type, message, details=details, entity_kind=entity_kind, entity_id=entity_id, entity_title=entity_title)
+
+
+def log_info(logger: logging.Logger, event_type: str, message: str, *, lines: list[str] | None = None, details: dict | None = None, entity_kind: str | None = None, entity_id: str | int | None = None, entity_title: str | None = None) -> None:
+    emit_event(logger, logging.INFO, event_type, message, lines=lines, details=details, entity_kind=entity_kind, entity_id=entity_id, entity_title=entity_title)
+
+
+def log_warning(logger: logging.Logger, event_type: str, message: str, *, lines: list[str] | None = None, details: dict | None = None, entity_kind: str | None = None, entity_id: str | int | None = None, entity_title: str | None = None) -> None:
+    emit_event(logger, logging.WARNING, event_type, message, lines=lines, details=details, entity_kind=entity_kind, entity_id=entity_id, entity_title=entity_title)
+
+
+def log_exception(logger: logging.Logger, event_type: str, message: str, *, details: dict | None = None, entity_kind: str | None = None, entity_id: str | int | None = None, entity_title: str | None = None) -> None:
+    emit_event(logger, logging.ERROR, event_type, message, details=details, entity_kind=entity_kind, entity_id=entity_id, entity_title=entity_title, exc_info=True)
+
+
+def log_block(
+    logger: logging.Logger,
+    level: int,
+    header: str,
+    lines: list[str] | None = None,
+    *,
+    event_type: str = "log.block",
+    details: dict | None = None,
+    entity_kind: str | None = None,
+    entity_id: str | int | None = None,
+    entity_title: str | None = None,
+) -> None:
+    emit_event(
+        logger,
+        level,
+        event_type,
+        header,
+        lines=lines,
+        details=details,
+        entity_kind=entity_kind,
+        entity_id=entity_id,
+        entity_title=entity_title,
+    )
 
 
 def _season_label(number: int) -> str:

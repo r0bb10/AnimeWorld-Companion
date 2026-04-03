@@ -6,7 +6,7 @@ import logging
 import threading
 
 from ..core.config import settings
-from ..core.log_events import log_block
+from ..core.log_events import emit_event, log_block, log_debug, log_warning
 from ..core.logging import get_logger
 from ..integrations.radarr_client import RadarrClient
 from ..integrations.sonarr_client import SonarrClient
@@ -277,7 +277,7 @@ def sync_sonarr_library() -> int:
     processed = 0
     series_list = client.fetch_series()
     if not series_list and not client.health().ok:
-        logger.warning("Sonarr sync skipped: manager unavailable")
+        log_warning(logger, "sync.sonarr.skipped", "Sonarr sync skipped: manager unavailable")
         return 0
     seen: set[int] = set()
     for series in series_list:
@@ -285,7 +285,7 @@ def sync_sonarr_library() -> int:
             continue
         if _is_ignored_by_tag(series, ignore_tag_ids):
             ignored = ", ".join(_ignored_tag_names(series, tags, ignore_tag_ids))
-            log_block(logger, logging.DEBUG, series.get("title") or "Sonarr item", [f"skipped by ignore tag: {ignored or 'configured'}"])
+            log_block(logger, logging.DEBUG, series.get("title") or "Sonarr item", [f"skipped by ignore tag: {ignored or 'configured'}"], event_type="sync.sonarr.ignored", entity_kind="show", entity_id=series.get("id"), entity_title=series.get("title"))
             continue
         if sync_single_show(series["id"], targeted=False):
             processed += 1
@@ -293,7 +293,7 @@ def sync_sonarr_library() -> int:
     if seen or series_list:
         prune_missing_shows(seen)
     set_sync_meta("last_sonarr_sync", datetime.now(UTC).isoformat())
-    logger.debug("Sonarr sync complete: %s shows", processed)
+    log_debug(logger, "sync.sonarr.complete", "Sonarr sync complete", details={"processed": processed})
     return processed
 
 
@@ -354,7 +354,15 @@ def sync_single_movie(movie_payload_or_id, *, targeted: bool = True) -> int | No
     movie_id = upsert_movie(_build_movie_payload(movie))
     replace_movie_alternate_titles(movie_id, _build_movie_alt_titles(movie))
     set_sync_meta("last_radarr_sync", datetime.now(UTC).isoformat())
-    logger.log(_sync_log_level(targeted), "Synced Radarr: %s", movie.get("title"))
+    emit_event(
+        logger,
+        _sync_log_level(targeted),
+        "sync.radarr.item",
+        f"Synced Radarr: {movie.get('title')}",
+        entity_kind="movie",
+        entity_id=movie_id,
+        entity_title=movie.get("title"),
+    )
     return movie_id
 
 
@@ -364,7 +372,7 @@ def sync_single_item(manager: str, item_id: int) -> int | None:
         return sync_single_show(item_id, targeted=True)
     if manager == "radarr":
         return sync_single_movie(item_id, targeted=True)
-    logger.warning("sync_single_item: unknown manager %r", manager)
+    log_warning(logger, "sync.item.unknown_manager", "sync_single_item: unknown manager", details={"manager": manager})
     return None
 
 
@@ -380,7 +388,7 @@ def sync_radarr_library() -> int:
     processed = 0
     movies = client.fetch_movies()
     if not movies and not client.health().ok:
-        logger.warning("Radarr sync skipped: manager unavailable")
+        log_warning(logger, "sync.radarr.skipped", "Radarr sync skipped: manager unavailable")
         return 0
     seen: set[int] = set()
     for movie in movies:
@@ -388,7 +396,7 @@ def sync_radarr_library() -> int:
             continue
         if _is_ignored_by_tag(movie, ignore_tag_ids):
             ignored = ", ".join(_ignored_tag_names(movie, tags, ignore_tag_ids))
-            log_block(logger, logging.DEBUG, movie.get("title") or "Radarr item", [f"skipped by ignore tag: {ignored or 'configured'}"])
+            log_block(logger, logging.DEBUG, movie.get("title") or "Radarr item", [f"skipped by ignore tag: {ignored or 'configured'}"], event_type="sync.radarr.ignored", entity_kind="movie", entity_id=movie.get("id"), entity_title=movie.get("title"))
             continue
         if sync_single_movie(movie, targeted=False):
             processed += 1
@@ -396,7 +404,7 @@ def sync_radarr_library() -> int:
     if seen or movies:
         prune_missing_movies(seen)
     set_sync_meta("last_radarr_sync", datetime.now(UTC).isoformat())
-    logger.debug("Radarr sync complete: %s movies", processed)
+    log_debug(logger, "sync.radarr.complete", "Radarr sync complete", details={"processed": processed})
     return processed
 
 

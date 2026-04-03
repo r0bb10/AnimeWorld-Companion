@@ -5,6 +5,7 @@ from urllib.parse import quote, urlsplit, urlunsplit
 from xml.etree.ElementTree import Element, SubElement, register_namespace, tostring
 
 from ..core.config import settings
+from ..core.log_events import log_debug
 from ..core.logging import get_logger
 from ..repositories.rss_cache import list_rss_items
 from .search_service import build_movie_search_items, build_show_search_items
@@ -248,8 +249,8 @@ def build_search_xml(
                     size=item.get("size", 1),
                     release_source="search",
                 )
-            logger.debug("Torznab RSS fallback emitted dummy item: media=%s category=%s", media, category)
-        logger.debug("Torznab RSS served cached items=%s", len(cached_items))
+            log_debug(logger, "torznab.rss.fallback", "Torznab RSS fallback emitted dummy item", details={"media": media, "category": category})
+        log_debug(logger, "torznab.rss.cached", "Torznab RSS served cached items", details={"items": len(cached_items)})
         return _xml_bytes(root)
 
     effective_media = media
@@ -279,16 +280,20 @@ def build_search_xml(
             pub_date=item.get("pubDate"),
             release_source="search",
         )
-    logger.debug(
-        "Torznab search served: media=%s query=%r season=%r episode=%r category=%r tvdb_id=%r tmdb_id=%r imdb_id=%r items=%s",
-        effective_media,
-        query,
-        season,
-        episode,
-        category,
-        tvdb_id,
-        tmdb_id,
-        imdb_id,
-        len(items),
+    log_debug(
+        logger,
+        "torznab.search.served",
+        "Torznab search served",
+        details={
+            "media": effective_media,
+            "query": query,
+            "season": season,
+            "episode": episode,
+            "category": category,
+            "tvdb_id": tvdb_id,
+            "tmdb_id": tmdb_id,
+            "imdb_id": imdb_id,
+            "items": len(items),
+        },
     )
     return _xml_bytes(root)

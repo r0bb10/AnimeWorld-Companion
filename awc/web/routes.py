@@ -9,7 +9,15 @@ from fastapi import APIRouter, Body, Depends, HTTPException, Query, Request
 from fastapi.responses import HTMLResponse, Response, StreamingResponse
 
 from ..core.config import settings
-from ..core.log_events import format_movie_automap_lines, format_show_automap_lines, log_block
+from ..core.log_events import (
+    format_movie_automap_lines,
+    format_show_automap_lines,
+    log_block,
+    log_debug,
+    log_exception,
+    log_info,
+    log_warning,
+)
 from ..core.logging import get_logger
 from ..services.catalog_service import (
     build_catalog_snapshot,
@@ -36,6 +44,7 @@ from ..services.download_service import (
 from ..services.discovery_service import discover_movie, discover_show, search_animeworld
 from ..services.events_service import stream_events
 from ..services.health_service import build_health_report
+from ..services.log_service import build_log_snapshot
 from ..services.sanitizer_service import sanitizer_status, start_link_sanitizer
 from ..services.mutation_service import (
     ignore_show_season,
@@ -73,7 +82,17 @@ def _log_webhook_show_result(title: str, show_id: int, result: dict) -> None:
         lines = [str(result.get("message") or "error")]
     else:
         lines = ["No high-confidence AnimeWorld match found"]
-    log_block(logger, _webhook_log_level(status), f"Webhook Sonarr add: {title}", lines)
+    log_block(
+        logger,
+        _webhook_log_level(status),
+        f"Webhook Sonarr add: {title}",
+        lines,
+        event_type="webhook.sonarr.add",
+        entity_kind="show",
+        entity_id=show_id,
+        entity_title=title,
+        details={"status": status},
+    )
 
 
 def _log_webhook_movie_result(title: str, movie_id: int, result: dict) -> None:
@@ -87,7 +106,17 @@ def _log_webhook_movie_result(title: str, movie_id: int, result: dict) -> None:
         lines = [str(result.get("message") or "error")]
     else:
         lines = ["No high-confidence AnimeWorld match found"]
-    log_block(logger, _webhook_log_level(status), f"Webhook Radarr add: {title}", lines)
+    log_block(
+        logger,
+        _webhook_log_level(status),
+        f"Webhook Radarr add: {title}",
+        lines,
+        event_type="webhook.radarr.add",
+        entity_kind="movie",
+        entity_id=movie_id,
+        entity_title=title,
+        details={"status": status},
+    )
 
 
 def _map_show_season_impl(
@@ -437,10 +466,11 @@ def api_unmap_all_mappings(
     result = unmap_all_mappings(kind=kind)
     if not result.get("updated"):
         raise HTTPException(status_code=422, detail=result.get("reason") or "invalid request")
-    logger.info(
-        "Bulk unmap: cleared %s shows and %s movies.",
-        result.get("shows", {}).get("shows", 0),
-        result.get("movies", {}).get("movies", 0),
+    log_info(
+        logger,
+        "mutation.unmap_all",
+        f"Bulk unmap: cleared {result.get('shows', {}).get('shows', 0)} shows and {result.get('movies', {}).get('movies', 0)} movies.",
+        details=result,
     )
     return result
 
@@ -594,21 +624,60 @@ def api_events(_: str = Depends(require_api_key)) -> StreamingResponse:
 @api_router.post("/api/rss/cache/clear", tags=["System"], summary="Clear RSS cache", description="Delete cached RSS entries currently stored by AWC.")
 def api_clear_rss_cache(_: str = Depends(require_api_key)) -> dict:
     result = clear_rss_cache()
-    logger.info("RSS cache cleared: removed=%s", result.get("removed", 0))
+    log_info(
+        logger,
+        "rss.cache.cleared",
+        "RSS cache cleared",
+        lines=[f"removed={result.get('removed', 0)}"],
+        details=result,
+    )
     return result
+
+
+@api_router.get(
+    "/api/logs",
+    tags=["Logs"],
+    summary="Query persistent logs",
+    description="Query the structured log history stored in logging.db.",
+)
+def api_logs(
+    level: str = Query(default=""),
+    logger_name: str = Query(default=""),
+    event_type: str = Query(default=""),
+    since: str = Query(default=""),
+    until: str = Query(default=""),
+    q: str = Query(default=""),
+    limit: int = Query(default=200, ge=1, le=1000),
+    _: str = Depends(require_api_key),
+) -> dict:
+    return build_log_snapshot(
+        level=level,
+        logger_name=logger_name,
+        event_type=event_type,
+        since=since,
+        until=until,
+        q=q,
+        limit=limit,
+    )
 
 
 @api_router.post("/api/rss/update", tags=["System"], summary="Update RSS cache", description="Fetch the AnimeWorld RSS feed now and republish any matching items into the local cache.")
 def api_update_rss_cache(_: str = Depends(require_api_key)) -> dict:
     result = update_rss_cache()
-    logger.info("RSS cache update requested: cached=%s", result.get("cached", 0))
+    log_info(
+        logger,
+        "rss.cache.update",
+        "RSS cache update requested",
+        lines=[f"cached={result.get('cached', 0)}"],
+        details=result,
+    )
     return result
 
 
 @api_router.post("/api/links/sanitize", tags=["System"], summary="Run sanitizer", description="Trigger a background sanitizer run to verify mappings, refresh metadata, and follow live redirects.")
 def api_sanitize_links(_: str = Depends(require_api_key)) -> dict:
     result = start_link_sanitizer()
-    logger.info("Sanitizer requested")
+    log_info(logger, "sanitizer.request.api", "Sanitizer requested")
     return result
 
 
@@ -622,7 +691,7 @@ def api_restart(_: str = Depends(require_api_key)) -> dict:
         os._exit(0)
 
     threading.Thread(target=_graceful_exit, name="awc-restart", daemon=True).start()
-    logger.warning("Restart requested")
+    log_warning(logger, "system.restart", "Restart requested")
     return {"ok": True, "message": "Restart scheduled"}
 
 
@@ -647,16 +716,44 @@ def manager_webhook(
                         result = automap_show(int(show_id), force=False, emit_logs=False)
                         _log_webhook_show_result(entity_title, int(show_id), result)
                     else:
-                        log_block(logger, logging.WARNING, f"Webhook Sonarr add: {entity_title}", ["sync failed"])
+                        log_block(
+                            logger,
+                            logging.WARNING,
+                            f"Webhook Sonarr add: {entity_title}",
+                            ["sync failed"],
+                            event_type="webhook.sonarr.add",
+                            entity_kind="show",
+                            entity_id=manager_entity_id,
+                            entity_title=entity_title,
+                            details={"status": "sync_failed"},
+                        )
                 elif manager == "radarr":
                     movie_id = sync_single_movie(manager_entity_id, targeted=False)
                     if movie_id:
                         result = automap_movie(int(movie_id), force=False, emit_logs=False)
                         _log_webhook_movie_result(entity_title, int(movie_id), result)
                     else:
-                        log_block(logger, logging.WARNING, f"Webhook Radarr add: {entity_title}", ["sync failed"])
+                        log_block(
+                            logger,
+                            logging.WARNING,
+                            f"Webhook Radarr add: {entity_title}",
+                            ["sync failed"],
+                            event_type="webhook.radarr.add",
+                            entity_kind="movie",
+                            entity_id=manager_entity_id,
+                            entity_title=entity_title,
+                            details={"status": "sync_failed"},
+                        )
             except Exception:
-                logger.exception("Webhook add handler failed: manager=%s manager_id=%s", manager, manager_entity_id)
+                log_exception(
+                    logger,
+                    "webhook.add.failed",
+                    "Webhook add handler failed",
+                    details={"manager": manager, "manager_id": manager_entity_id},
+                    entity_kind=manager or None,
+                    entity_id=manager_entity_id,
+                    entity_title=entity_title,
+                )
 
         threading.Thread(target=_run, name=f"awc-webhook-{manager or 'manager'}", daemon=True).start()
     return normalized
@@ -665,21 +762,39 @@ def manager_webhook(
 @api_router.post("/api/sync", tags=["Integration"], summary="Sync all managers", description="Run a full Sonarr + Radarr sync immediately.")
 def manual_sync(_: str = Depends(require_api_key)) -> dict:
     result = sync_all()
-    logger.info("Manual sync completed: sonarr=%s radarr=%s", result.get("sonarr", 0), result.get("radarr", 0))
+    log_info(
+        logger,
+        "sync.manual.all",
+        "Manual sync completed",
+        lines=[f"sonarr={result.get('sonarr', 0)}", f"radarr={result.get('radarr', 0)}"],
+        details=result,
+    )
     return {"status": "ok", "result": result}
 
 
 @api_router.post("/api/sync/sonarr", tags=["Integration"], summary="Sync Sonarr", description="Run a Sonarr-only sync immediately.")
 def manual_sync_sonarr(_: str = Depends(require_api_key)) -> dict:
     result = sync_now_sonarr()
-    logger.info("Manual Sonarr sync completed: %s show(s)", result.get("processed", 0))
+    log_info(
+        logger,
+        "sync.manual.sonarr",
+        "Manual Sonarr sync completed",
+        lines=[f"sonarr={result.get('sonarr', 0)}"],
+        details=result,
+    )
     return {"status": "ok", "result": result}
 
 
 @api_router.post("/api/sync/radarr", tags=["Integration"], summary="Sync Radarr", description="Run a Radarr-only sync immediately.")
 def manual_sync_radarr(_: str = Depends(require_api_key)) -> dict:
     result = sync_now_radarr()
-    logger.info("Manual Radarr sync completed: %s movie(s)", result.get("processed", 0))
+    log_info(
+        logger,
+        "sync.manual.radarr",
+        "Manual Radarr sync completed",
+        lines=[f"radarr={result.get('radarr', 0)}"],
+        details=result,
+    )
     return {"status": "ok", "result": result}
 
 
@@ -696,16 +811,20 @@ def _torznab_response(
 ) -> Response:
     request_type = (t or "caps").strip().lower()
     base_url = str(request.base_url).rstrip("/")
-    logger.debug(
-        "Torznab request: type=%s q=%r season=%r ep=%r cat=%r tvdb_id=%r tmdb_id=%r imdb_id=%r",
-        request_type,
-        q,
-        season,
-        ep,
-        cat,
-        tvdbid,
-        tmdbid,
-        imdbid,
+    log_debug(
+        logger,
+        "torznab.request",
+        "Torznab request",
+        details={
+            "type": request_type,
+            "q": q,
+            "season": season,
+            "episode": ep,
+            "category": cat,
+            "tvdb_id": tvdbid,
+            "tmdb_id": tmdbid,
+            "imdb_id": imdbid,
+        },
     )
     if request_type == "caps":
         return Response(content=build_caps_xml(base_url=base_url), media_type="application/xml")

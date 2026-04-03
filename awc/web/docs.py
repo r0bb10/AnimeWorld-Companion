@@ -8,6 +8,7 @@ Use this API to:
 - discover AnimeWorld candidates
 - trigger automap for one item or the whole library
 - manage mappings, downloads, RSS cache, and sanitizer jobs
+- inspect persisted log history through `/api/logs`
 - expose a Torznab-compatible `/api` endpoint to Arr clients
 
 Authentication:
@@ -56,6 +57,10 @@ OPENAPI_TAGS = [
     {
         "name": "System",
         "description": "Health, runtime status, RSS cache, sanitizer, heartbeat, and restart helpers.",
+    },
+    {
+        "name": "Logs",
+        "description": "Persistent structured log history stored in logging.db.",
     },
     {
         "name": "UI",

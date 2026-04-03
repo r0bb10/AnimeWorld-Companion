@@ -4,10 +4,13 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 import logging
+from logging.handlers import QueueHandler, QueueListener
+from queue import SimpleQueue
 import sys
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from .config import settings
+from ..repositories.log_history import init_log_db, insert_log_event, prune_log_events
 
 _VALID_LEVELS = {"CRITICAL", "ERROR", "WARNING", "INFO", "DEBUG", "NOTSET"}
 _DEBUG_ONLY_UVICORN_MESSAGES = (
@@ -17,6 +20,35 @@ _DEBUG_ONLY_UVICORN_MESSAGES = (
     "Waiting for connections to close.",
     "Uvicorn running on ",
 )
+_BLOCK_MARKER = "↳"
+_QUEUE_LISTENER: QueueListener | None = None
+
+
+class SQLiteLogHandler(logging.Handler):
+    def __init__(self, level: int) -> None:
+        super().__init__(level=level)
+        self._formatter = logging.Formatter()
+
+    def emit(self, record: logging.LogRecord) -> None:
+        try:
+            traceback = ""
+            if record.exc_info:
+                traceback = self._formatter.formatException(record.exc_info)
+            insert_log_event(
+                created_at=datetime.fromtimestamp(record.created, tz=UTC).isoformat(),
+                level=str(record.levelname or "INFO"),
+                logger=str(record.name or ""),
+                event_type=str(getattr(record, "awc_event_type", "log")),
+                message=str(record.getMessage()),
+                lines=list(getattr(record, "awc_lines", []) or []),
+                details=dict(getattr(record, "awc_details", {}) or {}),
+                entity_kind=str(getattr(record, "awc_entity_kind", "") or "") or None,
+                entity_id=str(getattr(record, "awc_entity_id", "") or "") or None,
+                entity_title=str(getattr(record, "awc_entity_title", "") or "") or None,
+                traceback=traceback,
+            )
+        except Exception:
+            self.handleError(record)
 
 
 class RecordRewriteFilter(logging.Filter):
@@ -43,6 +75,21 @@ class TimezoneFormatter(logging.Formatter):
         dt = datetime.fromtimestamp(record.created, tz=self._tz)
         return dt.strftime(datefmt or "%Y/%m/%d %H:%M:%S")
 
+    def format(self, record: logging.LogRecord) -> str:
+        rendered = super().format(record)
+        lines = [str(line) for line in (getattr(record, "awc_lines", []) or []) if str(line).strip()]
+        if not lines:
+            return rendered
+        message = str(record.getMessage() or "")
+        prefix = ""
+        if message:
+            marker_index = rendered.find(message)
+            if marker_index >= 0:
+                prefix = rendered[:marker_index]
+        continuation_indent = " " * len(prefix)
+        continuation = "\n".join(f"{continuation_indent}  {_BLOCK_MARKER} {line}" for line in lines)
+        return f"{rendered}\n{continuation}"
+
 
 def _resolve_level() -> int:
     level_name = (settings.log_level or "INFO").upper()
@@ -52,6 +99,7 @@ def _resolve_level() -> int:
 
 
 def configure_logging() -> None:
+    global _QUEUE_LISTENER
     level = _resolve_level()
     formatter = TimezoneFormatter(
         fmt="%(asctime)s %(levelname)-5s %(message)s",
@@ -62,12 +110,27 @@ def configure_logging() -> None:
     root.setLevel(level)
     for handler in list(root.handlers):
         root.removeHandler(handler)
+    if _QUEUE_LISTENER is not None:
+        _QUEUE_LISTENER.stop()
+        _QUEUE_LISTENER = None
 
     handler = logging.StreamHandler(sys.stdout)
     handler.setLevel(level)
     handler.setFormatter(formatter)
     handler.addFilter(RecordRewriteFilter())
     root.addHandler(handler)
+
+    if settings.log_db_enabled:
+        init_log_db()
+        prune_log_events(settings.log_db_retention_days)
+        queue: SimpleQueue = SimpleQueue()
+        queue_handler = QueueHandler(queue)
+        queue_handler.setLevel(level)
+        queue_handler.addFilter(RecordRewriteFilter())
+        root.addHandler(queue_handler)
+        sqlite_handler = SQLiteLogHandler(level=level)
+        _QUEUE_LISTENER = QueueListener(queue, sqlite_handler, respect_handler_level=True)
+        _QUEUE_LISTENER.start()
 
     for logger_name in ("uvicorn", "uvicorn.error", "uvicorn.access"):
         uvicorn_logger = logging.getLogger(logger_name)
@@ -81,3 +144,10 @@ def configure_logging() -> None:
 
 def get_logger(name: str) -> logging.Logger:
     return logging.getLogger(name)
+
+
+def shutdown_logging() -> None:
+    global _QUEUE_LISTENER
+    if _QUEUE_LISTENER is not None:
+        _QUEUE_LISTENER.stop()
+        _QUEUE_LISTENER = None

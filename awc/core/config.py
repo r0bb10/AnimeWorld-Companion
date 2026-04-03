@@ -47,6 +47,21 @@ def _resolve_database_path() -> str:
     return configured
 
 
+def _resolve_logging_database_path() -> str:
+    configured = _get("AWC_LOGGING_DB_PATH", "/config/logging.db")
+    repo_root = Path(__file__).resolve().parents[2]
+    repo_candidate = repo_root / "config" / "logging.db"
+    in_container = Path("/.dockerenv").exists()
+
+    if in_container:
+        return configured
+
+    if repo_candidate.parent.exists():
+        return str(repo_candidate)
+
+    return configured
+
+
 def _host_resolves(hostname: str) -> bool:
     try:
         socket.getaddrinfo(hostname, None)
@@ -89,6 +104,9 @@ class Settings:
     awc_url: str
     log_level: str
     timezone_name: str
+    log_db_enabled: bool
+    log_db_path: str
+    log_db_retention_days: int
     data_path: str
     database_path: str
     sync_interval_minutes: int
@@ -124,6 +142,9 @@ def load_settings() -> Settings:
         awc_url=_get("AWC_URL"),
         log_level=_get("LOG_LEVEL", "INFO").upper(),
         timezone_name=_get("TZ", "UTC"),
+        log_db_enabled=_get("LOG_DB_ENABLED", "true").lower() == "true",
+        log_db_path=_resolve_logging_database_path(),
+        log_db_retention_days=_int("LOG_DB_RETENTION_DAYS", 30),
         data_path=_get("AWC_DATA_PATH", "/data"),
         database_path=_resolve_database_path(),
         sync_interval_minutes=_int("SYNC_INTERVAL", _int("SONARR_SYNC_INTERVAL", 30)),

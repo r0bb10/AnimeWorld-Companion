@@ -15,7 +15,7 @@ import xml.etree.ElementTree as ET
 import requests
 
 from ..core.config import settings
-from ..core.log_events import log_block
+from ..core.log_events import log_block, log_exception, log_info, log_warning
 from ..core.logging import get_logger
 from ..integrations.animeworld_client import AnimeWorldClient
 from ..integrations.radarr_client import RadarrClient
@@ -259,13 +259,13 @@ def update_rss_cache() -> dict:
         response.raise_for_status()
         root = ET.fromstring(response.content)
     except requests.ConnectionError:
-        logger.warning("RSS poll skipped: AnimeWorld unreachable")
+        log_warning(logger, "runtime.rss.skipped", "RSS poll skipped: AnimeWorld unreachable")
         return {"enabled": True, "cached": 0, "error": "unreachable"}
     except requests.Timeout:
-        logger.warning("RSS poll skipped: request timed out")
+        log_warning(logger, "runtime.rss.skipped", "RSS poll skipped: request timed out")
         return {"enabled": True, "cached": 0, "error": "timeout"}
     except Exception as exc:
-        logger.exception("RSS fetch failed")
+        log_exception(logger, "runtime.rss.failed", "RSS fetch failed", details={"error": str(exc)})
         return {"enabled": True, "cached": 0, "error": str(exc)}
 
     fields_list = []
@@ -275,7 +275,7 @@ def update_rss_cache() -> dict:
             if fields:
                 fields_list.append(fields)
         except Exception:
-            logger.exception("RSS item parse failed")
+            log_exception(logger, "runtime.rss.item_parse_failed", "RSS item parse failed")
 
     cached = 0
     with ThreadPoolExecutor(max_workers=5) as pool:
@@ -284,11 +284,11 @@ def update_rss_cache() -> dict:
             try:
                 cached += future.result()
             except Exception:
-                logger.exception("RSS item processing failed")
+                log_exception(logger, "runtime.rss.item_processing_failed", "RSS item processing failed")
 
     cleanup_rss_items(settings.rss_cache_retention_days)
     if cached:
-        logger.info("RSS cached %s item(s)", cached)
+        log_info(logger, "runtime.rss.cached", "RSS cached items", details={"cached": cached}, lines=[f"cached={cached}"])
     _set_state(
         "rss",
         enabled=True,
@@ -302,12 +302,12 @@ def update_rss_cache() -> dict:
 
 def _run_rss_loop() -> None:
     _set_state("rss", enabled=settings.rss_enabled, running=True)
-    logger.info("RSS poller started: interval=%ss", max(30, settings.rss_poll_interval))
+    log_info(logger, "runtime.rss.loop_started", "RSS poller started", details={"interval": max(30, settings.rss_poll_interval)}, lines=[f"interval={max(30, settings.rss_poll_interval)}s"])
     while not _stop_event.is_set():
         try:
             update_rss_cache()
         except Exception as exc:
-            logger.exception("RSS poller failed")
+            log_exception(logger, "runtime.rss.loop_failed", "RSS poller failed", details={"error": str(exc)})
             _set_state(
                 "rss",
                 enabled=settings.rss_enabled,
@@ -321,16 +321,18 @@ def _run_rss_loop() -> None:
 
 def _run_sync_loop() -> None:
     _set_state("sync", running=True)
-    logger.info("Background sync loop started: interval=%ss", max(60, settings.sync_interval_minutes * 60))
+    log_info(logger, "runtime.sync.loop_started", "Background sync loop started", details={"interval": max(60, settings.sync_interval_minutes * 60)}, lines=[f"interval={max(60, settings.sync_interval_minutes * 60)}s"])
     if _stop_event.wait(60):  # brief startup grace before first sync
         return
     while not _stop_event.is_set():
         try:
             result = sync_all()
-            logger.info(
-                "Background sync completed: sonarr=%s radarr=%s",
-                int(result.get("sonarr", 0) or 0),
-                int(result.get("radarr", 0) or 0),
+            log_info(
+                logger,
+                "runtime.sync.completed",
+                "Background sync completed",
+                details={"sonarr": int(result.get("sonarr", 0) or 0), "radarr": int(result.get("radarr", 0) or 0)},
+                lines=[f"sonarr={int(result.get('sonarr', 0) or 0)}", f"radarr={int(result.get('radarr', 0) or 0)}"],
             )
             _set_state(
                 "sync",
@@ -340,7 +342,7 @@ def _run_sync_loop() -> None:
                 last_result=result,
             )
         except Exception as exc:
-            logger.exception("Background sync failed")
+            log_exception(logger, "runtime.sync.failed", "Background sync failed", details={"error": str(exc)})
             _set_state(
                 "sync",
                 running=False,
@@ -353,7 +355,7 @@ def _run_sync_loop() -> None:
 
 def _run_import_loop() -> None:
     _set_state("imports", running=True)
-    logger.info("Import poller started: interval=%ss", max(30, settings.import_poll_interval))
+    log_info(logger, "runtime.imports.loop_started", "Import poller started", details={"interval": max(30, settings.import_poll_interval)}, lines=[f"interval={max(30, settings.import_poll_interval)}s"])
     sonarr_client = SonarrClient()
     radarr_client = RadarrClient()
     while not _stop_event.is_set():
@@ -376,9 +378,9 @@ def _run_import_loop() -> None:
                         marked += 1
                         if settings.unmonitor_imported and target.get("id"):
                             sonarr_client.unmonitor_episode(int(target["id"]))
-                            logger.info("Imported and unmonitored Sonarr episode: %s", entry.get("filename"))
+                            log_info(logger, "runtime.imports.sonarr.unmonitored", "Imported and unmonitored Sonarr episode", entity_kind="download", entity_id=entry.get("id"), entity_title=entry.get("filename"), details={"filename": entry.get("filename")})
                         else:
-                            logger.info("Imported Sonarr episode: %s", entry.get("filename"))
+                            log_info(logger, "runtime.imports.sonarr.imported", "Imported Sonarr episode", entity_kind="download", entity_id=entry.get("id"), entity_title=entry.get("filename"), details={"filename": entry.get("filename")})
                     continue
 
                 if radarr_id:
@@ -389,9 +391,9 @@ def _run_import_loop() -> None:
                         marked += 1
                         if settings.unmonitor_imported and movie.get("id"):
                             radarr_client.unmonitor_movie(int(movie["id"]))
-                            logger.info("Imported and unmonitored Radarr movie: %s", entry.get("filename"))
+                            log_info(logger, "runtime.imports.radarr.unmonitored", "Imported and unmonitored Radarr movie", entity_kind="download", entity_id=entry.get("id"), entity_title=entry.get("filename"), details={"filename": entry.get("filename")})
                         else:
-                            logger.info("Imported Radarr movie: %s", entry.get("filename"))
+                            log_info(logger, "runtime.imports.radarr.imported", "Imported Radarr movie", entity_kind="download", entity_id=entry.get("id"), entity_title=entry.get("filename"), details={"filename": entry.get("filename")})
             _set_state(
                 "imports",
                 running=False,
@@ -400,7 +402,7 @@ def _run_import_loop() -> None:
                 last_marked=marked,
             )
         except Exception as exc:
-            logger.exception("Import poller failed")
+            log_exception(logger, "runtime.imports.failed", "Import poller failed", details={"error": str(exc)})
             _set_state(
                 "imports",
                 running=False,
@@ -415,9 +417,9 @@ def _run_import_loop() -> None:
 def _run_link_loop() -> None:
     _set_state("links", enabled=settings.sanitizer_enabled, running=False, last_error="")
     if not settings.sanitizer_enabled:
-        logger.info("Sanitizer loop disabled by env")
+        log_info(logger, "runtime.links.disabled", "Sanitizer loop disabled by env")
         return
-    logger.info("Sanitizer loop scheduled: first_run=600s interval=86400s")
+    log_info(logger, "runtime.links.scheduled", "Sanitizer loop scheduled", lines=["first_run=600s", "interval=86400s"], details={"first_run_seconds": 600, "interval_seconds": 86400})
     if _stop_event.wait(60 * 10):
         return
     while not _stop_event.is_set():
@@ -432,7 +434,7 @@ def _run_link_loop() -> None:
                 last_result=result,
             )
         except Exception as exc:
-            logger.exception("Link sanitizer failed")
+            log_exception(logger, "runtime.links.failed", "Link sanitizer failed", details={"error": str(exc)})
             _set_state(
                 "links",
                 running=False,
@@ -447,13 +449,23 @@ def _run_link_loop() -> None:
 def _run_eligible_loop() -> None:
     _set_state("eligible", enabled=settings.eligible_enabled, running=False, last_error="")
     if not settings.eligible_enabled:
-        logger.info("Eligible loop disabled by env")
+        log_info(logger, "runtime.eligible.disabled", "Eligible loop disabled by env")
         return
     interval = max(60 * 60, int(settings.eligible_interval or 0))
-    logger.info(
-        "Eligible loop scheduled: first_run=300s interval=%ss lookback_days=%s",
-        interval,
-        max(0, int(settings.eligible_lookback_days or 0)),
+    log_info(
+        logger,
+        "runtime.eligible.scheduled",
+        "Eligible loop scheduled",
+        lines=[
+            "first_run=300s",
+            f"interval={interval}s",
+            f"lookback_days={max(0, int(settings.eligible_lookback_days or 0))}",
+        ],
+        details={
+            "first_run_seconds": 300,
+            "interval_seconds": interval,
+            "lookback_days": max(0, int(settings.eligible_lookback_days or 0)),
+        },
     )
     if _stop_event.wait(300):
         return
@@ -469,7 +481,7 @@ def _run_eligible_loop() -> None:
                 last_result=result,
             )
         except Exception as exc:
-            logger.exception("Eligible loop failed")
+            log_exception(logger, "runtime.eligible.failed", "Eligible loop failed", details={"error": str(exc)})
             _set_state(
                 "eligible",
                 running=False,
@@ -518,6 +530,8 @@ def start_background_workers() -> dict:
             f"restored={startup.get('restored', 0)}",
             f"fixed={startup.get('fixed', 0)}",
         ],
+        event_type="runtime.workers.started",
+        details={"workers": started, "restored": startup.get("restored", 0), "fixed": startup.get("fixed", 0)},
     )
     return {"started": started, "startup": startup}
 
@@ -526,4 +540,4 @@ def stop_background_workers() -> None:
     _stop_event.set()
     for thread in list(_threads.values()):
         thread.join(timeout=1)
-    logger.info("Background workers stopped")
+    log_info(logger, "runtime.workers.stopped", "Background workers stopped")

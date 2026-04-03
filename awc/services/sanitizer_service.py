@@ -11,7 +11,14 @@ import threading
 import requests
 
 from ..core.config import settings
-from ..core.log_events import display_aw_link, format_movie_automap_lines, format_show_automap_lines, log_block
+from ..core.log_events import (
+    display_aw_link,
+    format_movie_automap_lines,
+    format_show_automap_lines,
+    log_block,
+    log_info,
+    log_warning,
+)
 from ..core.logging import get_logger
 from ..integrations.animeworld_client import AnimeWorldClient
 from ..repositories.db import get_db
@@ -208,7 +215,16 @@ def _refresh_show_mapping_metadata(show: dict, season: dict, row: dict, slug_met
             )
         if was_pre and not is_pre:
             lines.append("promoted=pre -> auto")
-        log_block(logger, logging.INFO, str(show.get("title") or row.get("aw_title") or "Show"), lines)
+        log_block(
+            logger,
+            logging.INFO,
+            str(show.get("title") or row.get("aw_title") or "Show"),
+            lines,
+            event_type="sanitizer.show.changed",
+            entity_kind="show",
+            entity_id=row.get("show_id"),
+            entity_title=str(show.get("title") or row.get("aw_title") or "Show"),
+        )
     return changed
 
 
@@ -264,6 +280,10 @@ def _refresh_movie_mapping_metadata(movie: dict, row: dict, slug_metadata: dict,
             + [f"redirect={display_aw_link(row['aw_link'])} -> {display_aw_link(candidate['aw_link'])}"]
             if candidate["aw_link"] != row["aw_link"]
             else lines,
+            event_type="sanitizer.movie.changed",
+            entity_kind="movie",
+            entity_id=row.get("movie_id"),
+            entity_title=str(movie.get("title") or row.get("aw_title") or "Movie"),
         )
     return changed
 
@@ -325,12 +345,12 @@ def sanitize_links_once() -> dict:
     now = datetime.now(UTC).isoformat()
     result = {"checked": 0, "updated": 0, "removed": 0, "failed": 0, "skipped": 0}
     show_seasons_to_refresh: set[tuple[int, int]] = set()
-    logger.info("Sanitizer cycle started")
+    log_info(logger, "sanitizer.started", "Sanitizer cycle started")
 
     health = client.health()
     if not health.ok:
         message = f"AnimeWorld unreachable: {health.url}"
-        logger.warning("Sanitizer skipped: %s", message)
+        log_warning(logger, "sanitizer.skipped", "Sanitizer skipped", lines=[message])
         _set_state(last_result=result, last_error=message, last_finished_at=now, running=False)
         return result
 
@@ -448,14 +468,28 @@ def sanitize_links_once() -> dict:
         except Exception as exc:
             if _is_transient_aw_error(exc):
                 result["skipped"] += 1
-                logger.warning("Show mapping verification skipped: %s (transient AnimeWorld error)", display_aw_link(row["aw_link"]))
+                log_warning(
+                    logger,
+                    "sanitizer.show.skipped",
+                    "Show mapping verification skipped",
+                    lines=[f"{display_aw_link(row['aw_link'])} (transient AnimeWorld error)"],
+                    entity_kind="show",
+                    entity_id=row.get("show_id"),
+                )
                 continue
             failures = int(row["link_check_failures"] or 0) + 1
             if failures >= 2:
                 with get_db(write=True) as conn:
                     conn.execute("DELETE FROM aw_show_mappings WHERE id = ?", (row["id"],))
                 queue_show_sanitizer_retry(int(row["show_id"]), int(row["season_number"]))
-                logger.warning("Removed dead show mapping: %s", display_aw_link(row["aw_link"]))
+                log_warning(
+                    logger,
+                    "sanitizer.show.removed",
+                    "Removed dead show mapping",
+                    lines=[display_aw_link(row["aw_link"])],
+                    entity_kind="show",
+                    entity_id=row.get("show_id"),
+                )
                 result["removed"] += 1
             else:
                 with get_db(write=True) as conn:
@@ -463,7 +497,14 @@ def sanitize_links_once() -> dict:
                         "UPDATE aw_show_mappings SET link_check_failures = ?, updated_at = ? WHERE id = ?",
                         (failures, now, row["id"]),
                     )
-                logger.warning("Show mapping verification failed: %s (%s/2)", display_aw_link(row["aw_link"]), failures)
+                log_warning(
+                    logger,
+                    "sanitizer.show.failed",
+                    "Show mapping verification failed",
+                    lines=[f"{display_aw_link(row['aw_link'])} ({failures}/2)"],
+                    entity_kind="show",
+                    entity_id=row.get("show_id"),
+                )
                 result["failed"] += 1
 
     for row in movie_rows:
@@ -492,14 +533,28 @@ def sanitize_links_once() -> dict:
         except Exception as exc:
             if _is_transient_aw_error(exc):
                 result["skipped"] += 1
-                logger.warning("Movie mapping verification skipped: %s (transient AnimeWorld error)", display_aw_link(row["aw_link"]))
+                log_warning(
+                    logger,
+                    "sanitizer.movie.skipped",
+                    "Movie mapping verification skipped",
+                    lines=[f"{display_aw_link(row['aw_link'])} (transient AnimeWorld error)"],
+                    entity_kind="movie",
+                    entity_id=row.get("movie_id"),
+                )
                 continue
             failures = int(row["link_check_failures"] or 0) + 1
             if failures >= 2:
                 with get_db(write=True) as conn:
                     conn.execute("DELETE FROM aw_movie_mappings WHERE id = ?", (row["id"],))
                 queue_movie_sanitizer_retry(int(row["movie_id"]))
-                logger.warning("Removed dead movie mapping: %s", display_aw_link(row["aw_link"]))
+                log_warning(
+                    logger,
+                    "sanitizer.movie.removed",
+                    "Removed dead movie mapping",
+                    lines=[display_aw_link(row["aw_link"])],
+                    entity_kind="movie",
+                    entity_id=row.get("movie_id"),
+                )
                 result["removed"] += 1
             else:
                 with get_db(write=True) as conn:
@@ -507,7 +562,14 @@ def sanitize_links_once() -> dict:
                         "UPDATE aw_movie_mappings SET link_check_failures = ?, updated_at = ? WHERE id = ?",
                         (failures, now, row["id"]),
                     )
-                logger.warning("Movie mapping verification failed: %s (%s/2)", display_aw_link(row["aw_link"]), failures)
+                log_warning(
+                    logger,
+                    "sanitizer.movie.failed",
+                    "Movie mapping verification failed",
+                    lines=[f"{display_aw_link(row['aw_link'])} ({failures}/2)"],
+                    entity_kind="movie",
+                    entity_id=row.get("movie_id"),
+                )
                 result["failed"] += 1
 
     from .automap_service import automap_movie, automap_show
@@ -564,11 +626,13 @@ def sanitize_links_once() -> dict:
         response = automap_show(show_id, season_number=season_number, force=True)
         if response.get("status") in {"success", "partial"}:
             result["updated"] += 1
-            logger.info(
-                "Refreshed stale auto mapping: show_id=%s season=%s status=%s",
-                show_id,
-                season_number,
-                response.get("status"),
+            log_info(
+                logger,
+                "sanitizer.show.refreshed",
+                "Refreshed stale auto mapping",
+                lines=[f"show_id={show_id} season={season_number} status={response.get('status')}"],
+                entity_kind="show",
+                entity_id=show_id,
             )
 
     _set_state(last_result=result, last_error="", last_finished_at=now, running=False)
@@ -583,6 +647,8 @@ def sanitize_links_once() -> dict:
             f"failed={result['failed']}",
             f"skipped={result['skipped']}",
         ],
+        event_type="sanitizer.finished",
+        details=dict(result),
     )
     return result
 
@@ -590,7 +656,7 @@ def sanitize_links_once() -> dict:
 def start_link_sanitizer() -> dict:
     if not settings.sanitizer_enabled:
         _set_state(enabled=False, running=False, last_error="")
-        logger.info("Sanitizer request ignored: disabled by env")
+        log_info(logger, "sanitizer.request.ignored", "Sanitizer request ignored", lines=["disabled by env"])
         return {"ok": False, "disabled": True, "message": "Sanitizer disabled by env"}
 
     def worker():
@@ -602,5 +668,5 @@ def start_link_sanitizer() -> dict:
             raise
 
     threading.Thread(target=worker, name="awc-link-sanitizer", daemon=True).start()
-    logger.info("Sanitizer run requested")
+    log_info(logger, "sanitizer.requested", "Sanitizer run requested")
     return {"ok": True, "message": "Mapped links sanitizer started"}

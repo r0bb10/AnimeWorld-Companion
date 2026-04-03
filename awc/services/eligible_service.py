@@ -6,7 +6,7 @@ from datetime import UTC, datetime
 import logging
 
 from ..core.config import settings
-from ..core.log_events import format_movie_automap_lines, format_show_automap_lines, log_block
+from ..core.log_events import format_movie_automap_lines, format_show_automap_lines, log_block, log_info
 from ..core.logging import get_logger
 from ..repositories.db import get_db
 from ..repositories.movies import get_movie_detail
@@ -78,6 +78,10 @@ def _log_show_mapping(show_id: int, mapped_seasons: list[int]) -> None:
         logging.INFO,
         str(show.get("title") or f"show:{show_id}"),
         format_show_automap_lines(show, mapped_seasons, []),
+        event_type="eligible.show.mapped",
+        entity_kind="show",
+        entity_id=show_id,
+        entity_title=show.get("title"),
     )
 
 
@@ -90,6 +94,10 @@ def _log_movie_mapping(movie_id: int) -> None:
         logging.INFO,
         str(movie.get("title") or f"movie:{movie_id}"),
         format_movie_automap_lines(movie.get("mapping")),
+        event_type="eligible.movie.mapped",
+        entity_kind="movie",
+        entity_id=movie_id,
+        entity_title=movie.get("title"),
     )
 
 
@@ -100,10 +108,12 @@ def run_eligible_once() -> dict:
     mapped_show_seasons = 0
     mapped_movies = 0
 
-    logger.info(
-        "Eligible cycle started: shows=%s movies=%s",
-        len(show_targets),
-        len(movie_targets),
+    log_info(
+        logger,
+        "eligible.started",
+        "Eligible cycle started",
+        lines=[f"shows={len(show_targets)}", f"movies={len(movie_targets)}"],
+        details={"show_targets": len(show_targets), "movie_targets": len(movie_targets)},
     )
 
     for target in show_targets:
@@ -134,10 +144,15 @@ def run_eligible_once() -> dict:
         "mapped_movies": mapped_movies,
         "finished_at": datetime.now(UTC).isoformat(),
     }
-    logger.info(
-        "Eligible cycle finished: checked=%s mapped_show_seasons=%s mapped_movies=%s",
-        checked,
-        mapped_show_seasons,
-        mapped_movies,
+    log_info(
+        logger,
+        "eligible.finished",
+        "Eligible cycle finished",
+        lines=[
+            f"checked={checked}",
+            f"mapped_show_seasons={mapped_show_seasons}",
+            f"mapped_movies={mapped_movies}",
+        ],
+        details={"checked": checked, "mapped_show_seasons": mapped_show_seasons, "mapped_movies": mapped_movies},
     )
     return result

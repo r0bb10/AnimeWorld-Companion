@@ -12,7 +12,7 @@ from urllib.parse import urlencode
 import requests
 
 from ..core.config import settings
-from ..core.log_events import extract_remote_filename, log_block
+from ..core.log_events import extract_remote_filename, log_block, log_exception, log_info, log_warning
 from ..core.logging import get_logger
 from ..domain.media import MediaKind, MediaManager, NamingContext
 from ..repositories.db import get_db
@@ -327,10 +327,14 @@ def create_fake_torrent(
     if not resolved_source:
         # source was empty — no CDN URL available yet; the download worker will
         # have nothing real to fetch.
-        logger.warning(
-            "create_fake_torrent: no source URL for %r (manager=%s) — download will not start",
-            release_name,
-            manager,
+        log_warning(
+            logger,
+            "download.queue.no_source",
+            "create_fake_torrent: no source URL — download will not start",
+            details={"filename": release_name, "manager": manager},
+            entity_kind="download",
+            entity_id=release_name,
+            entity_title=release_name,
         )
         return None, b"", release_name + ".torrent"
     existing = next(
@@ -361,6 +365,11 @@ def create_fake_torrent(
                 f"manager={manager}",
                 f"source={resolved_source}",
             ],
+            event_type="download.queued",
+            entity_kind="download",
+            entity_id=download.get("id"),
+            entity_title=release_name,
+            details={"manager": manager, "source": resolved_source, "release_source": _normalize_release_source(release_source)},
         )
     queue_download(download["id"])
 
@@ -463,6 +472,11 @@ def _download_worker(download_id: str) -> None:
                     f"remote={remote_name or '(unknown)'}",
                     f"resume={'yes' if existing_bytes > 0 else 'no'}",
                 ],
+                event_type="download.started",
+                entity_kind="download",
+                entity_id=download_id,
+                entity_title=entry["filename"],
+                details={"remote": remote_name or "", "resume": bool(existing_bytes > 0)},
             )
 
             update_download_progress(download_id, total_bytes=total, downloaded_bytes=downloaded)
@@ -480,6 +494,11 @@ def _download_worker(download_id: str) -> None:
                             logging.INFO,
                             f"Download paused: {entry['filename']}",
                             [f"downloaded={downloaded} bytes"],
+                            event_type="download.paused",
+                            entity_kind="download",
+                            entity_id=download_id,
+                            entity_title=entry["filename"],
+                            details={"downloaded_bytes": downloaded},
                         )
                         return
                     if not chunk:
@@ -515,6 +534,11 @@ def _download_worker(download_id: str) -> None:
                     f"saved={final_path}",
                     f"remote={remote_name or '(unknown)'}",
                 ],
+                event_type="download.completed",
+                entity_kind="download",
+                entity_id=download_id,
+                entity_title=entry["filename"],
+                details={"saved": final_path, "remote": remote_name or ""},
             )
     except Exception as exc:
         update_download_progress(
@@ -523,7 +547,15 @@ def _download_worker(download_id: str) -> None:
             error=str(exc),
             finished_at=datetime.now(UTC).timestamp(),
         )
-        logger.exception("Download failed: %s", entry["filename"])
+        log_exception(
+            logger,
+            "download.failed",
+            "Download failed",
+            details={"filename": entry["filename"], "download_id": download_id, "error": str(exc)},
+            entity_kind="download",
+            entity_id=download_id,
+            entity_title=entry["filename"],
+        )
     finally:
         if acquired_slot:
             _download_semaphore.release()
@@ -562,7 +594,7 @@ def mark_imported(download_id: str) -> dict | None:
         finished_at=datetime.now(UTC).timestamp(),
     )
     if updated:
-        logger.info("Download imported: %s", updated.get("filename"))
+        log_info(logger, "download.imported", "Download imported", entity_kind="download", entity_id=download_id, entity_title=updated.get("filename"), details={"filename": updated.get("filename")})
     return updated
 
 
@@ -642,7 +674,7 @@ def cancel_download(download_id: str) -> dict | None:
             finished_at=datetime.now(UTC).timestamp(),
         )
         if updated:
-            logger.info("Download cancelled: %s", updated.get("filename"))
+            log_info(logger, "download.cancelled", "Download cancelled", entity_kind="download", entity_id=download_id, entity_title=updated.get("filename"), details={"filename": updated.get("filename")})
         return updated
     if event and entry.get("status") == "downloading":
         event.set()
@@ -652,7 +684,7 @@ def cancel_download(download_id: str) -> dict | None:
             finished_at=None,
         )
         if updated:
-            logger.info("Download pause requested: %s", updated.get("filename"))
+            log_info(logger, "download.pause_requested", "Download pause requested", entity_kind="download", entity_id=download_id, entity_title=updated.get("filename"), details={"filename": updated.get("filename")})
         return updated
     return entry
 
@@ -671,7 +703,7 @@ def resume_download(download_id: str) -> dict | None:
         downloaded_bytes=os.path.getsize(part_path),
         finished_at=None,
     )
-    logger.info("Download resumed: %s", entry.get("filename"))
+    log_info(logger, "download.resumed", "Download resumed", entity_kind="download", entity_id=download_id, entity_title=entry.get("filename"), details={"filename": entry.get("filename")})
     return queue_download(download_id)
 
 

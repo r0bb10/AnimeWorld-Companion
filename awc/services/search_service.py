@@ -5,6 +5,7 @@ import time
 from urllib.parse import quote
 
 from ..core.config import settings
+from ..core.log_events import log_debug
 from ..core.logging import get_logger
 from ..domain.media import MediaKind, MediaManager, NamingContext
 from ..integrations.animeworld_client import AnimeWorldClient
@@ -31,7 +32,7 @@ def _get_episodes_cached(client: AnimeWorldClient, slug: str) -> list:
     now = time.monotonic()
     entry = _EPISODE_CACHE.get(slug)
     if entry and now - entry[1] < _CACHE_TTL:
-        logger.debug("Episode cache HIT: %s", slug)
+        log_debug(logger, "search.cache.episodes.hit", "Episode cache HIT", details={"slug": slug})
         return entry[0]
     episodes = client.get_episodes(slug)
     _EPISODE_CACHE[slug] = (episodes, now)
@@ -42,7 +43,7 @@ def _get_file_info_cached(client: AnimeWorldClient, episode_id: str) -> list:
     now = time.monotonic()
     entry = _FILE_INFO_CACHE.get(episode_id)
     if entry and now - entry[1] < _CACHE_TTL:
-        logger.debug("File info cache HIT: %s", episode_id)
+        log_debug(logger, "search.cache.file_info.hit", "File info cache HIT", details={"episode_id": episode_id})
         return entry[0]
     file_infos = client.get_file_info(episode_id)
     _FILE_INFO_CACHE[episode_id] = (file_infos, now)
@@ -158,7 +159,7 @@ def build_show_search_items(query: str, season_number: int | None, episode_numbe
         episode_number = parsed.get("episode")
 
     if season_number is None or episode_number is None:
-        logger.debug("Show search rejected: missing season/episode for query=%r", query)
+        log_debug(logger, "search.show.rejected", "Show search rejected: missing season/episode", details={"query": query})
         return []
 
     show = find_show_by_tvdb_id(tvdb_id) if tvdb_id is not None else None
@@ -167,7 +168,7 @@ def build_show_search_items(query: str, season_number: int | None, episode_numbe
     if not show and parsed_title and parsed_title != query:
         show = find_show_by_title(parsed_title)
     if not show:
-        logger.debug("Show search miss: query=%r parsed=%r tvdb_id=%r", query, parsed_title, tvdb_id)
+        log_debug(logger, "search.show.miss", "Show search miss", details={"query": query, "parsed": parsed_title, "tvdb_id": tvdb_id})
         return []
 
     resolved = resolve_scene_episode(show["id"], season_number, episode_number)
@@ -177,24 +178,34 @@ def build_show_search_items(query: str, season_number: int | None, episode_numbe
 
     detail = get_show_detail(show["id"])
     if not detail:
-        logger.debug("Show search detail miss: show_id=%s query=%r", show["id"], query)
+        log_debug(logger, "search.show.detail_miss", "Show search detail miss", details={"show_id": show["id"], "query": query}, entity_kind="show", entity_id=show["id"], entity_title=show.get("title"))
         return []
 
     cache_key = (show["id"], season_number, episode_number)
     now = time.monotonic()
     cached = _RESPONSE_CACHE.get(cache_key)
     if cached and now - cached[1] < _CACHE_TTL:
-        logger.debug("Response cache HIT: show_id=%s S%02dE%02d", show["id"], season_number, episode_number)
+        log_debug(
+            logger,
+            "search.cache.response.hit",
+            "Response cache HIT",
+            details={"show_id": show["id"], "season": season_number, "episode": episode_number},
+            entity_kind="show",
+            entity_id=show["id"],
+            entity_title=show.get("title"),
+        )
         return cached[0]
 
     items = _series_items(detail, season_number, episode_number)
     _RESPONSE_CACHE[cache_key] = (items, now)
-    logger.debug(
-        "Show search resolved: title=%s season=%s episode=%s items=%s",
-        detail.get("title"),
-        season_number,
-        episode_number,
-        len(items),
+    log_debug(
+        logger,
+        "search.show.resolved",
+        "Show search resolved",
+        details={"title": detail.get("title"), "season": season_number, "episode": episode_number, "items": len(items)},
+        entity_kind="show",
+        entity_id=detail.get("id"),
+        entity_title=detail.get("title"),
     )
     return items
 
@@ -210,18 +221,18 @@ def build_movie_search_items(query: str, tmdb_id: int | None = None, imdb_id: st
     if not movie and parsed_title and parsed_title != query:
         movie = find_movie_by_title(parsed_title)
     if not movie:
-        logger.debug("Movie search miss: query=%r parsed=%r tmdb_id=%r imdb_id=%r", query, parsed_title, tmdb_id, imdb_id)
+        log_debug(logger, "search.movie.miss", "Movie search miss", details={"query": query, "parsed": parsed_title, "tmdb_id": tmdb_id, "imdb_id": imdb_id})
         return []
 
     detail = get_movie_detail(movie["id"])
     if not detail or not detail.get("mapping"):
-        logger.debug("Movie search unmapped: title=%s", movie.get("title"))
+        log_debug(logger, "search.movie.unmapped", "Movie search unmapped", details={"title": movie.get("title")}, entity_kind="movie", entity_id=movie.get("id"), entity_title=movie.get("title"))
         return []
 
     client = AnimeWorldClient()
     episodes = _get_episodes_cached(client, detail["mapping"]["aw_link"])
     if not episodes:
-        logger.debug("Movie search found no episodes: title=%s aw_link=%s", detail.get("title"), detail["mapping"]["aw_link"])
+        log_debug(logger, "search.movie.no_episodes", "Movie search found no episodes", details={"title": detail.get("title"), "aw_link": detail["mapping"]["aw_link"]}, entity_kind="movie", entity_id=detail.get("id"), entity_title=detail.get("title"))
         return []
 
     episode = episodes[0]
@@ -259,5 +270,13 @@ def build_movie_search_items(query: str, tmdb_id: int | None = None, imdb_id: st
                 "year": detail.get("year"),
             }
         )
-    logger.debug("Movie search resolved: title=%s items=%s", detail.get("title"), len(results))
+    log_debug(
+        logger,
+        "search.movie.resolved",
+        "Movie search resolved",
+        details={"title": detail.get("title"), "items": len(results)},
+        entity_kind="movie",
+        entity_id=detail.get("id"),
+        entity_title=detail.get("title"),
+    )
     return results

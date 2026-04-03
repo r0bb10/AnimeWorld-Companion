@@ -4,6 +4,7 @@ from fastapi import FastAPI
 from fastapi.responses import PlainTextResponse
 
 from .core.lifecycle import lifespan
+from .core.log_events import log_debug
 from .core.logging import configure_logging, get_logger
 from .web.docs import API_DESCRIPTION, OPENAPI_TAGS
 from .web.routes import api_router
@@ -35,7 +36,7 @@ def create_app() -> FastAPI:
         return PlainTextResponse("ok")
 
     logger = get_logger(__name__)
-    logger.debug("Clean rebuild app initialized")
+    log_debug(logger, "app.initialized", "Clean rebuild app initialized")
     return app
 
 

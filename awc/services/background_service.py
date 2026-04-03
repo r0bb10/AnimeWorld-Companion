@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import UTC, datetime
 import json
 import logging
@@ -181,6 +182,65 @@ def _resolve_rss_episode(show_id: int, anime_slug: str, episode_number: int) -> 
     return season_number, resolved_episode
 
 
+def _process_rss_item(fields: dict, client: AnimeWorldClient) -> int:
+    """Process one parsed RSS item. Returns number of entries cached (0 or more)."""
+    anime_slug = client.url_to_slug(fields["anime_link"])
+    cached = 0
+
+    mapping = _resolve_rss_mapping(anime_slug)
+    if mapping:
+        resolved = _resolve_rss_episode(mapping["show_id"], anime_slug, fields["episode_number"])
+        if not resolved:
+            return 0
+        season_number, episode_number = resolved
+        if has_rss_item(mapping["show_id"], season_number, episode_number):
+            return 0
+        items = build_show_search_items(
+            mapping["title"],
+            season_number,
+            episode_number,
+            tvdb_id=mapping.get("tvdb_id"),
+        )
+        if not items:
+            return 0
+        item_payload = items[0]
+        if save_rss_item(
+            show_id=mapping["show_id"],
+            season_number=season_number,
+            episode_number=episode_number,
+            title=item_payload["title"],
+            guid=item_payload["guid"],
+            size=int(item_payload.get("size", 0) or 0),
+            pub_date=fields["pub_date"],
+            aw_episode_link=item_payload.get("aw_link", anime_slug),
+        ):
+            cached += 1
+        return cached
+
+    movie_mapping = _resolve_movie_rss_mapping(anime_slug)
+    if not movie_mapping:
+        return 0
+    items = build_movie_search_items(
+        movie_mapping["title"],
+        tmdb_id=movie_mapping.get("tmdb_id"),
+        imdb_id=movie_mapping.get("imdb_id") or "",
+    )
+    for item_payload in items:
+        guid = str(item_payload.get("guid", "") or "")
+        if not guid or has_movie_rss_item(movie_mapping["movie_id"], guid):
+            continue
+        if save_movie_rss_item(
+            movie_id=movie_mapping["movie_id"],
+            title=item_payload["title"],
+            guid=guid,
+            size=int(item_payload.get("size", 0) or 0),
+            pub_date=fields["pub_date"],
+            aw_episode_link=item_payload.get("aw_link", anime_slug),
+        ):
+            cached += 1
+    return cached
+
+
 def update_rss_cache() -> dict:
     if not settings.rss_enabled:
         _set_state("rss", enabled=False)
@@ -191,70 +251,38 @@ def update_rss_cache() -> dict:
         return {"enabled": True, "cached": 0, "error": "missing_aw_base_url"}
 
     client = AnimeWorldClient()
-    cached = 0
-    response = requests.get(url, timeout=15)
-    response.raise_for_status()
-    root = ET.fromstring(response.content)
 
+    try:
+        response = requests.get(url, timeout=15)
+        response.raise_for_status()
+        root = ET.fromstring(response.content)
+    except requests.ConnectionError:
+        logger.warning("RSS poll skipped: AnimeWorld unreachable")
+        return {"enabled": True, "cached": 0, "error": "unreachable"}
+    except requests.Timeout:
+        logger.warning("RSS poll skipped: request timed out")
+        return {"enabled": True, "cached": 0, "error": "timeout"}
+    except Exception as exc:
+        logger.exception("RSS fetch failed")
+        return {"enabled": True, "cached": 0, "error": str(exc)}
+
+    fields_list = []
     for item in root.findall(".//item"):
-        fields = _extract_rss_fields(item)
-        if not fields:
-            continue
-        anime_slug = client.url_to_slug(fields["anime_link"])
-        mapping = _resolve_rss_mapping(anime_slug)
-        if mapping:
-            resolved = _resolve_rss_episode(mapping["show_id"], anime_slug, fields["episode_number"])
-            if not resolved:
-                continue
-            season_number, episode_number = resolved
-            if has_rss_item(mapping["show_id"], season_number, episode_number):
-                continue
+        try:
+            fields = _extract_rss_fields(item)
+            if fields:
+                fields_list.append(fields)
+        except Exception:
+            logger.exception("RSS item parse failed")
 
-            items = build_show_search_items(
-                mapping["title"],
-                season_number,
-                episode_number,
-                tvdb_id=mapping.get("tvdb_id"),
-            )
-            if not items:
-                continue
-
-            item_payload = items[0]
-            if save_rss_item(
-                show_id=mapping["show_id"],
-                season_number=season_number,
-                episode_number=episode_number,
-                title=item_payload["title"],
-                guid=item_payload["guid"],
-                size=int(item_payload.get("size", 0) or 0),
-                pub_date=fields["pub_date"],
-                aw_episode_link=item_payload.get("aw_link", anime_slug),
-            ):
-                cached += 1
-            continue
-
-        movie_mapping = _resolve_movie_rss_mapping(anime_slug)
-        if not movie_mapping:
-            continue
-
-        items = build_movie_search_items(
-            movie_mapping["title"],
-            tmdb_id=movie_mapping.get("tmdb_id"),
-            imdb_id=movie_mapping.get("imdb_id") or "",
-        )
-        for item_payload in items:
-            guid = str(item_payload.get("guid", "") or "")
-            if not guid or has_movie_rss_item(movie_mapping["movie_id"], guid):
-                continue
-            if save_movie_rss_item(
-                movie_id=movie_mapping["movie_id"],
-                title=item_payload["title"],
-                guid=guid,
-                size=int(item_payload.get("size", 0) or 0),
-                pub_date=fields["pub_date"],
-                aw_episode_link=item_payload.get("aw_link", anime_slug),
-            ):
-                cached += 1
+    cached = 0
+    with ThreadPoolExecutor(max_workers=5) as pool:
+        futures = {pool.submit(_process_rss_item, f, client): f for f in fields_list}
+        for future in as_completed(futures):
+            try:
+                cached += future.result()
+            except Exception:
+                logger.exception("RSS item processing failed")
 
     cleanup_rss_items(settings.rss_cache_retention_days)
     if cached:

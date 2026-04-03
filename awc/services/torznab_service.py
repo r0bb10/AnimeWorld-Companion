@@ -212,7 +212,7 @@ def build_search_xml(
                 size=item.get("size", 0),
                 pub_date=item.get("pub_date"),
             )
-        if len(channel) == 3:
+        if len(channel) == 4:
             for item in _dummy_items_for_media(media, category):
                 category_id = 2000 if "2000" in item.get("categories", []) else 5070
                 _add_item(

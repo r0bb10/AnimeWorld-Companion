@@ -422,17 +422,6 @@ def _run_link_loop() -> None:
         try:
             _set_state("links", running=True)
             result = sanitize_links_once()
-            log_block(
-                logger,
-                logging.INFO,
-                "Sanitizer cycle complete",
-                [
-                    f"checked={result.get('checked', 0)}",
-                    f"updated={result.get('updated', 0)}",
-                    f"removed={result.get('removed', 0)}",
-                    f"failed={result.get('failed', 0)}",
-                ],
-            )
             _set_state(
                 "links",
                 running=False,

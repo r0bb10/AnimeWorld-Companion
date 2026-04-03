@@ -292,7 +292,7 @@ def _run_rss_loop() -> None:
 def _run_sync_loop() -> None:
     _set_state("sync", running=True)
     logger.info("Background sync loop started: interval=%ss", max(60, settings.sync_interval_minutes * 60))
-    if _stop_event.wait(max(60, settings.sync_interval_minutes * 60, 600)):
+    if _stop_event.wait(60):  # brief startup grace before first sync
         return
     while not _stop_event.is_set():
         try:

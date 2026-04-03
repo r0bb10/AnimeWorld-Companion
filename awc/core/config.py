@@ -102,6 +102,9 @@ class Settings:
     rss_cache_retention_days: int
     rss_cache_limit: int
     sanitizer_enabled: bool
+    eligible_enabled: bool
+    eligible_interval: int
+    eligible_lookback_days: int
     automap_confidence_threshold: float
     automap_movie_confidence_threshold: float
     sonarr_url: str
@@ -134,6 +137,9 @@ def load_settings() -> Settings:
         rss_cache_retention_days=_int("RSS_CACHE_RETENTION_DAYS", 30),
         rss_cache_limit=_int("RSS_CACHE_LIMIT", 100),
         sanitizer_enabled=_get("SANITIZER_ENABLED", "true").lower() == "true",
+        eligible_enabled=_get("ELIGIBLE_ENABLED", "true").lower() == "true",
+        eligible_interval=_int("ELIGIBLE_INTERVAL", 21600),
+        eligible_lookback_days=_int("ELIGIBLE_LOOKBACK_DAYS", 14),
         automap_confidence_threshold=float(_get("AUTOMAP_CONFIDENCE_THRESHOLD", "85")) / 100,
         automap_movie_confidence_threshold=float(_get("AUTOMAP_MOVIE_CONFIDENCE_THRESHOLD", "75")) / 100,
         sonarr_url=_normalize_manager_url(_get("SONARR_URL")),

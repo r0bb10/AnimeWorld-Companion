@@ -14,13 +14,14 @@ logger = get_logger("lifecycle")
 @asynccontextmanager
 async def lifespan(app):
     logger.info(
-        "AWC starting: level=%s tz=%s sonarr=%s radarr=%s rss=%s sanitizer=%s",
+        "AWC starting: level=%s tz=%s sonarr=%s radarr=%s rss=%s sanitizer=%s eligible=%s",
         settings.log_level,
         settings.timezone_name,
         "on" if settings.sonarr_url and settings.sonarr_api_key else "off",
         "on" if settings.radarr_url and settings.radarr_api_key else "off",
         "on" if settings.rss_enabled else "off",
         "on" if settings.sanitizer_enabled else "off",
+        "on" if settings.eligible_enabled else "off",
     )
     init_db()
     start_sse_streams()

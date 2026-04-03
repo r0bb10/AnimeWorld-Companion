@@ -23,6 +23,7 @@ from ..integrations.sonarr_client import SonarrClient
 from ..repositories.db import get_db
 from ..repositories.rss_cache import cleanup_rss_items, has_movie_rss_item, has_rss_item, save_movie_rss_item, save_rss_item
 from .download_service import completed_downloads, mark_imported, restore_on_startup
+from .eligible_service import run_eligible_once
 from .sanitizer_service import sanitize_links_once, sanitizer_status
 from .search_service import build_movie_search_items, build_show_search_items
 from .sync_runner_service import sync_all
@@ -37,6 +38,7 @@ _state = {
     "rss": {"enabled": False, "running": False, "last_run_at": None, "last_error": "", "last_cached": 0},
     "imports": {"running": False, "last_run_at": None, "last_error": "", "last_marked": 0},
     "links": {"enabled": False, "running": False, "last_run_at": None, "last_error": "", "last_result": None},
+    "eligible": {"enabled": False, "running": False, "last_run_at": None, "last_error": "", "last_result": None},
     "startup": {"restored": 0, "fixed": 0},
 }
 
@@ -442,11 +444,49 @@ def _run_link_loop() -> None:
             break
 
 
+def _run_eligible_loop() -> None:
+    _set_state("eligible", enabled=settings.eligible_enabled, running=False, last_error="")
+    if not settings.eligible_enabled:
+        logger.info("Eligible loop disabled by env")
+        return
+    interval = max(60 * 60, int(settings.eligible_interval or 0))
+    logger.info(
+        "Eligible loop scheduled: first_run=300s interval=%ss lookback_days=%s",
+        interval,
+        max(0, int(settings.eligible_lookback_days or 0)),
+    )
+    if _stop_event.wait(300):
+        return
+    while not _stop_event.is_set():
+        try:
+            _set_state("eligible", running=True)
+            result = run_eligible_once()
+            _set_state(
+                "eligible",
+                running=False,
+                last_run_at=datetime.now(UTC).isoformat(),
+                last_error="",
+                last_result=result,
+            )
+        except Exception as exc:
+            logger.exception("Eligible loop failed")
+            _set_state(
+                "eligible",
+                running=False,
+                last_run_at=datetime.now(UTC).isoformat(),
+                last_error=str(exc),
+                last_result=runtime_state().get("eligible", {}).get("last_result"),
+            )
+        if _stop_event.wait(interval):
+            break
+
+
 def start_background_workers() -> dict:
     _stop_event.clear()
     startup = restore_on_startup()
     _set_state("startup", **startup)
     _set_state("links", enabled=settings.sanitizer_enabled, running=False, last_error="")
+    _set_state("eligible", enabled=settings.eligible_enabled, running=False, last_error="")
 
     workers = {
         "sync": _run_sync_loop,
@@ -454,6 +494,8 @@ def start_background_workers() -> dict:
     }
     if settings.sanitizer_enabled:
         workers["links"] = _run_link_loop
+    if settings.eligible_enabled:
+        workers["eligible"] = _run_eligible_loop
     if settings.rss_enabled:
         workers["rss"] = _run_rss_loop
 

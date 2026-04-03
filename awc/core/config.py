@@ -145,3 +145,19 @@ def load_settings() -> Settings:
 
 
 settings = load_settings()
+
+# Validate required settings — hard-fail on startup like the old app/config.py did.
+if not settings.aw_base_url:
+    raise RuntimeError(
+        "AW_BASE_URL is not set. "
+        "If using Docker/Portainer, ensure it is listed under 'environment:' in your stack "
+        "(e.g. - AW_BASE_URL=${AW_BASE_URL}). Defining it only in .env is not enough — "
+        "it must be explicitly forwarded. Example: AW_BASE_URL=https://www.animeworld.ac"
+    )
+if not settings.awc_api_key:
+    raise RuntimeError("AWC_API_KEY is not set. Generate one with: openssl rand -hex 16")
+if not (settings.sonarr_url and settings.sonarr_api_key) and not (settings.radarr_url and settings.radarr_api_key):
+    raise RuntimeError(
+        "No media manager configured. "
+        "Set SONARR_URL + SONARR_API_KEY and/or RADARR_URL + RADARR_API_KEY."
+    )

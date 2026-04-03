@@ -301,6 +301,12 @@ def _needs_show_mapping_refresh(show: dict, season: dict) -> bool:
         return False
 
     ordered_mappings = sorted(mappings, key=lambda item: int(item.get("part") or 0))
+    # Sanitizer should only repair clearly broken existing split mappings.
+    # It should not try to "upgrade" healthy single-link auto mappings into
+    # split-cour structures just because Sonarr exposes multiple segments.
+    if len(ordered_mappings) <= 1:
+        return False
+
     marker_counts = [int(item.get("count") or 0) for item in markers]
     mapping_counts = [int(item.get("aw_episode_count") or 0) for item in ordered_mappings]
     if len(marker_counts) != len(mapping_counts):
@@ -311,14 +317,7 @@ def _needs_show_mapping_refresh(show: dict, season: dict) -> bool:
     season_total = int(season.get("episode_count") or 0)
     if season_total and abs(sum(mapping_counts) - season_total) > 1:
         return True
-
-    factors = []
-    for mapping in ordered_mappings:
-        try:
-            factors.append(json.loads(mapping.get("confidence_factors") or "{}"))
-        except (TypeError, ValueError):
-            factors.append({})
-    return not all(bool(item.get("split_cour")) for item in factors)
+    return False
 
 
 def sanitize_links_once() -> dict:

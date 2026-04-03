@@ -116,10 +116,18 @@ def _add_item(
     year: int | None = None,
     size: int | str = 1,
     pub_date: str | None = None,
+    release_source: str = "unknown",
 ) -> None:
     item = SubElement(channel, "item")
     SubElement(item, "title").text = title
-    link = _resolve_download_url(download_url, guid, title, aw_link=aw_link, base_url=base_url)
+    link = _resolve_download_url(
+        download_url,
+        guid,
+        title,
+        aw_link=aw_link,
+        release_source=release_source,
+        base_url=base_url,
+    )
     SubElement(item, "guid").text = guid
     SubElement(item, "link").text = link
     SubElement(item, "pubDate").text = pub_date or format_datetime(datetime.now(UTC))
@@ -143,13 +151,21 @@ def _add_item(
         _add_attr(item, "year", year)
 
 
-def _build_download_url(guid: str, title: str, *, aw_link: str = "", base_url: str | None = None) -> str:
+def _build_download_url(
+    guid: str,
+    title: str,
+    *,
+    aw_link: str = "",
+    release_source: str = "unknown",
+    base_url: str | None = None,
+) -> str:
     base = (base_url or settings.awc_url).rstrip("/")
     params = [f"url={quote(guid, safe='')}"]
     if title:
         params.append(f"save_name={quote(title, safe='')}")
     if aw_link:
         params.append(f"aw_link={quote(aw_link, safe='')}")
+    params.append(f"release_source={quote(release_source or 'unknown', safe='')}")
     if settings.awc_api_key:
         params.append(f"apikey={quote(settings.awc_api_key, safe='')}")
     return f"{base}/download?{'&'.join(params)}"
@@ -161,10 +177,17 @@ def _resolve_download_url(
     title: str,
     *,
     aw_link: str = "",
+    release_source: str = "unknown",
     base_url: str | None = None,
 ) -> str:
     if not download_url:
-        return _build_download_url(guid, title, aw_link=aw_link, base_url=base_url)
+        return _build_download_url(
+            guid,
+            title,
+            aw_link=aw_link,
+            release_source=release_source,
+            base_url=base_url,
+        )
     if not base_url:
         return download_url
     try:
@@ -208,6 +231,7 @@ def build_search_xml(
                 year=item.get("year"),
                 size=item.get("size", 0),
                 pub_date=item.get("pub_date"),
+                release_source="rss",
             )
         if len(channel) == 4:
             for item in _dummy_items_for_media(media, category):
@@ -222,6 +246,7 @@ def build_search_xml(
                     season=season,
                     episode=episode,
                     size=item.get("size", 1),
+                    release_source="search",
                 )
             logger.debug("Torznab RSS fallback emitted dummy item: media=%s category=%s", media, category)
         logger.debug("Torznab RSS served cached items=%s", len(cached_items))
@@ -252,6 +277,7 @@ def build_search_xml(
             year=item.get("year"),
             size=item.get("size", 0),
             pub_date=item.get("pubDate"),
+            release_source="search",
         )
     logger.debug(
         "Torznab search served: media=%s query=%r season=%r episode=%r category=%r tvdb_id=%r tmdb_id=%r imdb_id=%r items=%s",

@@ -195,6 +195,7 @@ CREATE TABLE IF NOT EXISTS downloads (
     id               TEXT PRIMARY KEY,
     url              TEXT NOT NULL,
     filename         TEXT NOT NULL,
+    release_source   TEXT DEFAULT 'unknown',
     status           TEXT NOT NULL DEFAULT 'queued',
     total_bytes      INTEGER DEFAULT 0,
     downloaded_bytes INTEGER DEFAULT 0,
@@ -220,6 +221,8 @@ def init_db() -> None:
             row["name"]
             for row in conn.execute("PRAGMA table_info(downloads)").fetchall()
         }
+        if "release_source" not in columns:
+            conn.execute("ALTER TABLE downloads ADD COLUMN release_source TEXT DEFAULT 'unknown'")
         if "radarr_id" not in columns:
             conn.execute("ALTER TABLE downloads ADD COLUMN radarr_id INTEGER")
         season_columns = {

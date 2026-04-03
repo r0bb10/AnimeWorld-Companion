@@ -377,6 +377,7 @@ def download_handoff(
     year: int | None = None,
     manager_id: int | None = None,
     source: str = "",
+    release_source: str = "unknown",
     url: str = "",
     save_name: str = "",
     aw_link: str = "",
@@ -405,6 +406,7 @@ def download_handoff(
         manager_id=manager_id,
         aw_link=aw_link,
         filename=save_name or None,
+        release_source=release_source,
         base_url=str(request.base_url).rstrip("/"),
     )
     if download is None:

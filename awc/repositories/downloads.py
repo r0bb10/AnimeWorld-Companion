@@ -14,6 +14,7 @@ def list_downloads(limit: int = 100) -> list[dict]:
                 id,
                 url,
                 filename,
+                release_source,
                 status,
                 total_bytes,
                 downloaded_bytes,
@@ -41,6 +42,7 @@ def list_all_downloads() -> list[dict]:
                 id,
                 url,
                 filename,
+                release_source,
                 status,
                 total_bytes,
                 downloaded_bytes,
@@ -66,6 +68,7 @@ def get_download(download_id: str) -> dict | None:
                 id,
                 url,
                 filename,
+                release_source,
                 status,
                 total_bytes,
                 downloaded_bytes,
@@ -89,6 +92,7 @@ def create_download(
     *,
     url: str,
     filename: str,
+    release_source: str = "unknown",
     status: str,
     part_path: str,
     sonarr_id: int | None = None,
@@ -103,6 +107,7 @@ def create_download(
                 url,
                 id,
                 filename,
+                release_source,
                 status,
                 total_bytes,
                 downloaded_bytes,
@@ -114,9 +119,19 @@ def create_download(
                 sonarr_id,
                 radarr_id
             )
-            VALUES (?, ?, ?, ?, 0, 0, ?, NULL, NULL, NULL, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, 0, 0, ?, NULL, NULL, NULL, ?, ?, ?)
             """,
-            (url, download_id, filename, status, part_path, created_at, sonarr_id, radarr_id),
+            (
+                url,
+                download_id,
+                filename,
+                release_source,
+                status,
+                part_path,
+                created_at,
+                sonarr_id,
+                radarr_id,
+            ),
         )
     return get_download(download_id) or {}
 
@@ -201,6 +216,7 @@ def list_completed_downloads() -> list[dict]:
                 id,
                 url,
                 filename,
+                release_source,
                 status,
                 total_bytes,
                 downloaded_bytes,

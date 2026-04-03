@@ -60,6 +60,13 @@ def _download_base_url() -> str:
     return settings.awc_url
 
 
+def _normalize_release_source(value: str) -> str:
+    normalized = (value or "").strip().lower()
+    if normalized in {"rss", "search"}:
+        return normalized
+    return "unknown"
+
+
 def _encode_source_token(source: str) -> str:
     return urlsafe_b64encode(source.encode()).decode().rstrip("=")
 
@@ -254,6 +261,7 @@ def build_download_url(
     manager_id: int | None = None,
     aw_link: str = "",
     filename: str | None = None,
+    release_source: str = "unknown",
     base_url: str | None = None,
 ) -> str:
     resolved_source = _decode_source_token(source) or source
@@ -287,6 +295,7 @@ def build_download_url(
         params["manager_id"] = manager_id
     if source:
         params["source"] = _encode_source_token(source)
+    params["release_source"] = _normalize_release_source(release_source)
     query = urlencode(params)
     return f"{(base_url or _download_base_url()).rstrip('/')}/download?{query}"
 
@@ -302,6 +311,7 @@ def create_fake_torrent(
     manager_id: int | None = None,
     aw_link: str = "",
     filename: str | None = None,
+    release_source: str = "unknown",
     base_url: str | None = None,
 ) -> tuple[dict, bytes, str]:
     release_name = filename or build_release_name(
@@ -316,7 +326,7 @@ def create_fake_torrent(
     resolved_source = _decode_source_token(source)
     if not resolved_source:
         # source was empty — no CDN URL available yet; the download worker will
-        # have nothing real to fetch. Log and treat as a deferred/legacy request.
+        # have nothing real to fetch.
         logger.warning(
             "create_fake_torrent: no source URL for %r (manager=%s) — download will not start",
             release_name,
@@ -337,6 +347,7 @@ def create_fake_torrent(
         download = create_download(
             url=resolved_source,
             filename=release_name,
+            release_source=_normalize_release_source(release_source),
             status="queued",
             part_path=_part_path(release_name),
             sonarr_id=manager_id if manager == "sonarr" else None,
@@ -373,6 +384,7 @@ def create_fake_torrent(
             manager_id=manager_id,
             aw_link=aw_link,
             filename=release_name,
+            release_source=release_source,
             base_url=base_url,
         ),
         "comment": "AWC rebuild fake torrent handoff",

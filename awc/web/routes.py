@@ -44,6 +44,7 @@ from ..services.mutation_service import (
     map_show_season,
     remove_movie,
     remove_show,
+    unmap_all_mappings,
     unmap_movie,
     unmap_show_season,
 )
@@ -89,13 +90,8 @@ def _log_webhook_movie_result(title: str, movie_id: int, result: dict) -> None:
     log_block(logger, _webhook_log_level(status), f"Webhook Radarr add: {title}", lines)
 
 
-@api_router.get("/", tags=["UI"], summary="Dashboard", description="Serve the main AnimeWorld Companion web UI.", include_in_schema=False)
-def dashboard() -> HTMLResponse:
-    return HTMLResponse(build_dashboard_html())
-
-
-@api_router.post("/map", tags=["Mutation"], summary="Map show season", description="Create or replace a manual AnimeWorld mapping for a Sonarr show season.")
-def api_map_show_season(
+def _map_show_season_impl(
+    *,
     show_id: int,
     season_number: int,
     aw_link: str,
@@ -106,7 +102,6 @@ def api_map_show_season(
     aw_status: str = "",
     aw_category: str = "",
     linked_with_season: int | None = None,
-    _: str = Depends(require_api_key),
 ) -> dict:
     show = build_show_snapshot(show_id)
     result = map_show_season(
@@ -133,12 +128,7 @@ def api_map_show_season(
     return result
 
 
-@api_router.post("/unmap", tags=["Mutation"], summary="Unmap show season", description="Remove all mappings for a specific Sonarr show season.")
-def api_unmap_show_season(
-    show_id: int,
-    season_number: int,
-    _: str = Depends(require_api_key),
-) -> dict:
+def _unmap_show_season_impl(*, show_id: int, season_number: int) -> dict:
     show = build_show_snapshot(show_id)
     result = unmap_show_season(show_id, season_number)
     log_block(
@@ -150,78 +140,252 @@ def api_unmap_show_season(
     return result
 
 
-@api_router.post("/ignore-season", tags=["Mutation"], summary="Ignore show season", description="Mark a show season as ignored so it is excluded from normal mapping workflows.")
+def _ignore_show_season_impl(*, show_id: int, season_number: int, ignored: bool) -> dict:
+    show = build_show_snapshot(show_id)
+    result = ignore_show_season(show_id, season_number, ignored)
+    if not result["updated"]:
+        raise HTTPException(status_code=404, detail="Season not found")
+    log_block(
+        logger,
+        logging.INFO,
+        str((show or {}).get("title") or f"show:{show_id}"),
+        [f"S{season_number:02d} {'ignored' if ignored else 'unignored'}"],
+    )
+    return result
+
+
+def _map_movie_impl(
+    *,
+    movie_id: int,
+    aw_link: str,
+    aw_title: str = "",
+    aw_status: str = "",
+    aw_category: str = "",
+) -> dict:
+    movie = build_movie_snapshot(movie_id)
+    result = map_movie(
+        movie_id=movie_id,
+        aw_link=aw_link,
+        aw_title=aw_title,
+        aw_status=aw_status,
+        aw_category=aw_category,
+    )
+    if not result["updated"]:
+        raise HTTPException(status_code=404, detail=result["reason"])
+    mapped_link = result.get("mapping", {}).get("aw_link", aw_link)
+    log_block(
+        logger,
+        logging.INFO,
+        str((movie or {}).get("title") or f"movie:{movie_id}"),
+        [f"manual → {mapped_link}"],
+    )
+    return result
+
+
+def _unmap_movie_impl(*, movie_id: int) -> dict:
+    movie = build_movie_snapshot(movie_id)
+    result = unmap_movie(movie_id)
+    log_block(
+        logger,
+        logging.INFO,
+        str((movie or {}).get("title") or f"movie:{movie_id}"),
+        ["removed"],
+    )
+    return result
+
+
+def _ignore_movie_impl(*, movie_id: int, ignored: bool) -> dict:
+    result = ignore_movie(movie_id, ignored)
+    if not result["updated"]:
+        raise HTTPException(status_code=404, detail="Movie not found")
+    movie = build_movie_snapshot(movie_id)
+    log_block(
+        logger,
+        logging.INFO,
+        str((movie or {}).get("title") or f"movie:{movie_id}"),
+        ["ignored" if ignored else "unignored"],
+    )
+    return result
+
+
+@api_router.get("/", tags=["UI"], summary="Dashboard", description="Serve the main AnimeWorld Companion web UI.", include_in_schema=False)
+def dashboard() -> HTMLResponse:
+    return HTMLResponse(build_dashboard_html())
+
+
+@api_router.post(
+    "/api/shows/{show_id}/seasons/{season_number}/map",
+    tags=["Mutation"],
+    summary="Map show season",
+    description="Create or replace a manual AnimeWorld mapping for a Sonarr show season.",
+)
+def api_map_show_season(
+    show_id: int,
+    season_number: int,
+    aw_link: str,
+    aw_title: str = "",
+    part: int = 1,
+    aw_episode_count: int = 0,
+    aw_total_episodes: int = 0,
+    aw_status: str = "",
+    aw_category: str = "",
+    linked_with_season: int | None = None,
+    _: str = Depends(require_api_key),
+) -> dict:
+    return _map_show_season_impl(
+        show_id=show_id,
+        season_number=season_number,
+        aw_link=aw_link,
+        aw_title=aw_title,
+        part=part,
+        aw_episode_count=aw_episode_count,
+        aw_total_episodes=aw_total_episodes,
+        aw_status=aw_status,
+        aw_category=aw_category,
+        linked_with_season=linked_with_season,
+    )
+
+
+@api_router.post(
+    "/map",
+    include_in_schema=False,
+)
+def api_map_show_season_legacy(
+    show_id: int,
+    season_number: int,
+    aw_link: str,
+    aw_title: str = "",
+    part: int = 1,
+    aw_episode_count: int = 0,
+    aw_total_episodes: int = 0,
+    aw_status: str = "",
+    aw_category: str = "",
+    linked_with_season: int | None = None,
+    _: str = Depends(require_api_key),
+) -> dict:
+    return _map_show_season_impl(
+        show_id=show_id,
+        season_number=season_number,
+        aw_link=aw_link,
+        aw_title=aw_title,
+        part=part,
+        aw_episode_count=aw_episode_count,
+        aw_total_episodes=aw_total_episodes,
+        aw_status=aw_status,
+        aw_category=aw_category,
+        linked_with_season=linked_with_season,
+    )
+
+
+@api_router.post(
+    "/api/shows/{show_id}/seasons/{season_number}/unmap",
+    tags=["Mutation"],
+    summary="Unmap show season",
+    description="Remove all mappings for a specific Sonarr show season.",
+)
+def api_unmap_show_season(
+    show_id: int,
+    season_number: int,
+    _: str = Depends(require_api_key),
+) -> dict:
+    return _unmap_show_season_impl(show_id=show_id, season_number=season_number)
+
+
+@api_router.post("/unmap", include_in_schema=False)
+def api_unmap_show_season_legacy(
+    show_id: int,
+    season_number: int,
+    _: str = Depends(require_api_key),
+) -> dict:
+    return _unmap_show_season_impl(show_id=show_id, season_number=season_number)
+
+
+@api_router.post(
+    "/api/shows/{show_id}/seasons/{season_number}/ignore",
+    tags=["Mutation"],
+    summary="Ignore show season",
+    description="Mark a show season as ignored so it is excluded from normal mapping workflows.",
+)
 def api_ignore_show_season(
     show_id: int,
     season_number: int,
     _: str = Depends(require_api_key),
 ) -> dict:
-    show = build_show_snapshot(show_id)
-    result = ignore_show_season(show_id, season_number, True)
-    if not result["updated"]:
-        raise HTTPException(status_code=404, detail="Season not found")
-    log_block(
-        logger,
-        logging.INFO,
-        str((show or {}).get("title") or f"show:{show_id}"),
-        [f"S{season_number:02d} ignored"],
-    )
-    return result
+    return _ignore_show_season_impl(show_id=show_id, season_number=season_number, ignored=True)
 
 
-@api_router.post("/unignore-season", tags=["Mutation"], summary="Unignore show season", description="Restore a previously ignored show season to normal mapping workflows.")
+@api_router.post("/ignore-season", include_in_schema=False)
+def api_ignore_show_season_legacy(
+    show_id: int,
+    season_number: int,
+    _: str = Depends(require_api_key),
+) -> dict:
+    return _ignore_show_season_impl(show_id=show_id, season_number=season_number, ignored=True)
+
+
+@api_router.post(
+    "/api/shows/{show_id}/seasons/{season_number}/unignore",
+    tags=["Mutation"],
+    summary="Unignore show season",
+    description="Restore a previously ignored show season to normal mapping workflows.",
+)
 def api_unignore_show_season(
     show_id: int,
     season_number: int,
     _: str = Depends(require_api_key),
 ) -> dict:
-    show = build_show_snapshot(show_id)
-    result = ignore_show_season(show_id, season_number, False)
-    if not result["updated"]:
-        raise HTTPException(status_code=404, detail="Season not found")
-    log_block(
-        logger,
-        logging.INFO,
-        str((show or {}).get("title") or f"show:{show_id}"),
-        [f"S{season_number:02d} unignored"],
-    )
-    return result
+    return _ignore_show_season_impl(show_id=show_id, season_number=season_number, ignored=False)
 
 
-@api_router.post("/ignore-movie", tags=["Mutation"], summary="Ignore movie", description="Mark a movie as ignored so it is excluded from normal mapping workflows.")
+@api_router.post("/unignore-season", include_in_schema=False)
+def api_unignore_show_season_legacy(
+    show_id: int,
+    season_number: int,
+    _: str = Depends(require_api_key),
+) -> dict:
+    return _ignore_show_season_impl(show_id=show_id, season_number=season_number, ignored=False)
+
+
+@api_router.post(
+    "/api/movies/{movie_id}/ignore",
+    tags=["Mutation"],
+    summary="Ignore movie",
+    description="Mark a movie as ignored so it is excluded from normal mapping workflows.",
+)
 def api_ignore_movie(
     movie_id: int,
     _: str = Depends(require_api_key),
 ) -> dict:
-    result = ignore_movie(movie_id, True)
-    if not result["updated"]:
-        raise HTTPException(status_code=404, detail="Movie not found")
-    movie = build_movie_snapshot(movie_id)
-    log_block(
-        logger,
-        logging.INFO,
-        str((movie or {}).get("title") or f"movie:{movie_id}"),
-        ["ignored"],
-    )
-    return result
+    return _ignore_movie_impl(movie_id=movie_id, ignored=True)
 
 
-@api_router.post("/unignore-movie", tags=["Mutation"], summary="Unignore movie", description="Restore a previously ignored movie to normal mapping workflows.")
+@api_router.post("/ignore-movie", include_in_schema=False)
+def api_ignore_movie_legacy(
+    movie_id: int,
+    _: str = Depends(require_api_key),
+) -> dict:
+    return _ignore_movie_impl(movie_id=movie_id, ignored=True)
+
+
+@api_router.post(
+    "/api/movies/{movie_id}/unignore",
+    tags=["Mutation"],
+    summary="Unignore movie",
+    description="Restore a previously ignored movie to normal mapping workflows.",
+)
 def api_unignore_movie(
     movie_id: int,
     _: str = Depends(require_api_key),
 ) -> dict:
-    result = ignore_movie(movie_id, False)
-    if not result["updated"]:
-        raise HTTPException(status_code=404, detail="Movie not found")
-    movie = build_movie_snapshot(movie_id)
-    log_block(
-        logger,
-        logging.INFO,
-        str((movie or {}).get("title") or f"movie:{movie_id}"),
-        ["unignored"],
-    )
-    return result
+    return _ignore_movie_impl(movie_id=movie_id, ignored=False)
+
+
+@api_router.post("/unignore-movie", include_in_schema=False)
+def api_unignore_movie_legacy(
+    movie_id: int,
+    _: str = Depends(require_api_key),
+) -> dict:
+    return _ignore_movie_impl(movie_id=movie_id, ignored=False)
 
 
 @api_router.post("/delete-show", tags=["Mutation"], summary="Delete show", description="Remove a synced show and all related local AWC state.")
@@ -279,7 +443,12 @@ def api_automap(
     return automap_show(item_id, season_number=season_number, force=force)
 
 
-@api_router.post("/map/movie/{movie_id}", tags=["Mutation"], summary="Map movie", description="Create or replace a manual AnimeWorld mapping for a Radarr movie.")
+@api_router.post(
+    "/api/movies/{movie_id}/map",
+    tags=["Mutation"],
+    summary="Map movie",
+    description="Create or replace a manual AnimeWorld mapping for a Radarr movie.",
+)
 def api_map_movie(
     movie_id: int,
     aw_link: str,
@@ -288,41 +457,50 @@ def api_map_movie(
     aw_category: str = "",
     _: str = Depends(require_api_key),
 ) -> dict:
-    movie = build_movie_snapshot(movie_id)
-    result = map_movie(
+    return _map_movie_impl(
         movie_id=movie_id,
         aw_link=aw_link,
         aw_title=aw_title,
         aw_status=aw_status,
         aw_category=aw_category,
     )
-    if not result["updated"]:
-        raise HTTPException(status_code=404, detail=result["reason"])
-    mapped_link = result.get("mapping", {}).get("aw_link", aw_link)
-    log_block(
-        logger,
-        logging.INFO,
-        str((movie or {}).get("title") or f"movie:{movie_id}"),
-        [f"manual → {mapped_link}"],
+
+
+@api_router.post("/map/movie/{movie_id}", include_in_schema=False)
+def api_map_movie_legacy(
+    movie_id: int,
+    aw_link: str,
+    aw_title: str = "",
+    aw_status: str = "",
+    aw_category: str = "",
+    _: str = Depends(require_api_key),
+) -> dict:
+    return _map_movie_impl(
+        movie_id=movie_id,
+        aw_link=aw_link,
+        aw_title=aw_title,
+        aw_status=aw_status,
+        aw_category=aw_category,
     )
-    return result
 
 
-@api_router.post("/unmap/movie/{movie_id}", tags=["Mutation"], summary="Unmap movie", description="Remove the current AnimeWorld mapping for a Radarr movie.")
+@api_router.post(
+    "/api/movies/{movie_id}/unmap",
+    tags=["Mutation"],
+    summary="Unmap movie",
+    description="Remove the current AnimeWorld mapping for a Radarr movie.",
+)
 def api_unmap_movie(movie_id: int, _: str = Depends(require_api_key)) -> dict:
-    movie = build_movie_snapshot(movie_id)
-    result = unmap_movie(movie_id)
-    log_block(
-        logger,
-        logging.INFO,
-        str((movie or {}).get("title") or f"movie:{movie_id}"),
-        ["removed"],
-    )
-    return result
+    return _unmap_movie_impl(movie_id=movie_id)
+
+
+@api_router.post("/unmap/movie/{movie_id}", include_in_schema=False)
+def api_unmap_movie_legacy(movie_id: int, _: str = Depends(require_api_key)) -> dict:
+    return _unmap_movie_impl(movie_id=movie_id)
 
 
 @api_router.get("/api/status", tags=["System"], summary="Runtime status", description="Return high-level runtime, sync, automap, and sanitizer status.")
-def api_status() -> dict:
+def api_status(_: str = Depends(require_api_key)) -> dict:
     return {
         "sonarr_configured": bool(settings.sonarr_url and settings.sonarr_api_key),
         "radarr_configured": bool(settings.radarr_url and settings.radarr_api_key),
@@ -334,13 +512,37 @@ def api_status() -> dict:
 
 
 @api_router.get("/api/system/health", tags=["System"], summary="Detailed health", description="Return the structured internal health report used by the dashboard and diagnostics.")
-def api_system_health() -> dict:
+def api_system_health(_: str = Depends(require_api_key)) -> dict:
     return build_health_report()
 
 
 @api_router.get("/api/heartbeat", tags=["System"], summary="Heartbeat snapshot", description="Return lightweight live dashboard heartbeat data.")
-def api_heartbeat() -> dict:
+def api_heartbeat(_: str = Depends(require_api_key)) -> dict:
     return build_heartbeat_snapshot()
+
+
+@api_router.post(
+    "/api/mappings/unmap-all",
+    tags=["Mutation"],
+    summary="Unmap all mappings",
+    description="Remove all stored AnimeWorld mappings for shows, movies, or both.",
+)
+def api_unmap_all_mappings(
+    kind: str = Query(default="all"),
+    _: str = Depends(require_api_key),
+) -> dict:
+    result = unmap_all_mappings(kind=kind)
+    if not result.get("updated"):
+        raise HTTPException(status_code=422, detail=result.get("reason") or "invalid request")
+    logger.warning(
+        "Bulk unmap completed: kind=%s show_seasons=%s show_rows=%s movies=%s movie_rows=%s",
+        result.get("kind"),
+        result.get("shows", {}).get("seasons", 0),
+        result.get("shows", {}).get("rows", 0),
+        result.get("movies", {}).get("movies", 0),
+        result.get("movies", {}).get("rows", 0),
+    )
+    return result
 
 
 @api_router.get("/api/shows", tags=["Catalog"], summary="List shows", description="List synced Sonarr shows currently present in the AWC catalog.")

@@ -330,7 +330,7 @@ a{color:#58a6ff;text-decoration:none}a:hover{text-decoration:underline}
 <script>
 const AWC_KEY={{ api_key|tojson }};
 const AWC_AW_BASE={{ aw_base_url|tojson }};
-function _kp(){return AWC_KEY?'?apikey='+encodeURIComponent(AWC_KEY):'';}
+function _kp(prefix='?'){return AWC_KEY?prefix+'apikey='+encodeURIComponent(AWC_KEY):'';}
 function _kh(){return AWC_KEY?{'X-Api-Key':AWC_KEY}:{};}
 function _slugToUrl(slug){return AWC_AW_BASE+'/play/'+slug+'/';}
 function _statusLine(text,kind){return '<div class="'+(kind==='automap'?'automap-status':'discover-status')+'">'+text+'</div>';}
@@ -478,23 +478,22 @@ function _automapEndpoint(kind,id){
 }
 
 function _mapEndpoint(kind,id,seasonNum,link){
-  const suffix=AWC_KEY?'?apikey='+encodeURIComponent(AWC_KEY)+'&aw_link=':'?aw_link=';
   return kind==='show'
-    ? '/map?show_id='+id+'&season_number='+seasonNum+'&aw_link='+encodeURIComponent(link)
-    : '/map/movie/'+id+suffix+encodeURIComponent(link);
+    ? '/api/shows/'+id+'/seasons/'+seasonNum+'/map?aw_link='+encodeURIComponent(link)+_kp('&')
+    : '/api/movies/'+id+'/map?aw_link='+encodeURIComponent(link)+_kp('&');
 }
 
 function _unmapEndpoint(kind,id,seasonNum){
   return kind==='show'
-    ? '/unmap?show_id='+id+'&season_number='+seasonNum
-    : '/unmap/movie/'+id+_kp();
+    ? '/api/shows/'+id+'/seasons/'+seasonNum+'/unmap'+_kp()
+    : '/api/movies/'+id+'/unmap'+_kp();
 }
 
 function _ignoreEndpoint(kind,id,seasonNum,ignored){
   if(kind==='show'){
-    return (ignored?'/ignore-season':'/unignore-season')+'?show_id='+id+'&season_number='+seasonNum;
+    return '/api/shows/'+id+'/seasons/'+seasonNum+'/'+(ignored?'ignore':'unignore')+_kp();
   }
-  return (ignored?'/ignore-movie':'/unignore-movie')+'?movie_id='+id;
+  return '/api/movies/'+id+'/'+(ignored?'ignore':'unignore')+_kp();
 }
 
 function _deleteEndpoint(kind,id){

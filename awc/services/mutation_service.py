@@ -3,6 +3,8 @@
 from ..repositories.mappings import (
     clear_movie_sanitizer_retry,
     clear_show_sanitizer_retry,
+    remove_all_movie_mappings,
+    remove_all_show_mappings,
     remove_movie_mapping,
     remove_show_mapping,
     replace_movie_mapping,
@@ -123,3 +125,23 @@ def remove_show(show_id: int) -> dict:
 def remove_movie(movie_id: int) -> dict:
     removed = delete_movie(movie_id)
     return {"removed": removed, "movie_id": movie_id}
+
+
+def unmap_all_mappings(kind: str = "all") -> dict:
+    normalized = str(kind or "all").strip().lower()
+    if normalized not in {"all", "shows", "movies"}:
+        return {"updated": False, "reason": "invalid_kind"}
+
+    show_result = {"rows": 0, "seasons": 0}
+    movie_result = {"rows": 0, "movies": 0}
+    if normalized in {"all", "shows"}:
+        show_result = remove_all_show_mappings()
+    if normalized in {"all", "movies"}:
+        movie_result = remove_all_movie_mappings()
+
+    return {
+        "updated": True,
+        "kind": normalized,
+        "shows": show_result,
+        "movies": movie_result,
+    }

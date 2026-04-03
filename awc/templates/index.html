@@ -26,7 +26,10 @@ a{color:#58a6ff;text-decoration:none}a:hover{text-decoration:underline}
 .filter-bar input{flex:1;padding:6px 10px;background:#161b22;border:1px solid #30363d;border-radius:6px;color:#c9d1d9;font-size:14px}
 .filter-bar select{padding:6px 10px;background:#161b22;border:1px solid #30363d;border-radius:6px;color:#c9d1d9;font-size:14px}
 
-.card{background:#161b22;border:1px solid #21262d;border-radius:8px;margin-bottom:8px;overflow:hidden}
+.card{background:#161b22;border:1px solid #21262d;border-radius:8px;margin-bottom:8px;overflow:hidden;position:relative}
+.card::before{content:"";position:absolute;left:0;top:0;bottom:0;width:5px;pointer-events:none;z-index:2}
+.card.card-sonarr::before{background:#2193b5}
+.card.card-radarr::before{background:#ffc230}
 .card-header{display:flex;justify-content:space-between;align-items:center;padding:10px 14px;cursor:pointer;user-select:none}
 .card-header:hover{background:#1c2128}
 .card-title{font-size:15px;font-weight:600;color:#f0f6fc}
@@ -39,8 +42,6 @@ a{color:#58a6ff;text-decoration:none}a:hover{text-decoration:underline}
 .badge-manual{background:#9e6a03;color:#fff}
 .badge-prerelease{background:#6e40c9;color:#fff}
 .badge-ignored{background:#30363d;color:#8b949e}
-.badge-sonarr{background:#2193b5;color:#fff}
-.badge-radarr{background:#ffc230;color:#fff}
 
 .card-body{display:none;padding:0 14px 12px;border-top:1px solid #21262d}
 .card.open .card-body{display:block}
@@ -251,7 +252,7 @@ a{color:#58a6ff;text-decoration:none}a:hover{text-decoration:underline}
 {% endif %}
 
 {% for card in library_items %}
-<div class="card" data-title="{{ card.title|lower }}" data-status="{{ card.status.key }}" data-type="{{ card.kind }}" data-has-unaired="{{ 'true' if card.has_unaired else 'false' }}">
+<div class="card {{ 'card-sonarr' if card.kind == 'show' else 'card-radarr' }}" data-title="{{ card.title|lower }}" data-status="{{ card.status.key }}" data-type="{{ card.kind }}" data-has-unaired="{{ 'true' if card.has_unaired else 'false' }}">
   <div class="card-header" onclick="toggle(this)">
     <div>
       <span class="card-title">{{ card.title }}</span>
@@ -260,7 +261,6 @@ a{color:#58a6ff;text-decoration:none}a:hover{text-decoration:underline}
       {% endif %}
     </div>
     <div class="card-meta">
-      <span class="badge {{ card.manager_badge_class }}">{{ card.manager_label }}</span>
       {% if card.meta_label %}<span>{{ card.meta_label }}</span>{% endif %}
       <span class="badge badge-{{ card.status.key }} card-status-badge">{{ card.status.label }}</span>
       <span class="arrow">&#9654;</span>
@@ -417,6 +417,7 @@ function _refreshGlobalStats(){
   });
   // Count movie cards
   document.querySelectorAll('.card[data-type="movie"]').forEach(c=>{
+    if(c.dataset.status==='ignored')return;
     total++;
     if(c.dataset.status==='mapped')mapped++;
   });

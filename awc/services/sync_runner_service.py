@@ -337,11 +337,7 @@ def sync_single_movie(movie_payload_or_id) -> int | None:
     if isinstance(movie_payload_or_id, dict):
         movie = movie_payload_or_id
     else:
-        movie = None
-        for candidate in client.fetch_movies():
-            if candidate.get("id") == movie_payload_or_id:
-                movie = candidate
-                break
+        movie = client.fetch_movie_detail(movie_payload_or_id)
     if not movie:
         return None
     tags = client.fetch_tags()
@@ -361,6 +357,16 @@ def sync_single_movie(movie_payload_or_id) -> int | None:
     set_sync_meta("last_radarr_sync", datetime.now(UTC).isoformat())
     logger.info("Synced Radarr: %s", movie.get("title"))
     return movie_id
+
+
+def sync_single_item(manager: str, item_id: int) -> int | None:
+    """Universal single-item sync dispatcher — same call regardless of manager."""
+    if manager == "sonarr":
+        return sync_single_show(item_id)
+    if manager == "radarr":
+        return sync_single_movie(item_id)
+    logger.warning("sync_single_item: unknown manager %r", manager)
+    return None
 
 
 def sync_radarr_library() -> int:

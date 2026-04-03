@@ -163,11 +163,8 @@ def _resolve_download_url(
     aw_link: str = "",
     base_url: str | None = None,
 ) -> str:
-    fallback = _build_download_url(guid, title, aw_link=aw_link, base_url=base_url)
-    if aw_link:
-        return fallback
     if not download_url:
-        return fallback
+        return _build_download_url(guid, title, aw_link=aw_link, base_url=base_url)
     if not base_url:
         return download_url
     try:

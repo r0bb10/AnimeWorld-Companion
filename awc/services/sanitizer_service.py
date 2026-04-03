@@ -15,6 +15,14 @@ from ..core.log_events import display_aw_link, format_movie_automap_lines, forma
 from ..core.logging import get_logger
 from ..integrations.animeworld_client import AnimeWorldClient
 from ..repositories.db import get_db
+from ..repositories.mappings import (
+    clear_movie_sanitizer_retry,
+    clear_show_sanitizer_retry,
+    list_movie_sanitizer_retries,
+    list_show_sanitizer_retries,
+    queue_movie_sanitizer_retry,
+    queue_show_sanitizer_retry,
+)
 from ..repositories.movies import get_movie_detail
 from ..repositories.shows import get_show_detail
 from .automap_language import resolve_movie_language_preference, resolve_show_language_preference
@@ -108,6 +116,44 @@ def _candidate_from_slug_metadata(
     return candidate
 
 
+def _load_factors(row: dict) -> dict:
+    try:
+        return json.loads(row.get("confidence_factors") or "{}")
+    except (TypeError, ValueError):
+        return {}
+
+
+def _row_is_preaired(row: dict) -> bool:
+    factors = _load_factors(row)
+    return bool(factors.get("preaired") or factors.get("preaired_placeholder"))
+
+
+def _touch_show_mapping(row_id: int, now: str) -> None:
+    with get_db(write=True) as conn:
+        conn.execute(
+            """
+            UPDATE aw_show_mappings
+            SET link_check_failures = 0,
+                last_verified = ?
+            WHERE id = ?
+            """,
+            (now, row_id),
+        )
+
+
+def _touch_movie_mapping(row_id: int, now: str) -> None:
+    with get_db(write=True) as conn:
+        conn.execute(
+            """
+            UPDATE aw_movie_mappings
+            SET link_check_failures = 0,
+                last_verified = ?
+            WHERE id = ?
+            """,
+            (now, row_id),
+        )
+
+
 def _refresh_show_mapping_metadata(show: dict, season: dict, row: dict, slug_metadata: dict, now: str) -> bool:
     candidate = _candidate_from_slug_metadata(
         metadata=slug_metadata,
@@ -119,6 +165,8 @@ def _refresh_show_mapping_metadata(show: dict, season: dict, row: dict, slug_met
     season_payload = {**season, "has_aired": _has_aired(season)}
     want_dubbed = resolve_show_language_preference(show)
     score, factors = calculate_show_confidence(show, season_payload, candidate, want_dubbed=want_dubbed)
+    if bool(factors.get("preaired_placeholder")):
+        factors["preaired"] = True
 
     with get_db(write=True) as conn:
         conn.execute(
@@ -149,8 +197,8 @@ def _refresh_show_mapping_metadata(show: dict, season: dict, row: dict, slug_met
                 row["id"],
             ),
         )
-    was_pre = bool(json.loads(row.get("confidence_factors") or "{}").get("preaired"))
-    is_pre = bool(factors.get("preaired_placeholder"))
+    was_pre = _row_is_preaired(row)
+    is_pre = bool(factors.get("preaired") or factors.get("preaired_placeholder"))
     changed = candidate["aw_link"] != row["aw_link"] or was_pre != is_pre
     if changed:
         lines = format_show_automap_lines(show, [int(row["season_number"])])
@@ -290,31 +338,47 @@ def sanitize_links_once() -> dict:
     with get_db() as conn:
         show_rows = [dict(row) for row in conn.execute(
             """
-            SELECT id, show_id, season_number, aw_link, aw_title, aw_status, aw_category, confidence_factors, link_check_failures
-            FROM aw_show_mappings
-            ORDER BY id
+            SELECT asm.id, asm.show_id, asm.season_number, asm.aw_link, asm.aw_title, asm.aw_status, asm.aw_category, asm.confidence_factors, asm.link_check_failures
+            FROM aw_show_mappings asm
+            JOIN show_seasons ss
+              ON ss.show_id = asm.show_id
+             AND ss.season_number = asm.season_number
+            WHERE COALESCE(ss.ignored, 0) = 0
+              AND COALESCE(asm.mapping_type, 'auto') = 'auto'
+            ORDER BY asm.id
             """
         ).fetchall()]
         movie_rows = [dict(row) for row in conn.execute(
             """
-            SELECT id, movie_id, aw_link, aw_title, aw_status, aw_category, confidence_factors, link_check_failures
-            FROM aw_movie_mappings
-            ORDER BY id
+            SELECT amm.id, amm.movie_id, amm.aw_link, amm.aw_title, amm.aw_status, amm.aw_category, amm.confidence_factors, amm.link_check_failures
+            FROM aw_movie_mappings amm
+            JOIN movies m ON m.id = amm.movie_id
+            WHERE COALESCE(m.ignored, 0) = 0
+              AND COALESCE(amm.mapping_type, 'auto') = 'auto'
+            ORDER BY amm.id
             """
         ).fetchall()]
         for row in conn.execute(
             """
-            SELECT DISTINCT show_id, season_number
-            FROM aw_show_mappings
-            WHERE mapping_type = 'auto'
-            ORDER BY show_id, season_number
+            SELECT DISTINCT asm.show_id, asm.season_number
+            FROM aw_show_mappings asm
+            JOIN show_seasons ss
+              ON ss.show_id = asm.show_id
+             AND ss.season_number = asm.season_number
+            WHERE COALESCE(asm.mapping_type, 'auto') = 'auto'
+              AND COALESCE(ss.ignored, 0) = 0
+            ORDER BY asm.show_id, asm.season_number
             """
         ).fetchall():
             show_seasons_to_refresh.add((int(row["show_id"]), int(row["season_number"])))
 
+    pending_show_retries = list_show_sanitizer_retries()
+    pending_movie_retries = list_movie_sanitizer_retries()
     show_ids = {int(row["show_id"]) for row in show_rows}
     show_ids.update(show_id for show_id, _ in show_seasons_to_refresh)
+    show_ids.update(int(row["show_id"]) for row in pending_show_retries)
     movie_ids = {int(row["movie_id"]) for row in movie_rows}
+    movie_ids.update(int(row["movie_id"]) for row in pending_movie_retries)
     show_details = {show_id: get_show_detail(show_id) for show_id in sorted(show_ids)}
     movie_details = {movie_id: get_movie_detail(movie_id) for movie_id in sorted(movie_ids)}
 
@@ -330,13 +394,23 @@ def sanitize_links_once() -> dict:
                 except Exception as exc:
                     slug_results[slug] = exc
 
-    final_slugs = sorted(
-        {
-            str(verification[0] or "").strip()
-            for verification in slug_results.values()
-            if isinstance(verification, tuple) and str(verification[0] or "").strip()
-        }
-    )
+    metadata_needed_slugs: set[str] = set()
+    for row in show_rows:
+        verification = slug_results.get(str(row.get("aw_link") or "").strip())
+        if not isinstance(verification, tuple):
+            continue
+        final_slug = str(verification[0] or "").strip()
+        if final_slug and (final_slug != str(row.get("aw_link") or "").strip() or _row_is_preaired(row)):
+            metadata_needed_slugs.add(final_slug)
+    for row in movie_rows:
+        verification = slug_results.get(str(row.get("aw_link") or "").strip())
+        if not isinstance(verification, tuple):
+            continue
+        final_slug = str(verification[0] or "").strip()
+        if final_slug and final_slug != str(row.get("aw_link") or "").strip():
+            metadata_needed_slugs.add(final_slug)
+
+    final_slugs = sorted(metadata_needed_slugs)
     slug_metadata: dict[str, dict | Exception] = {}
     if final_slugs:
         with ThreadPoolExecutor(max_workers=min(_NETWORK_WORKERS, len(final_slugs))) as executor:
@@ -357,17 +431,21 @@ def sanitize_links_once() -> dict:
             if not verification:
                 raise RuntimeError(f"Missing sanitizer verification result for {row['aw_link']}")
             new_slug, _ = verification
-            metadata = slug_metadata.get(new_slug)
-            if isinstance(metadata, Exception):
-                raise metadata
-            if not metadata:
-                raise RuntimeError(f"Missing sanitizer metadata for {new_slug}")
-            show = show_details.get(int(row["show_id"]))
-            season = _season_by_number(show or {}, int(row["season_number"]))
-            if not show or not season:
-                continue
-            if _refresh_show_mapping_metadata(show, season, row, metadata, now):
-                result["updated"] += 1
+            needs_refresh = new_slug != str(row.get("aw_link") or "").strip() or _row_is_preaired(row)
+            if needs_refresh:
+                metadata = slug_metadata.get(new_slug)
+                if isinstance(metadata, Exception):
+                    raise metadata
+                if not metadata:
+                    raise RuntimeError(f"Missing sanitizer metadata for {new_slug}")
+                show = show_details.get(int(row["show_id"]))
+                season = _season_by_number(show or {}, int(row["season_number"]))
+                if not show or not season:
+                    continue
+                if _refresh_show_mapping_metadata(show, season, row, metadata, now):
+                    result["updated"] += 1
+            else:
+                _touch_show_mapping(int(row["id"]), now)
         except Exception as exc:
             if _is_transient_aw_error(exc):
                 result["skipped"] += 1
@@ -377,6 +455,7 @@ def sanitize_links_once() -> dict:
             if failures >= 2:
                 with get_db(write=True) as conn:
                     conn.execute("DELETE FROM aw_show_mappings WHERE id = ?", (row["id"],))
+                queue_show_sanitizer_retry(int(row["show_id"]), int(row["season_number"]))
                 logger.warning("Removed dead show mapping: %s", display_aw_link(row["aw_link"]))
                 result["removed"] += 1
             else:
@@ -397,16 +476,20 @@ def sanitize_links_once() -> dict:
             if not verification:
                 raise RuntimeError(f"Missing sanitizer verification result for {row['aw_link']}")
             new_slug, _ = verification
-            metadata = slug_metadata.get(new_slug)
-            if isinstance(metadata, Exception):
-                raise metadata
-            if not metadata:
-                raise RuntimeError(f"Missing sanitizer metadata for {new_slug}")
-            movie = movie_details.get(int(row["movie_id"]))
-            if not movie:
-                continue
-            if _refresh_movie_mapping_metadata(movie, row, metadata, now):
-                result["updated"] += 1
+            needs_refresh = new_slug != str(row.get("aw_link") or "").strip()
+            if needs_refresh:
+                metadata = slug_metadata.get(new_slug)
+                if isinstance(metadata, Exception):
+                    raise metadata
+                if not metadata:
+                    raise RuntimeError(f"Missing sanitizer metadata for {new_slug}")
+                movie = movie_details.get(int(row["movie_id"]))
+                if not movie:
+                    continue
+                if _refresh_movie_mapping_metadata(movie, row, metadata, now):
+                    result["updated"] += 1
+            else:
+                _touch_movie_mapping(int(row["id"]), now)
         except Exception as exc:
             if _is_transient_aw_error(exc):
                 result["skipped"] += 1
@@ -416,6 +499,7 @@ def sanitize_links_once() -> dict:
             if failures >= 2:
                 with get_db(write=True) as conn:
                     conn.execute("DELETE FROM aw_movie_mappings WHERE id = ?", (row["id"],))
+                queue_movie_sanitizer_retry(int(row["movie_id"]))
                 logger.warning("Removed dead movie mapping: %s", display_aw_link(row["aw_link"]))
                 result["removed"] += 1
             else:
@@ -427,8 +511,50 @@ def sanitize_links_once() -> dict:
                 logger.warning("Movie mapping verification failed: %s (%s/2)", display_aw_link(row["aw_link"]), failures)
                 result["failed"] += 1
 
+    from .automap_service import automap_movie, automap_show
+
+    for retry in list_show_sanitizer_retries():
+        show_id = int(retry["show_id"])
+        season_number = int(retry["season_number"])
+        show = get_show_detail(show_id)
+        if not show:
+            clear_show_sanitizer_retry(show_id, season_number)
+            continue
+        season = _season_by_number(show, season_number)
+        if not season:
+            clear_show_sanitizer_retry(show_id, season_number)
+            continue
+        if bool(season.get("ignored")):
+            clear_show_sanitizer_retry(show_id, season_number)
+            continue
+        mappings = list(season.get("mappings") or [])
+        if mappings:
+            clear_show_sanitizer_retry(show_id, season_number)
+            continue
+        response = automap_show(show_id, season_number=season_number, force=False)
+        if response.get("status") in {"success", "partial"} and season_number in set(response.get("mapped_seasons") or []):
+            clear_show_sanitizer_retry(show_id, season_number)
+            result["updated"] += 1
+
+    for retry in list_movie_sanitizer_retries():
+        movie_id = int(retry["movie_id"])
+        movie = get_movie_detail(movie_id)
+        if not movie:
+            clear_movie_sanitizer_retry(movie_id)
+            continue
+        if bool(movie.get("ignored")):
+            clear_movie_sanitizer_retry(movie_id)
+            continue
+        if movie.get("mapping"):
+            clear_movie_sanitizer_retry(movie_id)
+            continue
+        response = automap_movie(movie_id, force=False)
+        if response.get("status") == "success":
+            clear_movie_sanitizer_retry(movie_id)
+            result["updated"] += 1
+
     for show_id, season_number in sorted(show_seasons_to_refresh):
-        show = show_details.get(show_id)
+        show = get_show_detail(show_id)
         if not show:
             continue
         season = _season_by_number(show, season_number)

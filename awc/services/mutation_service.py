@@ -1,6 +1,8 @@
 """Manual mutation workflows for the clean rebuild."""
 
 from ..repositories.mappings import (
+    clear_movie_sanitizer_retry,
+    clear_show_sanitizer_retry,
     remove_movie_mapping,
     remove_show_mapping,
     replace_movie_mapping,
@@ -92,6 +94,8 @@ def unmap_movie(movie_id: int) -> dict:
 
 def ignore_movie(movie_id: int, ignored: bool = True) -> dict:
     updated = set_movie_ignored(movie_id, ignored)
+    if updated and ignored:
+        clear_movie_sanitizer_retry(movie_id)
     return {
         "updated": updated,
         "movie_id": movie_id,
@@ -101,6 +105,8 @@ def ignore_movie(movie_id: int, ignored: bool = True) -> dict:
 
 def ignore_show_season(show_id: int, season_number: int, ignored: bool = True) -> dict:
     updated = set_season_ignored(show_id, season_number, ignored)
+    if updated and ignored:
+        clear_show_sanitizer_retry(show_id, season_number)
     return {
         "updated": updated,
         "show_id": show_id,

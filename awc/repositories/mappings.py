@@ -143,6 +143,10 @@ def replace_show_mapping(
             (show_id, season_number),
         )
         conn.execute(
+            "DELETE FROM sanitizer_show_retries WHERE show_id = ? AND season_number = ?",
+            (show_id, season_number),
+        )
+        conn.execute(
             """
             INSERT INTO aw_show_mappings (
                 show_id,
@@ -204,6 +208,7 @@ def replace_movie_mapping(
     now = datetime.now(UTC).isoformat()
     with get_db(write=True) as conn:
         conn.execute("DELETE FROM aw_movie_mappings WHERE movie_id = ?", (movie_id,))
+        conn.execute("DELETE FROM sanitizer_movie_retries WHERE movie_id = ?", (movie_id,))
         conn.execute(
             """
             INSERT INTO aw_movie_mappings (
@@ -266,6 +271,10 @@ def replace_show_mappings_auto(
             "DELETE FROM aw_show_mappings WHERE show_id = ? AND season_number = ?",
             (show_id, season_number),
         )
+        conn.execute(
+            "DELETE FROM sanitizer_show_retries WHERE show_id = ? AND season_number = ?",
+            (show_id, season_number),
+        )
         for item in items:
             conn.execute(
                 """
@@ -324,6 +333,7 @@ def replace_movie_mapping_auto(
     now = datetime.now(UTC).isoformat()
     with get_db(write=True) as conn:
         conn.execute("DELETE FROM aw_movie_mappings WHERE movie_id = ?", (movie_id,))
+        conn.execute("DELETE FROM sanitizer_movie_retries WHERE movie_id = ?", (movie_id,))
         conn.execute(
             """
             INSERT INTO aw_movie_mappings (
@@ -366,3 +376,68 @@ def replace_movie_mapping_auto(
             (movie_id,),
         ).fetchone()
     return dict(row) if row else None
+
+
+def queue_show_sanitizer_retry(show_id: int, season_number: int) -> None:
+    now = datetime.now(UTC).isoformat()
+    with get_db(write=True) as conn:
+        conn.execute(
+            """
+            INSERT INTO sanitizer_show_retries (show_id, season_number, created_at, updated_at)
+            VALUES (?, ?, ?, ?)
+            ON CONFLICT(show_id, season_number) DO UPDATE SET
+                updated_at = excluded.updated_at
+            """,
+            (show_id, season_number, now, now),
+        )
+
+
+def clear_show_sanitizer_retry(show_id: int, season_number: int) -> None:
+    with get_db(write=True) as conn:
+        conn.execute(
+            "DELETE FROM sanitizer_show_retries WHERE show_id = ? AND season_number = ?",
+            (show_id, season_number),
+        )
+
+
+def list_show_sanitizer_retries() -> list[dict]:
+    with get_db() as conn:
+        rows = conn.execute(
+            """
+            SELECT show_id, season_number, created_at, updated_at
+            FROM sanitizer_show_retries
+            ORDER BY updated_at, show_id, season_number
+            """
+        ).fetchall()
+    return [dict(row) for row in rows]
+
+
+def queue_movie_sanitizer_retry(movie_id: int) -> None:
+    now = datetime.now(UTC).isoformat()
+    with get_db(write=True) as conn:
+        conn.execute(
+            """
+            INSERT INTO sanitizer_movie_retries (movie_id, created_at, updated_at)
+            VALUES (?, ?, ?)
+            ON CONFLICT(movie_id) DO UPDATE SET
+                updated_at = excluded.updated_at
+            """,
+            (movie_id, now, now),
+        )
+
+
+def clear_movie_sanitizer_retry(movie_id: int) -> None:
+    with get_db(write=True) as conn:
+        conn.execute("DELETE FROM sanitizer_movie_retries WHERE movie_id = ?", (movie_id,))
+
+
+def list_movie_sanitizer_retries() -> list[dict]:
+    with get_db() as conn:
+        rows = conn.execute(
+            """
+            SELECT movie_id, created_at, updated_at
+            FROM sanitizer_movie_retries
+            ORDER BY updated_at, movie_id
+            """
+        ).fetchall()
+    return [dict(row) for row in rows]

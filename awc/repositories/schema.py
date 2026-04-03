@@ -82,6 +82,16 @@ CREATE INDEX IF NOT EXISTS idx_aw_map_show        ON aw_show_mappings(show_id);
 CREATE INDEX IF NOT EXISTS idx_aw_map_show_season ON aw_show_mappings(show_id, season_number);
 CREATE INDEX IF NOT EXISTS idx_aw_map_link        ON aw_show_mappings(aw_link);
 
+CREATE TABLE IF NOT EXISTS sanitizer_show_retries (
+    show_id        INTEGER NOT NULL REFERENCES shows(id) ON DELETE CASCADE,
+    season_number  INTEGER NOT NULL,
+    created_at     TEXT DEFAULT (datetime('now')),
+    updated_at     TEXT DEFAULT (datetime('now')),
+    PRIMARY KEY(show_id, season_number)
+);
+
+CREATE INDEX IF NOT EXISTS idx_sanitizer_show_retries_show ON sanitizer_show_retries(show_id);
+
 CREATE TABLE IF NOT EXISTS sync_metadata (
     key        TEXT PRIMARY KEY,
     value      TEXT,
@@ -190,6 +200,12 @@ CREATE TABLE IF NOT EXISTS aw_movie_mappings (
 
 CREATE INDEX IF NOT EXISTS idx_aw_movie_map_movie ON aw_movie_mappings(movie_id);
 CREATE INDEX IF NOT EXISTS idx_aw_movie_map_link  ON aw_movie_mappings(aw_link);
+
+CREATE TABLE IF NOT EXISTS sanitizer_movie_retries (
+    movie_id    INTEGER PRIMARY KEY REFERENCES movies(id) ON DELETE CASCADE,
+    created_at  TEXT DEFAULT (datetime('now')),
+    updated_at  TEXT DEFAULT (datetime('now'))
+);
 
 CREATE TABLE IF NOT EXISTS downloads (
     id               TEXT PRIMARY KEY,

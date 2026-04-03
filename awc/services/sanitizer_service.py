@@ -253,42 +253,21 @@ def sanitize_links_once() -> dict:
         _set_state(last_result=result, last_error=message, last_finished_at=now, running=False)
         return result
 
-    with get_db(write=True) as conn:
-        show_rows = conn.execute(
+    with get_db() as conn:
+        show_rows = [dict(row) for row in conn.execute(
             """
             SELECT id, show_id, season_number, aw_link, aw_title, aw_status, aw_category, confidence_factors, link_check_failures
             FROM aw_show_mappings
             ORDER BY id
             """
-        ).fetchall()
-        for row in show_rows:
-            result["checked"] += 1
-            try:
-                new_slug, _ = _verify_slug(client, row["aw_link"])
-                if _refresh_show_mapping_metadata(client, dict(row), new_slug, now):
-                    result["updated"] += 1
-            except Exception as exc:
-                if _is_transient_aw_error(exc):
-                    result["skipped"] += 1
-                    logger.warning("Show mapping verification skipped: %s (transient AnimeWorld error)", display_aw_link(row["aw_link"]))
-                    continue
-                failures = int(row["link_check_failures"] or 0) + 1
-                if failures >= 2:
-                    conn.execute("DELETE FROM aw_show_mappings WHERE id = ?", (row["id"],))
-                    logger.warning("Removed dead show mapping: %s", display_aw_link(row["aw_link"]))
-                    result["removed"] += 1
-                else:
-                    conn.execute(
-                        """
-                        UPDATE aw_show_mappings
-                        SET link_check_failures = ?, updated_at = ?
-                        WHERE id = ?
-                        """,
-                        (failures, now, row["id"]),
-                    )
-                    logger.warning("Show mapping verification failed: %s (%s/2)", display_aw_link(row["aw_link"]), failures)
-                    result["failed"] += 1
-
+        ).fetchall()]
+        movie_rows = [dict(row) for row in conn.execute(
+            """
+            SELECT id, movie_id, aw_link, aw_title, aw_status, aw_category, confidence_factors, link_check_failures
+            FROM aw_movie_mappings
+            ORDER BY id
+            """
+        ).fetchall()]
         for row in conn.execute(
             """
             SELECT DISTINCT show_id, season_number
@@ -299,40 +278,57 @@ def sanitize_links_once() -> dict:
         ).fetchall():
             show_seasons_to_refresh.add((int(row["show_id"]), int(row["season_number"])))
 
-        movie_rows = conn.execute(
-            """
-            SELECT id, movie_id, aw_link, aw_title, aw_status, aw_category, confidence_factors, link_check_failures
-            FROM aw_movie_mappings
-            ORDER BY id
-            """
-        ).fetchall()
-        for row in movie_rows:
-            result["checked"] += 1
-            try:
-                new_slug, _ = _verify_slug(client, row["aw_link"])
-                if _refresh_movie_mapping_metadata(client, dict(row), new_slug, now):
-                    result["updated"] += 1
-            except Exception as exc:
-                if _is_transient_aw_error(exc):
-                    result["skipped"] += 1
-                    logger.warning("Movie mapping verification skipped: %s (transient AnimeWorld error)", display_aw_link(row["aw_link"]))
-                    continue
-                failures = int(row["link_check_failures"] or 0) + 1
-                if failures >= 2:
-                    conn.execute("DELETE FROM aw_movie_mappings WHERE id = ?", (row["id"],))
-                    logger.warning("Removed dead movie mapping: %s", display_aw_link(row["aw_link"]))
-                    result["removed"] += 1
-                else:
+    for row in show_rows:
+        result["checked"] += 1
+        try:
+            new_slug, _ = _verify_slug(client, row["aw_link"])
+            if _refresh_show_mapping_metadata(client, row, new_slug, now):
+                result["updated"] += 1
+        except Exception as exc:
+            if _is_transient_aw_error(exc):
+                result["skipped"] += 1
+                logger.warning("Show mapping verification skipped: %s (transient AnimeWorld error)", display_aw_link(row["aw_link"]))
+                continue
+            failures = int(row["link_check_failures"] or 0) + 1
+            if failures >= 2:
+                with get_db(write=True) as conn:
+                    conn.execute("DELETE FROM aw_show_mappings WHERE id = ?", (row["id"],))
+                logger.warning("Removed dead show mapping: %s", display_aw_link(row["aw_link"]))
+                result["removed"] += 1
+            else:
+                with get_db(write=True) as conn:
                     conn.execute(
-                        """
-                        UPDATE aw_movie_mappings
-                        SET link_check_failures = ?, updated_at = ?
-                        WHERE id = ?
-                        """,
+                        "UPDATE aw_show_mappings SET link_check_failures = ?, updated_at = ? WHERE id = ?",
                         (failures, now, row["id"]),
                     )
-                    logger.warning("Movie mapping verification failed: %s (%s/2)", display_aw_link(row["aw_link"]), failures)
-                    result["failed"] += 1
+                logger.warning("Show mapping verification failed: %s (%s/2)", display_aw_link(row["aw_link"]), failures)
+                result["failed"] += 1
+
+    for row in movie_rows:
+        result["checked"] += 1
+        try:
+            new_slug, _ = _verify_slug(client, row["aw_link"])
+            if _refresh_movie_mapping_metadata(client, row, new_slug, now):
+                result["updated"] += 1
+        except Exception as exc:
+            if _is_transient_aw_error(exc):
+                result["skipped"] += 1
+                logger.warning("Movie mapping verification skipped: %s (transient AnimeWorld error)", display_aw_link(row["aw_link"]))
+                continue
+            failures = int(row["link_check_failures"] or 0) + 1
+            if failures >= 2:
+                with get_db(write=True) as conn:
+                    conn.execute("DELETE FROM aw_movie_mappings WHERE id = ?", (row["id"],))
+                logger.warning("Removed dead movie mapping: %s", display_aw_link(row["aw_link"]))
+                result["removed"] += 1
+            else:
+                with get_db(write=True) as conn:
+                    conn.execute(
+                        "UPDATE aw_movie_mappings SET link_check_failures = ?, updated_at = ? WHERE id = ?",
+                        (failures, now, row["id"]),
+                    )
+                logger.warning("Movie mapping verification failed: %s (%s/2)", display_aw_link(row["aw_link"]), failures)
+                result["failed"] += 1
 
     for show_id, season_number in sorted(show_seasons_to_refresh):
         show = get_show_detail(show_id)

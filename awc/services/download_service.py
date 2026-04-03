@@ -313,17 +313,16 @@ def create_fake_torrent(
             year=year,
         )
     )
-    resolved_source = _decode_source_token(source) or build_download_url(
-        manager=manager,
-        title=title,
-        season=season,
-        episode=episode,
-        year=year,
-        manager_id=manager_id,
-        aw_link=aw_link,
-        filename=release_name,
-        base_url=base_url,
-    )
+    resolved_source = _decode_source_token(source)
+    if not resolved_source:
+        # source was empty — no CDN URL available yet; the download worker will
+        # have nothing real to fetch. Log and treat as a deferred/legacy request.
+        logger.warning(
+            "create_fake_torrent: no source URL for %r (manager=%s) — download will not start",
+            release_name,
+            manager,
+        )
+        return None, b"", release_name + ".torrent"
     existing = next(
         (
             item

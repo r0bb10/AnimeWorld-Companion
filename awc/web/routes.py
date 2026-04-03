@@ -407,6 +407,8 @@ def download_handoff(
         filename=save_name or None,
         base_url=str(request.base_url).rstrip("/"),
     )
+    if download is None:
+        raise HTTPException(status_code=422, detail="No source URL available for this download")
     headers = {
         "Content-Disposition": f'attachment; filename="{torrent_name}"',
         "X-AWC-Download-Id": str(download.get("id", "")),

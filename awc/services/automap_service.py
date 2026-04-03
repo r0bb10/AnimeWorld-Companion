@@ -133,7 +133,7 @@ def _segment_marker_bonus(parts: list[dict], markers: list[dict]) -> tuple[float
                 marker_dt = datetime.fromisoformat(marker_start.replace("Z", "+00:00"))
                 if abs((release.date() - marker_dt.date()).days) <= 14:
                     date_hits += 1
-            except ValueError:
+            except (ValueError, AttributeError):
                 pass
     bonus = min(exact_count_hits * 0.02 + date_hits * 0.02, 0.10)
     return bonus, {
@@ -176,7 +176,7 @@ def _detect_segment_chain(show: dict, season: dict, season_scores: list[dict], w
                 last_aired_dt = datetime.fromisoformat(str(season_end).replace("Z", "+00:00"))
                 if release.date() > last_aired_dt.date() and (release.date() - last_aired_dt.date()).days > 30:
                     return False
-            except ValueError:
+            except (ValueError, AttributeError):
                 pass
         marker_start = str(marker.get("air_date_start") or "")
         if release and marker_start:
@@ -184,7 +184,7 @@ def _detect_segment_chain(show: dict, season: dict, season_scores: list[dict], w
                 marker_dt = datetime.fromisoformat(marker_start.replace("Z", "+00:00"))
                 if abs((release.date() - marker_dt.date()).days) > 45:
                     return False
-            except ValueError:
+            except (ValueError, AttributeError):
                 pass
         return True
 

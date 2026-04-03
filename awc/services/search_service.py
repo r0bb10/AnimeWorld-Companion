@@ -1,6 +1,7 @@
 """Mapping-aware AnimeWorld search orchestration."""
 
 import logging
+import time
 from urllib.parse import quote
 
 from ..core.config import settings
@@ -15,6 +16,37 @@ from .naming_service import build_release_name
 from .query_service import parse_query
 
 logger = get_logger("search")
+
+_CACHE_TTL = 300  # 5 minutes
+
+# Per-slug episode list cache
+_EPISODE_CACHE: dict[str, tuple[list, float]] = {}
+# Per-episode-id file info cache
+_FILE_INFO_CACHE: dict[str, tuple[list, float]] = {}
+# Full search response cache keyed by (show_id, season, episode)
+_RESPONSE_CACHE: dict[tuple, tuple[list, float]] = {}
+
+
+def _get_episodes_cached(client: AnimeWorldClient, slug: str) -> list:
+    now = time.monotonic()
+    entry = _EPISODE_CACHE.get(slug)
+    if entry and now - entry[1] < _CACHE_TTL:
+        logger.debug("Episode cache HIT: %s", slug)
+        return entry[0]
+    episodes = client.get_episodes(slug)
+    _EPISODE_CACHE[slug] = (episodes, now)
+    return episodes
+
+
+def _get_file_info_cached(client: AnimeWorldClient, episode_id: str) -> list:
+    now = time.monotonic()
+    entry = _FILE_INFO_CACHE.get(episode_id)
+    if entry and now - entry[1] < _CACHE_TTL:
+        logger.debug("File info cache HIT: %s", episode_id)
+        return entry[0]
+    file_infos = client.get_file_info(episode_id)
+    _FILE_INFO_CACHE[episode_id] = (file_infos, now)
+    return file_infos
 
 
 def _match_episode(episodes: list[dict], episode_number: int) -> dict | None:
@@ -39,7 +71,7 @@ def _series_items(show: dict, season_number: int, episode_number: int) -> list[d
     client = AnimeWorldClient()
     results: list[dict] = []
     for mapping in mappings:
-        episodes = client.get_episodes(mapping["aw_link"])
+        episodes = _get_episodes_cached(client, mapping["aw_link"])
         if not episodes:
             continue
 
@@ -76,7 +108,7 @@ def _series_items(show: dict, season_number: int, episode_number: int) -> list[d
         if not matched_episode:
             continue
 
-        file_infos = client.get_file_info(matched_episode.get("episode_id", ""))
+        file_infos = _get_file_info_cached(client, matched_episode.get("episode_id", ""))
         for file_info in file_infos:
             title = build_release_name(
                 NamingContext(
@@ -146,7 +178,16 @@ def build_show_search_items(query: str, season_number: int | None, episode_numbe
     if not detail:
         logger.debug("Show search detail miss: show_id=%s query=%r", show["id"], query)
         return []
+
+    cache_key = (show["id"], season_number, episode_number)
+    now = time.monotonic()
+    cached = _RESPONSE_CACHE.get(cache_key)
+    if cached and now - cached[1] < _CACHE_TTL:
+        logger.debug("Response cache HIT: show_id=%s S%02dE%02d", show["id"], season_number, episode_number)
+        return cached[0]
+
     items = _series_items(detail, season_number, episode_number)
+    _RESPONSE_CACHE[cache_key] = (items, now)
     logger.debug(
         "Show search resolved: title=%s season=%s episode=%s items=%s",
         detail.get("title"),
@@ -177,13 +218,13 @@ def build_movie_search_items(query: str, tmdb_id: int | None = None, imdb_id: st
         return []
 
     client = AnimeWorldClient()
-    episodes = client.get_episodes(detail["mapping"]["aw_link"])
+    episodes = _get_episodes_cached(client, detail["mapping"]["aw_link"])
     if not episodes:
         logger.debug("Movie search found no episodes: title=%s aw_link=%s", detail.get("title"), detail["mapping"]["aw_link"])
         return []
 
     episode = episodes[0]
-    file_infos = client.get_file_info(episode.get("episode_id", ""))
+    file_infos = _get_file_info_cached(client, episode.get("episode_id", ""))
     results = []
     for file_info in file_infos:
         title = build_release_name(

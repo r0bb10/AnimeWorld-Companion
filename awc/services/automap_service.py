@@ -348,7 +348,6 @@ def automap_show(show_id: int, season_number: int | None = None, force: bool = F
         return {"status": "error", "message": "show_not_found", "show_id": show_id}
 
     want_dubbed = resolve_show_language_preference(show)
-    candidates = _discovery_candidates(show["title"], _show_alternate_titles(show))
     scored_candidates: list[dict] = []
     mapped_seasons: list[int] = []
     ambiguous: list[dict] = []
@@ -373,6 +372,8 @@ def automap_show(show_id: int, season_number: int | None = None, force: bool = F
     if not eligible_seasons:
         logger.info("Show automap skipped: %s already mapped", show.get("title"))
         return {"status": "already_mapped", "show_id": show_id, "mapped_seasons": [], "ambiguous": [], "candidates": []}
+
+    candidates = _discovery_candidates(show["title"], _show_alternate_titles(show))
 
     reserved_links = _existing_links_by_show(show)
 
@@ -570,10 +571,16 @@ def _run_background(target, *args, **kwargs) -> dict:
 
 def automap_all(force: bool = False) -> dict:
     with get_db() as conn:
-        show_ids = [row[0] for row in conn.execute("SELECT id FROM shows ORDER BY title COLLATE NOCASE").fetchall()]
-        movie_ids = [row[0] for row in conn.execute("SELECT id FROM movies ORDER BY title COLLATE NOCASE").fetchall()]
-    show_results = [automap_show(show_id, force=force) for show_id in show_ids]
-    movie_results = [automap_movie(movie_id, force=force) for movie_id in movie_ids]
+        shows = [("show", row[0], row[1]) for row in conn.execute("SELECT id, title FROM shows").fetchall()]
+        movies = [("movie", row[0], row[1]) for row in conn.execute("SELECT id, title FROM movies").fetchall()]
+    combined = sorted(shows + movies, key=lambda item: (item[2] or "").lower())
+    show_results = []
+    movie_results = []
+    for kind, item_id, _ in combined:
+        if kind == "show":
+            show_results.append(automap_show(item_id, force=force))
+        else:
+            movie_results.append(automap_movie(item_id, force=force))
     return {"shows": show_results, "movies": movie_results}
 
 

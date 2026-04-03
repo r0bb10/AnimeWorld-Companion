@@ -247,52 +247,12 @@ def api_map_show_season(
 
 
 @api_router.post(
-    "/map",
-    include_in_schema=False,
-)
-def api_map_show_season_legacy(
-    show_id: int,
-    season_number: int,
-    aw_link: str,
-    aw_title: str = "",
-    part: int = 1,
-    aw_episode_count: int = 0,
-    aw_total_episodes: int = 0,
-    aw_status: str = "",
-    aw_category: str = "",
-    linked_with_season: int | None = None,
-    _: str = Depends(require_api_key),
-) -> dict:
-    return _map_show_season_impl(
-        show_id=show_id,
-        season_number=season_number,
-        aw_link=aw_link,
-        aw_title=aw_title,
-        part=part,
-        aw_episode_count=aw_episode_count,
-        aw_total_episodes=aw_total_episodes,
-        aw_status=aw_status,
-        aw_category=aw_category,
-        linked_with_season=linked_with_season,
-    )
-
-
-@api_router.post(
     "/api/shows/{show_id}/seasons/{season_number}/unmap",
     tags=["Mutation"],
     summary="Unmap show season",
     description="Remove all mappings for a specific Sonarr show season.",
 )
 def api_unmap_show_season(
-    show_id: int,
-    season_number: int,
-    _: str = Depends(require_api_key),
-) -> dict:
-    return _unmap_show_season_impl(show_id=show_id, season_number=season_number)
-
-
-@api_router.post("/unmap", include_in_schema=False)
-def api_unmap_show_season_legacy(
     show_id: int,
     season_number: int,
     _: str = Depends(require_api_key),
@@ -314,15 +274,6 @@ def api_ignore_show_season(
     return _ignore_show_season_impl(show_id=show_id, season_number=season_number, ignored=True)
 
 
-@api_router.post("/ignore-season", include_in_schema=False)
-def api_ignore_show_season_legacy(
-    show_id: int,
-    season_number: int,
-    _: str = Depends(require_api_key),
-) -> dict:
-    return _ignore_show_season_impl(show_id=show_id, season_number=season_number, ignored=True)
-
-
 @api_router.post(
     "/api/shows/{show_id}/seasons/{season_number}/unignore",
     tags=["Mutation"],
@@ -330,15 +281,6 @@ def api_ignore_show_season_legacy(
     description="Restore a previously ignored show season to normal mapping workflows.",
 )
 def api_unignore_show_season(
-    show_id: int,
-    season_number: int,
-    _: str = Depends(require_api_key),
-) -> dict:
-    return _ignore_show_season_impl(show_id=show_id, season_number=season_number, ignored=False)
-
-
-@api_router.post("/unignore-season", include_in_schema=False)
-def api_unignore_show_season_legacy(
     show_id: int,
     season_number: int,
     _: str = Depends(require_api_key),
@@ -359,14 +301,6 @@ def api_ignore_movie(
     return _ignore_movie_impl(movie_id=movie_id, ignored=True)
 
 
-@api_router.post("/ignore-movie", include_in_schema=False)
-def api_ignore_movie_legacy(
-    movie_id: int,
-    _: str = Depends(require_api_key),
-) -> dict:
-    return _ignore_movie_impl(movie_id=movie_id, ignored=True)
-
-
 @api_router.post(
     "/api/movies/{movie_id}/unignore",
     tags=["Mutation"],
@@ -380,15 +314,7 @@ def api_unignore_movie(
     return _ignore_movie_impl(movie_id=movie_id, ignored=False)
 
 
-@api_router.post("/unignore-movie", include_in_schema=False)
-def api_unignore_movie_legacy(
-    movie_id: int,
-    _: str = Depends(require_api_key),
-) -> dict:
-    return _ignore_movie_impl(movie_id=movie_id, ignored=False)
-
-
-@api_router.post("/delete-show", tags=["Mutation"], summary="Delete show", description="Remove a synced show and all related local AWC state.")
+@api_router.delete("/api/shows/{show_id}", tags=["Mutation"], summary="Delete show", description="Remove a synced show and all related local AWC state.")
 def api_delete_show(show_id: int, _: str = Depends(require_api_key)) -> dict:
     show = build_show_snapshot(show_id)
     result = remove_show(show_id)
@@ -403,7 +329,7 @@ def api_delete_show(show_id: int, _: str = Depends(require_api_key)) -> dict:
     return result
 
 
-@api_router.post("/delete-movie", tags=["Mutation"], summary="Delete movie", description="Remove a synced movie and all related local AWC state.")
+@api_router.delete("/api/movies/{movie_id}", tags=["Mutation"], summary="Delete movie", description="Remove a synced movie and all related local AWC state.")
 def api_delete_movie(movie_id: int, _: str = Depends(require_api_key)) -> dict:
     movie = build_movie_snapshot(movie_id)
     result = remove_movie(movie_id)
@@ -419,7 +345,7 @@ def api_delete_movie(movie_id: int, _: str = Depends(require_api_key)) -> dict:
 
 
 @api_router.post(
-    "/automap",
+    "/api/automap",
     tags=["Automap"],
     summary="Run automap",
     description="Run automap for the whole library, one show, one movie, or one show season depending on `kind`, `item_id`, and `season_number`.",
@@ -466,24 +392,6 @@ def api_map_movie(
     )
 
 
-@api_router.post("/map/movie/{movie_id}", include_in_schema=False)
-def api_map_movie_legacy(
-    movie_id: int,
-    aw_link: str,
-    aw_title: str = "",
-    aw_status: str = "",
-    aw_category: str = "",
-    _: str = Depends(require_api_key),
-) -> dict:
-    return _map_movie_impl(
-        movie_id=movie_id,
-        aw_link=aw_link,
-        aw_title=aw_title,
-        aw_status=aw_status,
-        aw_category=aw_category,
-    )
-
-
 @api_router.post(
     "/api/movies/{movie_id}/unmap",
     tags=["Mutation"],
@@ -491,11 +399,6 @@ def api_map_movie_legacy(
     description="Remove the current AnimeWorld mapping for a Radarr movie.",
 )
 def api_unmap_movie(movie_id: int, _: str = Depends(require_api_key)) -> dict:
-    return _unmap_movie_impl(movie_id=movie_id)
-
-
-@api_router.post("/unmap/movie/{movie_id}", include_in_schema=False)
-def api_unmap_movie_legacy(movie_id: int, _: str = Depends(require_api_key)) -> dict:
     return _unmap_movie_impl(movie_id=movie_id)
 
 
@@ -712,7 +615,7 @@ def api_sanitize_links(_: str = Depends(require_api_key)) -> dict:
     return result
 
 
-@api_router.post("/restart", tags=["System"], summary="Restart container", description="Gracefully stop the app process so Docker can restart the container.")
+@api_router.post("/api/system/restart", tags=["System"], summary="Restart container", description="Gracefully stop the app process so Docker can restart the container.")
 def api_restart(_: str = Depends(require_api_key)) -> dict:
     def _graceful_exit() -> None:
         from ..services.events_service import stop_sse_streams
@@ -762,21 +665,21 @@ def manager_webhook(
     return normalized
 
 
-@api_router.post("/sync", tags=["Integration"], summary="Sync all managers", description="Run a full Sonarr + Radarr sync immediately.")
+@api_router.post("/api/sync", tags=["Integration"], summary="Sync all managers", description="Run a full Sonarr + Radarr sync immediately.")
 def manual_sync(_: str = Depends(require_api_key)) -> dict:
     result = sync_all()
     logger.info("Manual sync completed: sonarr=%s radarr=%s", result.get("sonarr", 0), result.get("radarr", 0))
     return {"status": "ok", "result": result}
 
 
-@api_router.post("/sync/sonarr", tags=["Integration"], summary="Sync Sonarr", description="Run a Sonarr-only sync immediately.")
+@api_router.post("/api/sync/sonarr", tags=["Integration"], summary="Sync Sonarr", description="Run a Sonarr-only sync immediately.")
 def manual_sync_sonarr(_: str = Depends(require_api_key)) -> dict:
     result = sync_now_sonarr()
     logger.info("Manual Sonarr sync completed: %s show(s)", result.get("processed", 0))
     return {"status": "ok", "result": result}
 
 
-@api_router.post("/sync/radarr", tags=["Integration"], summary="Sync Radarr", description="Run a Radarr-only sync immediately.")
+@api_router.post("/api/sync/radarr", tags=["Integration"], summary="Sync Radarr", description="Run a Radarr-only sync immediately.")
 def manual_sync_radarr(_: str = Depends(require_api_key)) -> dict:
     result = sync_now_radarr()
     logger.info("Manual Radarr sync completed: %s movie(s)", result.get("processed", 0))

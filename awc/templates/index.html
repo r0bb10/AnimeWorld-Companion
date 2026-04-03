@@ -437,7 +437,7 @@ async function syncManager(btn,manager){
   const label=manager==='radarr'?'Sync Radarr':'Sync Sonarr';
   btn.disabled=true;btn.textContent='Syncing...';
   try{
-    await fetch('/sync/'+manager,{method:'POST',headers:_kh()});
+    await fetch('/api/sync/'+manager,{method:'POST',headers:_kh()});
   }catch(e){
     _btnErr(btn,label);
     return;
@@ -451,7 +451,7 @@ async function automapAll(btn){
   btn.disabled=true;btn.textContent='Auto-mapping...';
   _automapLaunched=true;
   try{
-    const r=await fetch('/automap',{method:'POST',headers:_kh()});
+    const r=await fetch('/api/automap',{method:'POST',headers:_kh()});
     const d=await r.json();
     if(d.status==='already_running'){btn.textContent='Already running...';}
     // Button re-enabled by heartbeat when automap_running goes false
@@ -473,7 +473,7 @@ function _discoverEndpoint(kind,id){
 }
 
 function _automapEndpoint(kind,id){
-  const prefix = AWC_KEY ? '/automap?apikey='+encodeURIComponent(AWC_KEY) : '/automap?';
+  const prefix = AWC_KEY ? '/api/automap?apikey='+encodeURIComponent(AWC_KEY) : '/api/automap?';
   return prefix+'&kind='+encodeURIComponent(kind)+'&item_id='+encodeURIComponent(id);
 }
 
@@ -497,7 +497,7 @@ function _ignoreEndpoint(kind,id,seasonNum,ignored){
 }
 
 function _deleteEndpoint(kind,id){
-  return kind==='show' ? '/delete-show?show_id='+id : '/delete-movie?movie_id='+id;
+  return kind==='show' ? '/api/shows/'+id+_kp() : '/api/movies/'+id+_kp();
 }
 
 function _buildLinkRows(mappings){
@@ -605,7 +605,7 @@ async function deleteItem(kind,id,title,btn){
   if(!confirm('Delete '+title+'? '+(kind==='show'?'Sonarr':'Radarr')+' sync will re-add it.'))return;
   btn.disabled=true;
   try{
-    const r=await fetch(_deleteEndpoint(kind,id),{method:'POST',headers:_kh()});
+    const r=await fetch(_deleteEndpoint(kind,id),{method:'DELETE',headers:_kh()});
     if(!r.ok)throw new Error('delete failed');
     btn.closest('.card').remove();
     _refreshGlobalStats();
@@ -1046,7 +1046,7 @@ if(window.EventSource){
 async function restartCompanion(btn){
   if(!confirm('Restart AnimeWorld Companion?\nThe page will reload once it comes back up.')) return;
   btn.disabled=true;btn.textContent='Restarting...';
-  try{ await fetch('/restart'+_kp(),{method:'POST',headers:_kh()}); }catch(e){}
+  try{ await fetch('/api/system/restart'+_kp(),{method:'POST',headers:_kh()}); }catch(e){}
   // Poll until the server comes back
   const poll=setInterval(async()=>{
     try{

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import UTC, datetime
 import json
 import logging
@@ -29,6 +30,7 @@ _state = {
     "last_error": "",
     "last_result": None,
 }
+_NETWORK_WORKERS = 6
 
 
 def sanitizer_status() -> dict:
@@ -69,31 +71,51 @@ def _has_aired(season: dict) -> bool:
     return start[:10] <= datetime.now(UTC).date().isoformat()
 
 
-def _refresh_show_mapping_metadata(client: AnimeWorldClient, row: dict, new_slug: str, now: str) -> bool:
-    show = get_show_detail(int(row["show_id"]))
-    if not show:
-        return False
-    season = next((item for item in show.get("seasons", []) if int(item.get("season_number") or 0) == int(row["season_number"])), None)
-    if not season:
-        return False
+def _season_by_number(show: dict, season_number: int) -> dict | None:
+    return next(
+        (
+            item
+            for item in (show or {}).get("seasons", [])
+            if int(item.get("season_number") or 0) == int(season_number)
+        ),
+        None,
+    )
 
-    info, episodes, _, is_placeholder = client.get_info_and_episodes_meta(new_slug)
-    non_special, total, _ = client.count_non_special_episodes(episodes)
-    release_value = str(info.get("Data di Uscita") or "")
+
+def _candidate_from_slug_metadata(
+    *,
+    metadata: dict,
+    title: str,
+    status: str,
+    category: str,
+    year: int | None,
+) -> dict:
+    release_value = str(metadata.get("release_value") or "")
     release_dt = parse_italian_date(release_value) if release_value else None
     candidate = {
-        "aw_link": new_slug,
-        "aw_title": row.get("aw_title") or show.get("title") or "",
+        "aw_link": str(metadata.get("slug") or ""),
+        "aw_title": title,
         "aw_jtitle": "",
-        "aw_status": str(info.get("Stato") or row.get("aw_status") or ""),
-        "aw_category": str(info.get("Categoria") or row.get("aw_category") or ""),
-        "aw_audio": str(info.get("Audio") or ""),
-        "aw_year": release_dt.year if release_dt else show.get("year"),
+        "aw_status": str(metadata.get("status") or status or ""),
+        "aw_category": str(metadata.get("category") or category or ""),
+        "aw_audio": str(metadata.get("audio") or ""),
+        "aw_year": release_dt.year if release_dt else year,
         "aw_release_datetime": release_dt,
-        "aw_episode_count": non_special,
-        "aw_total_episodes": total,
-        "aw_is_placeholder": is_placeholder,
+        "aw_episode_count": int(metadata.get("non_special") or 0),
+        "aw_total_episodes": int(metadata.get("total") or 0),
+        "aw_is_placeholder": bool(metadata.get("is_placeholder")),
     }
+    return candidate
+
+
+def _refresh_show_mapping_metadata(show: dict, season: dict, row: dict, slug_metadata: dict, now: str) -> bool:
+    candidate = _candidate_from_slug_metadata(
+        metadata=slug_metadata,
+        title=str(row.get("aw_title") or show.get("title") or ""),
+        status=str(row.get("aw_status") or ""),
+        category=str(row.get("aw_category") or ""),
+        year=show.get("year"),
+    )
     season_payload = {**season, "has_aired": _has_aired(season)}
     want_dubbed = resolve_show_language_preference(show)
     score, factors = calculate_show_confidence(show, season_payload, candidate, want_dubbed=want_dubbed)
@@ -115,7 +137,7 @@ def _refresh_show_mapping_metadata(client: AnimeWorldClient, row: dict, new_slug
             WHERE id = ?
             """,
             (
-                new_slug,
+                candidate["aw_link"],
                 candidate["aw_status"],
                 candidate["aw_category"],
                 candidate["aw_episode_count"],
@@ -129,40 +151,27 @@ def _refresh_show_mapping_metadata(client: AnimeWorldClient, row: dict, new_slug
         )
     was_pre = bool(json.loads(row.get("confidence_factors") or "{}").get("preaired"))
     is_pre = bool(factors.get("preaired_placeholder"))
-    changed = new_slug != row["aw_link"] or was_pre != is_pre
+    changed = candidate["aw_link"] != row["aw_link"] or was_pre != is_pre
     if changed:
-        refreshed_show = get_show_detail(int(row["show_id"])) or show
-        lines = format_show_automap_lines(refreshed_show, [int(row["season_number"])])
-        if new_slug != row["aw_link"]:
-            lines.append(f"redirect={display_aw_link(row['aw_link'])} -> {display_aw_link(new_slug)}")
+        lines = format_show_automap_lines(show, [int(row["season_number"])])
+        if candidate["aw_link"] != row["aw_link"]:
+            lines.append(
+                f"redirect={display_aw_link(row['aw_link'])} -> {display_aw_link(candidate['aw_link'])}"
+            )
         if was_pre and not is_pre:
             lines.append("promoted=pre -> auto")
         log_block(logger, logging.INFO, str(show.get("title") or row.get("aw_title") or "Show"), lines)
     return changed
 
 
-def _refresh_movie_mapping_metadata(client: AnimeWorldClient, row: dict, new_slug: str, now: str) -> bool:
-    movie = get_movie_detail(int(row["movie_id"]))
-    if not movie:
-        return False
-
-    info, episodes, _, is_placeholder = client.get_info_and_episodes_meta(new_slug)
-    non_special, total, _ = client.count_non_special_episodes(episodes)
-    release_value = str(info.get("Data di Uscita") or "")
-    release_dt = parse_italian_date(release_value) if release_value else None
-    candidate = {
-        "aw_link": new_slug,
-        "aw_title": row.get("aw_title") or movie.get("title") or "",
-        "aw_jtitle": "",
-        "aw_status": str(info.get("Stato") or row.get("aw_status") or ""),
-        "aw_category": str(info.get("Categoria") or row.get("aw_category") or ""),
-        "aw_audio": str(info.get("Audio") or ""),
-        "aw_year": release_dt.year if release_dt else movie.get("year"),
-        "aw_release_datetime": release_dt,
-        "aw_episode_count": non_special,
-        "aw_total_episodes": total,
-        "aw_is_placeholder": is_placeholder,
-    }
+def _refresh_movie_mapping_metadata(movie: dict, row: dict, slug_metadata: dict, now: str) -> bool:
+    candidate = _candidate_from_slug_metadata(
+        metadata=slug_metadata,
+        title=str(row.get("aw_title") or movie.get("title") or ""),
+        status=str(row.get("aw_status") or ""),
+        category=str(row.get("aw_category") or ""),
+        year=movie.get("year"),
+    )
     want_dubbed = resolve_movie_language_preference(movie)
     score, factors = calculate_movie_confidence(movie, candidate, want_dubbed=want_dubbed)
 
@@ -181,7 +190,7 @@ def _refresh_movie_mapping_metadata(client: AnimeWorldClient, row: dict, new_slu
             WHERE id = ?
             """,
             (
-                new_slug,
+                candidate["aw_link"],
                 candidate["aw_status"],
                 candidate["aw_category"],
                 score,
@@ -191,11 +200,11 @@ def _refresh_movie_mapping_metadata(client: AnimeWorldClient, row: dict, new_slu
                 row["id"],
             ),
         )
-    changed = new_slug != row["aw_link"]
+    changed = candidate["aw_link"] != row["aw_link"]
     if changed:
         lines = format_movie_automap_lines(
             {
-                "aw_link": new_slug,
+                "aw_link": candidate["aw_link"],
                 "confidence_score": score,
             }
         )
@@ -203,9 +212,33 @@ def _refresh_movie_mapping_metadata(client: AnimeWorldClient, row: dict, new_slu
             logger,
             logging.INFO,
             str(movie.get("title") or row.get("aw_title") or "Movie"),
-            lines + [f"redirect={display_aw_link(row['aw_link'])} -> {display_aw_link(new_slug)}"] if new_slug != row["aw_link"] else lines,
+            lines
+            + [f"redirect={display_aw_link(row['aw_link'])} -> {display_aw_link(candidate['aw_link'])}"]
+            if candidate["aw_link"] != row["aw_link"]
+            else lines,
         )
     return changed
+
+
+def _fetch_slug_verification(slug: str) -> tuple[str, int]:
+    client = AnimeWorldClient()
+    return _verify_slug(client, slug)
+
+
+def _fetch_slug_metadata(slug: str) -> dict:
+    client = AnimeWorldClient()
+    info, episodes, _, is_placeholder = client.get_info_and_episodes_meta(slug)
+    non_special, total, _ = client.count_non_special_episodes(episodes)
+    return {
+        "slug": slug,
+        "status": str(info.get("Stato") or ""),
+        "category": str(info.get("Categoria") or ""),
+        "audio": str(info.get("Audio") or ""),
+        "release_value": str(info.get("Data di Uscita") or ""),
+        "non_special": non_special,
+        "total": total,
+        "is_placeholder": is_placeholder,
+    }
 
 
 def _needs_show_mapping_refresh(show: dict, season: dict) -> bool:
@@ -279,11 +312,61 @@ def sanitize_links_once() -> dict:
         ).fetchall():
             show_seasons_to_refresh.add((int(row["show_id"]), int(row["season_number"])))
 
+    show_ids = {int(row["show_id"]) for row in show_rows}
+    show_ids.update(show_id for show_id, _ in show_seasons_to_refresh)
+    movie_ids = {int(row["movie_id"]) for row in movie_rows}
+    show_details = {show_id: get_show_detail(show_id) for show_id in sorted(show_ids)}
+    movie_details = {movie_id: get_movie_detail(movie_id) for movie_id in sorted(movie_ids)}
+
+    slug_results: dict[str, tuple[str, int] | Exception] = {}
+    all_slugs = sorted({str(row.get("aw_link") or "").strip() for row in show_rows + movie_rows if str(row.get("aw_link") or "").strip()})
+    if all_slugs:
+        with ThreadPoolExecutor(max_workers=min(_NETWORK_WORKERS, len(all_slugs))) as executor:
+            future_map = {executor.submit(_fetch_slug_verification, slug): slug for slug in all_slugs}
+            for future in as_completed(future_map):
+                slug = future_map[future]
+                try:
+                    slug_results[slug] = future.result()
+                except Exception as exc:
+                    slug_results[slug] = exc
+
+    final_slugs = sorted(
+        {
+            str(verification[0] or "").strip()
+            for verification in slug_results.values()
+            if isinstance(verification, tuple) and str(verification[0] or "").strip()
+        }
+    )
+    slug_metadata: dict[str, dict | Exception] = {}
+    if final_slugs:
+        with ThreadPoolExecutor(max_workers=min(_NETWORK_WORKERS, len(final_slugs))) as executor:
+            future_map = {executor.submit(_fetch_slug_metadata, slug): slug for slug in final_slugs}
+            for future in as_completed(future_map):
+                slug = future_map[future]
+                try:
+                    slug_metadata[slug] = future.result()
+                except Exception as exc:
+                    slug_metadata[slug] = exc
+
     for row in show_rows:
         result["checked"] += 1
+        verification = slug_results.get(row["aw_link"])
         try:
-            new_slug, _ = _verify_slug(client, row["aw_link"])
-            if _refresh_show_mapping_metadata(client, row, new_slug, now):
+            if isinstance(verification, Exception):
+                raise verification
+            if not verification:
+                raise RuntimeError(f"Missing sanitizer verification result for {row['aw_link']}")
+            new_slug, _ = verification
+            metadata = slug_metadata.get(new_slug)
+            if isinstance(metadata, Exception):
+                raise metadata
+            if not metadata:
+                raise RuntimeError(f"Missing sanitizer metadata for {new_slug}")
+            show = show_details.get(int(row["show_id"]))
+            season = _season_by_number(show or {}, int(row["season_number"]))
+            if not show or not season:
+                continue
+            if _refresh_show_mapping_metadata(show, season, row, metadata, now):
                 result["updated"] += 1
         except Exception as exc:
             if _is_transient_aw_error(exc):
@@ -307,9 +390,22 @@ def sanitize_links_once() -> dict:
 
     for row in movie_rows:
         result["checked"] += 1
+        verification = slug_results.get(row["aw_link"])
         try:
-            new_slug, _ = _verify_slug(client, row["aw_link"])
-            if _refresh_movie_mapping_metadata(client, row, new_slug, now):
+            if isinstance(verification, Exception):
+                raise verification
+            if not verification:
+                raise RuntimeError(f"Missing sanitizer verification result for {row['aw_link']}")
+            new_slug, _ = verification
+            metadata = slug_metadata.get(new_slug)
+            if isinstance(metadata, Exception):
+                raise metadata
+            if not metadata:
+                raise RuntimeError(f"Missing sanitizer metadata for {new_slug}")
+            movie = movie_details.get(int(row["movie_id"]))
+            if not movie:
+                continue
+            if _refresh_movie_mapping_metadata(movie, row, metadata, now):
                 result["updated"] += 1
         except Exception as exc:
             if _is_transient_aw_error(exc):
@@ -332,10 +428,10 @@ def sanitize_links_once() -> dict:
                 result["failed"] += 1
 
     for show_id, season_number in sorted(show_seasons_to_refresh):
-        show = get_show_detail(show_id)
+        show = show_details.get(show_id)
         if not show:
             continue
-        season = next((item for item in show.get("seasons", []) if int(item.get("season_number") or 0) == season_number), None)
+        season = _season_by_number(show, season_number)
         if not season or not _needs_show_mapping_refresh(show, season):
             continue
         from .automap_service import automap_show

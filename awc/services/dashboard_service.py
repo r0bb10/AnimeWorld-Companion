@@ -1,6 +1,7 @@
 """Legacy-style dashboard rendering backed by the rebuilt core."""
 
 from datetime import UTC, date, datetime
+import json
 from pathlib import Path
 import os
 import time
@@ -69,6 +70,16 @@ def _movie_payload(movie_id: int) -> dict | None:
         **movie,
         "alternate_titles": [item.get("title", "") for item in movie.get("alternate_titles", []) if item.get("title")],
     }
+
+
+def _mapping_is_preaired(mapping: dict | None) -> bool:
+    if not mapping:
+        return False
+    try:
+        factors = json.loads(mapping.get("confidence_factors") or "{}")
+    except (TypeError, ValueError):
+        return False
+    return bool(factors.get("preaired") or factors.get("preaired_placeholder"))
 
 
 def _show_card(show: dict) -> dict:
@@ -206,6 +217,18 @@ def _movie_card(movie: dict) -> dict:
             }
         )
     status_badge = {"class": "badge-ignored", "text": "ignored"} if ignored else None
+    if not ignored and mapping:
+        confidence = mapping.get("confidence_score")
+        if _mapping_is_preaired(mapping):
+            text = "pre"
+            if mapping.get("mapping_type") == "auto" and confidence:
+                text += f" {int(confidence * 100)}%"
+            status_badge = {"class": "badge-prerelease", "text": text}
+        else:
+            text = str(mapping.get("mapping_type") or "mapped")
+            if mapping.get("mapping_type") == "auto" and confidence:
+                text += f" {int(confidence * 100)}%"
+            status_badge = {"class": f"badge-{mapping.get('mapping_type')}", "text": text}
     return {
         "kind": "movie",
         "id": int(movie["id"]),

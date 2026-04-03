@@ -9,7 +9,7 @@ from fastapi import APIRouter, Body, Depends, HTTPException, Query, Request
 from fastapi.responses import HTMLResponse, Response, StreamingResponse
 
 from ..core.config import settings
-from ..core.log_events import log_block
+from ..core.log_events import format_movie_automap_lines, format_show_automap_lines, log_block
 from ..core.logging import get_logger
 from ..services.catalog_service import (
     build_catalog_snapshot,
@@ -55,6 +55,38 @@ from .auth import require_api_key
 
 api_router = APIRouter()
 logger = get_logger("routes")
+
+
+def _webhook_log_level(status: str) -> int:
+    return logging.INFO if status in {"success", "already_mapped"} else logging.WARNING
+
+
+def _log_webhook_show_result(title: str, show_id: int, result: dict) -> None:
+    status = str(result.get("status") or "")
+    if status in {"success", "partial", "ambiguous"}:
+        show = build_show_snapshot(show_id) or {}
+        lines = format_show_automap_lines(show, result.get("mapped_seasons", []), result.get("ambiguous", []))
+    elif status == "already_mapped":
+        lines = ["already mapped"]
+    elif status == "error":
+        lines = [str(result.get("message") or "error")]
+    else:
+        lines = ["No high-confidence AnimeWorld match found"]
+    log_block(logger, _webhook_log_level(status), f"Webhook Sonarr add: {title}", lines)
+
+
+def _log_webhook_movie_result(title: str, movie_id: int, result: dict) -> None:
+    status = str(result.get("status") or "")
+    if status == "success":
+        movie = build_movie_snapshot(movie_id) or {}
+        lines = format_movie_automap_lines(movie.get("mapping"))
+    elif status == "already_mapped":
+        lines = ["already mapped"]
+    elif status == "error":
+        lines = [str(result.get("message") or "error")]
+    else:
+        lines = ["No high-confidence AnimeWorld match found"]
+    log_block(logger, _webhook_log_level(status), f"Webhook Radarr add: {title}", lines)
 
 
 @api_router.get("/", tags=["UI"], summary="Dashboard", description="Serve the main AnimeWorld Companion web UI.", include_in_schema=False)
@@ -503,33 +535,24 @@ def manager_webhook(
     if normalized["event_family"] == "add" and normalized.get("manager_entity_id"):
         manager = str(normalized.get("manager") or "")
         manager_entity_id = int(normalized["manager_entity_id"])
+        entity_title = str((normalized.get("entity") or {}).get("title") or manager_entity_id)
 
         def _run() -> None:
             try:
                 if manager == "sonarr":
-                    show_id = sync_single_show(manager_entity_id)
+                    show_id = sync_single_show(manager_entity_id, targeted=False)
                     if show_id:
-                        result = automap_show(int(show_id), force=False)
-                        logger.info(
-                            "Webhook Sonarr add sync+automap completed: manager_id=%s show_id=%s status=%s",
-                            manager_entity_id,
-                            show_id,
-                            result.get("status"),
-                        )
+                        result = automap_show(int(show_id), force=False, emit_logs=False)
+                        _log_webhook_show_result(entity_title, int(show_id), result)
                     else:
-                        logger.warning("Webhook Sonarr add sync failed: manager_id=%s", manager_entity_id)
+                        log_block(logger, logging.WARNING, f"Webhook Sonarr add: {entity_title}", ["sync failed"])
                 elif manager == "radarr":
-                    movie_id = sync_single_movie(manager_entity_id)
+                    movie_id = sync_single_movie(manager_entity_id, targeted=False)
                     if movie_id:
-                        result = automap_movie(int(movie_id), force=False)
-                        logger.info(
-                            "Webhook Radarr add sync+automap completed: manager_id=%s movie_id=%s status=%s",
-                            manager_entity_id,
-                            movie_id,
-                            result.get("status"),
-                        )
+                        result = automap_movie(int(movie_id), force=False, emit_logs=False)
+                        _log_webhook_movie_result(entity_title, int(movie_id), result)
                     else:
-                        logger.warning("Webhook Radarr add sync failed: manager_id=%s", manager_entity_id)
+                        log_block(logger, logging.WARNING, f"Webhook Radarr add: {entity_title}", ["sync failed"])
             except Exception:
                 logger.exception("Webhook add handler failed: manager=%s manager_id=%s", manager, manager_entity_id)
 

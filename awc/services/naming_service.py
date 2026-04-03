@@ -1,10 +1,37 @@
 """Naming rules split by media manager and media kind."""
 
 import re
+import time
 
 from ..integrations.radarr_client import RadarrClient
 from ..integrations.sonarr_client import SonarrClient
 from ..domain.media import MediaKind, MediaManager, NamingContext
+
+_NAMING_CACHE_TTL = 3600  # 1 hour
+_sonarr_naming_cache: dict | None = None
+_sonarr_naming_cache_at: float = 0.0
+_radarr_naming_cache: dict | None = None
+_radarr_naming_cache_at: float = 0.0
+
+
+def _sonarr_naming_config() -> dict:
+    global _sonarr_naming_cache, _sonarr_naming_cache_at
+    now = time.monotonic()
+    if _sonarr_naming_cache is not None and now - _sonarr_naming_cache_at < _NAMING_CACHE_TTL:
+        return _sonarr_naming_cache
+    _sonarr_naming_cache = SonarrClient().naming_config()
+    _sonarr_naming_cache_at = now
+    return _sonarr_naming_cache
+
+
+def _radarr_naming_config() -> dict:
+    global _radarr_naming_cache, _radarr_naming_cache_at
+    now = time.monotonic()
+    if _radarr_naming_cache is not None and now - _radarr_naming_cache_at < _NAMING_CACHE_TTL:
+        return _radarr_naming_cache
+    _radarr_naming_cache = RadarrClient().naming_config()
+    _radarr_naming_cache_at = now
+    return _radarr_naming_cache
 
 
 def _apply_colon_replacement(title: str, colon_format: int | str) -> str:
@@ -40,8 +67,7 @@ def _format_series_name(context: NamingContext) -> str:
     season = context.season_number or 1
     episode = context.episode_number or 1
 
-    sonarr = SonarrClient()
-    naming_config = sonarr.naming_config()
+    naming_config = _sonarr_naming_config()
     format_string = naming_config.get("animeEpisodeFormat", "{Series.Title}.S{season:00}E{episode:00}")
     colon_format = naming_config.get("colonReplacementFormat", 4)
 
@@ -73,8 +99,7 @@ def _format_series_name(context: NamingContext) -> str:
 
 def _format_movie_name(context: NamingContext) -> str:
     title = context.title.strip()
-    radarr = RadarrClient()
-    naming_config = radarr.naming_config()
+    naming_config = _radarr_naming_config()
     format_string = naming_config.get("standardMovieFormat", "{Movie Title}.{Release Year}.WEBDL")
     colon_format = naming_config.get("colonReplacementFormat", 4)
 

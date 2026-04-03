@@ -303,6 +303,16 @@ class AnimeWorldClient:
             }
         ]
 
+    def parse_episode_count_value(self, value: object) -> int | None:
+        text = str(value or "").strip()
+        if not text:
+            return None
+        try:
+            parsed = int(text)
+        except (TypeError, ValueError):
+            return None
+        return parsed if parsed >= 0 else None
+
     def count_non_special_episodes(self, episodes: list[dict]) -> tuple[int, int, int]:
         total = 0
         non_special = 0
@@ -315,10 +325,11 @@ class AnimeWorldClient:
                 if end >= start:
                     span = end - start + 1
                     total += span
-                    non_special += span
+                    non_special += max(0, end - max(start, 1) + 1)
                     continue
             try:
-                if float(number).is_integer():
+                parsed = float(number)
+                if parsed.is_integer() and int(parsed) >= 1:
                     total += 1
                     non_special += 1
                     continue

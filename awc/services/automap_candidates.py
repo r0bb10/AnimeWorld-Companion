@@ -52,6 +52,7 @@ def _enrich_result(client: AnimeWorldClient, item: dict) -> dict:
     target = item.get("url") or item.get("slug") or ""
     info, episodes, page_url, is_placeholder = client.get_info_and_episodes_meta(target)
     non_special, total, _ = client.count_non_special_episodes(episodes)
+    declared_episodes = client.parse_episode_count_value(info.get("Episodi") or info.get("episodes"))
     release_value = str(info.get("Data di Uscita") or info.get("release_date") or "")
     release_dt = parse_italian_date(release_value) if release_value else None
     return {
@@ -65,7 +66,7 @@ def _enrich_result(client: AnimeWorldClient, item: dict) -> dict:
         "aw_audio": str(info.get("Audio") or info.get("audio") or ""),
         "aw_year": release_dt.year if release_dt else None,
         "aw_release_datetime": release_dt,
-        "aw_episode_count": non_special,
+        "aw_episode_count": declared_episodes if declared_episodes is not None else non_special,
         "aw_total_episodes": total,
         "aw_is_placeholder": is_placeholder,
     }

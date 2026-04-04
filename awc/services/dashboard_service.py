@@ -1,7 +1,6 @@
 """Legacy-style dashboard rendering backed by the rebuilt core."""
 
 from datetime import UTC, datetime
-import json
 from pathlib import Path
 import os
 import time
@@ -9,6 +8,7 @@ import time
 from jinja2 import Environment, FileSystemLoader, select_autoescape
 
 from ..core.config import settings
+from ..domain.mapping_flags import mapping_is_preaired
 from ..domain.release_window import has_started, utc_today_iso
 from ..integrations.animeworld_client import AnimeWorldClient
 from ..repositories.db import get_db
@@ -108,16 +108,6 @@ def _movie_payload(movie_id: int) -> dict | None:
         **movie,
         "alternate_titles": [item.get("title", "") for item in movie.get("alternate_titles", []) if item.get("title")],
     }
-
-
-def _mapping_is_preaired(mapping: dict | None) -> bool:
-    if not mapping:
-        return False
-    try:
-        factors = json.loads(mapping.get("confidence_factors") or "{}")
-    except (TypeError, ValueError):
-        return False
-    return bool(factors.get("preaired") or factors.get("preaired_placeholder"))
 
 
 def _show_card(show: dict) -> dict:
@@ -261,7 +251,7 @@ def _movie_card(movie: dict) -> dict:
     status_badge = {"class": "badge-ignored", "text": "ignored"} if ignored else None
     if not ignored and mapping:
         confidence = mapping.get("confidence_score")
-        if _mapping_is_preaired(mapping):
+        if mapping_is_preaired(mapping):
             text = "pre"
             if mapping.get("mapping_type") == "auto" and confidence:
                 text += f" {int(confidence * 100)}%"

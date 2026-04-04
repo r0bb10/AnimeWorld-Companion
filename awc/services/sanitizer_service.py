@@ -20,6 +20,7 @@ from ..core.log_events import (
     log_warning,
 )
 from ..core.logging import get_logger
+from ..domain.mapping_flags import factors_are_preaired, mapping_is_preaired
 from ..domain.release_window import has_started
 from ..integrations.animeworld_client import AnimeWorldClient
 from ..repositories.db import get_db
@@ -118,16 +119,8 @@ def _candidate_from_slug_metadata(
     return candidate
 
 
-def _load_factors(row: dict) -> dict:
-    try:
-        return json.loads(row.get("confidence_factors") or "{}")
-    except (TypeError, ValueError):
-        return {}
-
-
 def _row_is_preaired(row: dict) -> bool:
-    factors = _load_factors(row)
-    return bool(factors.get("preaired") or factors.get("preaired_placeholder"))
+    return mapping_is_preaired(row)
 
 
 def _touch_show_mapping(row_id: int, now: str) -> None:
@@ -200,7 +193,7 @@ def _refresh_show_mapping_metadata(show: dict, season: dict, row: dict, slug_met
             ),
         )
     was_pre = _row_is_preaired(row)
-    is_pre = bool(factors.get("preaired") or factors.get("preaired_placeholder"))
+    is_pre = factors_are_preaired(factors)
     changed = candidate["aw_link"] != row["aw_link"] or was_pre != is_pre
     if changed:
         lines = format_show_automap_lines(show, [int(row["season_number"])])

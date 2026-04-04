@@ -1,0 +1,23 @@
+services:
+  awc:
+    image: ghcr.io/r0bb10/animeworld-companion:latest
+    container_name: awc
+    ports:
+      - "7004:7004"
+    env_file:
+      - .env
+    environment:
+      - AWC_PORT=${AWC_PORT:-7004}
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
+      - TZ=${TZ:-Europe/Rome}
+      - PUID=${PUID:-1000}
+      - PGID=${PGID:-1000}
+    volumes:
+      - ./config:/config
+      - ./data:/data
+    healthcheck:
+      test: ["CMD-SHELL", "python3 -c \"import urllib.request; urllib.request.urlopen('http://127.0.0.1:7004/health')\" || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    restart: unless-stopped

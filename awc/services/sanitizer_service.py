@@ -59,11 +59,8 @@ def _set_state(**updates) -> None:
 
 
 def _verify_slug(client: AnimeWorldClient, slug: str) -> tuple[str, int]:
-    url = client.slug_to_url(slug)
-    response = requests.get(url, timeout=15, allow_redirects=True, headers={"User-Agent": "Mozilla/5.0"})
-    response.raise_for_status()
-    final_slug = client.url_to_slug(response.url)
-    return final_slug or slug, response.status_code
+    final_slug, status_code = client.verify_slug(slug)
+    return final_slug or slug, status_code
 
 
 def _is_transient_aw_error(exc: Exception) -> bool:

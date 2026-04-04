@@ -19,6 +19,15 @@ _UA = (
 _PAGE_CACHE_TTL = 60
 _PAGE_CACHE: dict[str, tuple[BeautifulSoup, str, float]] = {}
 _PAGE_CACHE_LOCK = threading.Lock()
+_SEARCH_CACHE_TTL = 300
+_SEARCH_CACHE: dict[tuple[str, int | None], tuple[list[dict], float]] = {}
+_SEARCH_CACHE_LOCK = threading.Lock()
+_META_CACHE_TTL = 300
+_META_CACHE: dict[str, tuple[dict, list[dict], str, bool, float]] = {}
+_META_CACHE_LOCK = threading.Lock()
+_VERIFY_CACHE_TTL = 300
+_VERIFY_CACHE: dict[str, tuple[str, int, float]] = {}
+_VERIFY_CACHE_LOCK = threading.Lock()
 _SESSION_LOCK = threading.Lock()
 _SESSION: requests.Session | None = None
 _POOL_MAXSIZE = 64
@@ -110,6 +119,35 @@ class AnimeWorldClient:
         soup, _ = self._get_page_details(url)
         return soup
 
+    def _extract_episodes(self, soup: BeautifulSoup) -> list[dict]:
+        episodes = []
+        for anchor in soup.select("li.episode a[data-episode-num]"):
+            number = anchor.get("data-episode-num") or anchor.get("data-num") or ""
+            raw_number = anchor.get("data-num") or anchor.get("data-base") or number
+            episodes.append(
+                {
+                    "number": number,
+                    "number_raw": raw_number,
+                    "episode_id": anchor.get("data-episode-id") or anchor.get("data-id") or "",
+                    "href": anchor.get("href", ""),
+                }
+            )
+        return episodes
+
+    def _extract_info(self, soup: BeautifulSoup) -> dict:
+        info: dict[str, object] = {}
+        info_div = soup.find("div", class_="info")
+        if info_div:
+            for dt, dd in zip(info_div.find_all("dt"), info_div.find_all("dd")):
+                key = dt.get_text(" ", strip=True).rstrip(":")
+                links = dd.find_all("a")
+                if links:
+                    values = [anchor.get_text(" ", strip=True) for anchor in links]
+                    info[key] = values[0] if len(values) == 1 else values
+                else:
+                    info[key] = dd.get_text(" ", strip=True)
+        return info
+
     def health(self) -> AnimeWorldHealth:
         if not self.base_url:
             return AnimeWorldHealth(ok=False, url="")
@@ -190,15 +228,22 @@ class AnimeWorldClient:
         return results
 
     def search(self, query: str, limit: int | None = None) -> list[dict]:
-        if not self.base_url or not query.strip():
+        normalized_query = query.strip()
+        if not self.base_url or not normalized_query:
             return []
+        cache_key = (normalized_query.casefold(), limit)
+        now = time.monotonic()
+        with _SEARCH_CACHE_LOCK:
+            cached = _SEARCH_CACHE.get(cache_key)
+            if cached and now - cached[1] < _SEARCH_CACHE_TTL:
+                return [dict(item) for item in cached[0]]
 
         merged: list[dict] = []
         seen: set[str] = set()
 
         for search_fn in (self._search_v2, self._search_scrape):
             try:
-                results = search_fn(query, limit)
+                results = search_fn(normalized_query, limit)
             except Exception:
                 results = []
             for item in results:
@@ -209,27 +254,14 @@ class AnimeWorldClient:
                 merged.append(item)
 
         if limit is not None:
-            return merged[:limit]
-        return merged
+            merged = merged[:limit]
+        with _SEARCH_CACHE_LOCK:
+            _SEARCH_CACHE[cache_key] = ([dict(item) for item in merged], now)
+        return [dict(item) for item in merged]
 
     def get_episodes(self, slug_or_url: str) -> list[dict]:
-        target = slug_or_url if slug_or_url.startswith("http") else self.slug_to_url(slug_or_url)
-        soup, _ = self._get_page_details(target)
-        if soup is None:
-            return []
-        episodes = []
-        for anchor in soup.select("li.episode a[data-episode-num]"):
-            number = anchor.get("data-episode-num") or anchor.get("data-num") or ""
-            raw_number = anchor.get("data-num") or anchor.get("data-base") or number
-            episodes.append(
-                {
-                    "number": number,
-                    "number_raw": raw_number,
-                    "episode_id": anchor.get("data-episode-id") or anchor.get("data-id") or "",
-                    "href": anchor.get("href", ""),
-                }
-            )
-        return episodes
+        _, episodes, _, _ = self.get_info_and_episodes_meta(slug_or_url)
+        return [dict(item) for item in episodes]
 
     def get_info_and_episodes(self, slug_or_url: str) -> tuple[dict, list[dict]]:
         info, episodes, _, _ = self.get_info_and_episodes_meta(slug_or_url)
@@ -237,29 +269,41 @@ class AnimeWorldClient:
 
     def get_info_and_episodes_meta(self, slug_or_url: str) -> tuple[dict, list[dict], str, bool]:
         target = slug_or_url if slug_or_url.startswith("http") else self.slug_to_url(slug_or_url)
+        now = time.monotonic()
+        with _META_CACHE_LOCK:
+            cached = _META_CACHE.get(target)
+            if cached and now - cached[4] < _META_CACHE_TTL:
+                info, episodes, final_url, is_placeholder, _ = cached
+                return dict(info), [dict(item) for item in episodes], final_url, is_placeholder
+
         soup, final_url = self._get_page_details(target)
         if soup is None:
             return {}, [], target, False
 
-        info: dict[str, object] = {}
-        info_div = soup.find("div", class_="info")
-        if info_div:
-            for dt, dd in zip(info_div.find_all("dt"), info_div.find_all("dd")):
-                key = dt.get_text(" ", strip=True).rstrip(":")
-                links = dd.find_all("a")
-                if links:
-                    values = [anchor.get_text(" ", strip=True) for anchor in links]
-                    info[key] = values[0] if len(values) == 1 else values
-                else:
-                    info[key] = dd.get_text(" ", strip=True)
-
-        episodes = self.get_episodes(target)
+        info = self._extract_info(soup)
+        episodes = self._extract_episodes(soup)
         final_url_normalized = final_url.rstrip("/")
         is_placeholder = final_url_normalized.endswith("/tba")
         if not is_placeholder:
             body_text = soup.get_text(" ", strip=True).lower()
             is_placeholder = bool(not episodes and "tba" in final_url_normalized.lower()) or ("coming soon" in body_text and not episodes)
-        return info, episodes, final_url, is_placeholder
+        with _META_CACHE_LOCK:
+            _META_CACHE[target] = (dict(info), [dict(item) for item in episodes], final_url, is_placeholder, now)
+        return dict(info), [dict(item) for item in episodes], final_url, is_placeholder
+
+    def verify_slug(self, slug_or_url: str) -> tuple[str, int]:
+        target = slug_or_url if slug_or_url.startswith("http") else self.slug_to_url(slug_or_url)
+        now = time.monotonic()
+        with _VERIFY_CACHE_LOCK:
+            cached = _VERIFY_CACHE.get(target)
+            if cached and now - cached[2] < _VERIFY_CACHE_TTL:
+                return cached[0], cached[1]
+        response = self._session().get(target, timeout=15, allow_redirects=True)
+        response.raise_for_status()
+        final_slug = self.url_to_slug(str(response.url or target)) or self.url_to_slug(target)
+        with _VERIFY_CACHE_LOCK:
+            _VERIFY_CACHE[target] = (final_slug, int(response.status_code), now)
+        return final_slug, int(response.status_code)
 
     def get_file_info(self, episode_id: str) -> list[dict]:
         if not episode_id:

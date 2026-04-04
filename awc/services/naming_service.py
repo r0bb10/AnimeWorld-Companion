@@ -62,6 +62,12 @@ def _cleanup_filename(value: str) -> str:
     return cleaned
 
 
+def _clean_title_token(value: str) -> str:
+    cleaned = re.sub(r"[^\w]+", " ", value or "", flags=re.UNICODE)
+    cleaned = re.sub(r"\s+", " ", cleaned).strip()
+    return cleaned
+
+
 def _format_series_name(context: NamingContext) -> str:
     title = context.title.strip()
     season = context.season_number or 1
@@ -104,12 +110,14 @@ def _format_movie_name(context: NamingContext) -> str:
     colon_format = naming_config.get("colonReplacementFormat", 4)
 
     title_cleaned = _apply_colon_replacement(title, colon_format)
+    title_sanitized = _clean_title_token(title_cleaned)
     title_with_dots = title_cleaned.replace(" ", ".")
+    title_clean_with_dots = title_sanitized.replace(" ", ".")
     year = context.year or ""
     imdb_id = (context.imdb_id or "").strip()
 
     replacements = {
-        r"\{Movie\.CleanTitle\}": title_with_dots,
+        r"\{Movie\.CleanTitle\}": title_clean_with_dots,
         r"\{Movie\.Title\}": title_with_dots,
         r"\{Movie\s+Title\}": title_cleaned,
         r"\{\(Release\s+Year\)\}": str(year),

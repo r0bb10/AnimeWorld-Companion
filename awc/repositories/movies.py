@@ -115,6 +115,18 @@ def find_movie_by_title(title: str) -> dict | None:
 
         row = conn.execute(
             """
+            SELECT *
+            FROM movies
+            WHERE sort_title = ?
+            LIMIT 1
+            """,
+            (normalized,),
+        ).fetchone()
+        if row:
+            return dict(row)
+
+        row = conn.execute(
+            """
             SELECT m.*
             FROM movies m
             JOIN movie_alternate_titles mat ON mat.movie_id = m.id
@@ -131,10 +143,11 @@ def find_movie_by_title(title: str) -> dict | None:
             SELECT *
             FROM movies
             WHERE lower(title) LIKE ?
-            ORDER BY length(title) ASC
+               OR sort_title LIKE ?
+            ORDER BY CASE WHEN sort_title = ? THEN 0 ELSE 1 END, length(title) ASC
             LIMIT 1
             """,
-            (f"%{title.lower().strip()}%",),
+            (f"%{title.lower().strip()}%", f"%{normalized}%", normalized),
         ).fetchone()
         return dict(row) if row else None
 

@@ -36,15 +36,15 @@ def build_caps_xml(base_url: str | None = None) -> bytes:
 
     search = SubElement(searching, "search")
     search.set("available", "yes")
-    search.set("supportedParams", "q")
+    search.set("supportedParams", "q,imdbid,tmdbid,tvdbid")
 
     tvsearch = SubElement(searching, "tv-search")
     tvsearch.set("available", "yes")
-    tvsearch.set("supportedParams", "q,season,ep")
+    tvsearch.set("supportedParams", "q,season,ep,tvdbid")
 
     movie = SubElement(searching, "movie-search")
     movie.set("available", "yes")
-    movie.set("supportedParams", "q")
+    movie.set("supportedParams", "q,imdbid,tmdbid")
 
     categories = SubElement(root, "categories")
     anime = SubElement(categories, "category")
@@ -115,6 +115,8 @@ def _add_item(
     season: int | None = None,
     episode: int | None = None,
     year: int | None = None,
+    tmdb_id: int | None = None,
+    imdb_id: str = "",
     size: int | str = 1,
     pub_date: str | None = None,
     release_source: str = "unknown",
@@ -150,6 +152,10 @@ def _add_item(
             _add_attr(item, "episode", episode)
     elif year is not None:
         _add_attr(item, "year", year)
+        if tmdb_id:
+            _add_attr(item, "tmdbid", tmdb_id)
+        if imdb_id:
+            _add_attr(item, "imdbid", imdb_id)
 
 
 def _build_download_url(
@@ -230,6 +236,8 @@ def build_search_xml(
                 season=item.get("season_number"),
                 episode=item.get("episode_number"),
                 year=item.get("year"),
+                tmdb_id=item.get("tmdb_id"),
+                imdb_id=item.get("imdb_id", ""),
                 size=item.get("size", 0),
                 pub_date=item.get("pub_date"),
                 release_source="rss",
@@ -247,6 +255,8 @@ def build_search_xml(
                     season=season,
                     episode=episode,
                     size=item.get("size", 1),
+                    tmdb_id=item.get("tmdb_id"),
+                    imdb_id=item.get("imdb_id", ""),
                     release_source="search",
                 )
             log_debug(logger, "torznab.rss.fallback", "Torznab RSS fallback emitted dummy item", details={"media": media, "category": category})
@@ -276,6 +286,8 @@ def build_search_xml(
             season=season,
             episode=episode,
             year=item.get("year"),
+            tmdb_id=item.get("tmdb_id"),
+            imdb_id=item.get("imdb_id", ""),
             size=item.get("size", 0),
             pub_date=item.get("pubDate"),
             release_source="search",

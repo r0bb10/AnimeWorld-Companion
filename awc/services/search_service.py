@@ -268,6 +268,8 @@ def build_movie_search_items(query: str, tmdb_id: int | None = None, imdb_id: st
                 ),
                 "aw_link": detail["mapping"]["aw_link"],
                 "year": detail.get("year"),
+                "tmdb_id": detail.get("tmdb_id"),
+                "imdb_id": detail.get("imdb_id"),
             }
         )
     log_debug(

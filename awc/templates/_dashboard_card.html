@@ -1,0 +1,79 @@
+<div class="card {{ 'card-sonarr' if card.kind == 'show' else 'card-radarr' }}"
+     data-card-kind="{{ card.kind }}"
+     data-card-id="{{ card.id }}"
+     data-title="{{ card.filter_text }}"
+     data-status="{{ card.status.key }}"
+     data-type="{{ card.kind }}"
+     data-has-unaired="{{ 'true' if card.has_unaired else 'false' }}">
+  <div class="card-header" onclick="toggle(this)">
+    <div>
+      <span class="card-title">{{ card.title }}</span>
+      {% if card.alternate_titles %}
+      <div class="alt-titles">{{ card.alternate_titles[:3]|join(' / ') }}{% if card.alternate_titles|length > 3 %} +{{ card.alternate_titles|length - 3 }} more{% endif %}</div>
+      {% endif %}
+    </div>
+    <div class="card-meta">
+      {% if card.meta_label %}<span>{{ card.meta_label }}</span>{% endif %}
+      <span class="badge badge-{{ card.status.key }} card-status-badge">{{ card.status.label }}</span>
+      <span class="arrow">&#9654;</span>
+    </div>
+  </div>
+  <div class="card-body">
+    {% for row in card.rows %}
+    <div class="season-row{% if (not row.aired and not row.mapped) or row.ignored %} season-unaired{% endif %}"
+         data-kind="{{ row.item_kind }}"
+         data-itemid="{{ row.item_id }}"
+         {% if row.item_kind == 'show' %}data-showid="{{ row.item_id }}" data-season="{{ row.season_number }}"{% else %}data-movieid="{{ row.item_id }}"{% endif %}
+         data-mapped="{{ 'true' if row.mapped else 'false' }}"
+         data-ignored="{{ 'true' if row.ignored else 'false' }}"
+         data-aired="{{ 'true' if row.aired else 'false' }}">
+      <div class="season-label">{{ row.label }}</div>
+      <div class="season-status">
+        {% if row.status_badge %}
+        <span class="badge {{ row.status_badge.class }}">{{ row.status_badge.text }}</span>
+        {% else %}
+        <span style="color:#8b949e">--</span>
+        {% endif %}
+      </div>
+      <div class="season-link">
+        {% if row.links %}
+          {% for link in row.links %}
+          <div style="margin-left:8px;margin-top:4px">
+            {% if link.show_part %}
+            <span style="font-weight:600;margin-right:6px">P{{ link.part }}</span>
+            {% endif %}
+            <a href="{{ link.url }}" target="_blank">{{ link.url }}</a>
+            {% if link.episode_meta %}
+            <span style="font-size:11px;color:#8b949e;margin-left:8px">{{ link.episode_meta }}</span>
+            {% endif %}
+          </div>
+          {% endfor %}
+        {% elif not row.ignored %}
+        <form class="map-form" onsubmit="mapItem(event,'{{ row.item_kind }}',{{ row.item_id }},{{ 'null' if row.season_number is none else row.season_number }})">
+          <input type="text" name="aw_link" placeholder="{{ row.map_placeholder }}">
+          <button type="submit" class="btn btn-primary">Map</button>
+        </form>
+        {% endif %}
+      </div>
+      <div class="season-actions">
+        {% if row.mapped %}
+        <button class="btn btn-danger" onclick="unmapItem('{{ row.item_kind }}',{{ row.item_id }},{{ 'null' if row.season_number is none else row.season_number }},this)">Remove</button>
+        {% elif not row.ignored %}
+        <button class="btn" style="color:#8b949e;border-color:#30363d" onclick="setIgnored('{{ row.item_kind }}',{{ row.item_id }},{{ 'null' if row.season_number is none else row.season_number }},true,this)">Ignore</button>
+        {% else %}
+        <button class="btn" style="color:#8b949e;border-color:#30363d" onclick="setIgnored('{{ row.item_kind }}',{{ row.item_id }},{{ 'null' if row.season_number is none else row.season_number }},false,this)">Unignore</button>
+        {% endif %}
+      </div>
+    </div>
+    {% endfor %}
+
+    <div class="card-footer">
+      <div style="display:flex;gap:4px">
+        <button class="btn" style="font-size:12px" onclick="discoverItem('{{ card.kind }}',{{ card.id }},this)">Discover AW Links</button>
+        <button class="btn btn-primary" style="font-size:12px" onclick="automapItem('{{ card.kind }}',{{ card.id }},this)">{{ card.automap_label }}</button>
+      </div>
+      <button class="btn btn-danger" style="font-size:12px" onclick='deleteItem({{ card.kind|tojson }},{{ card.id }},{{ card.title|tojson }},this)'>{{ card.delete_label }}</button>
+    </div>
+    <div id="{{ card.discover_panel_id }}" class="discover-panel" style="display:none"></div>
+  </div>
+</div>

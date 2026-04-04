@@ -31,7 +31,13 @@ from ..services.automap_service import (
     automap_status,
     start_automap_all,
 )
-from ..services.dashboard_service import build_dashboard_html, build_dashboard_snapshot, build_heartbeat_snapshot
+from ..services.dashboard_service import (
+    build_dashboard_card_html,
+    build_dashboard_html,
+    build_dashboard_snapshot,
+    build_dashboard_stats_html,
+    build_heartbeat_snapshot,
+)
 from ..services.download_service import (
     build_download_snapshot,
     cancel_download,
@@ -240,6 +246,29 @@ def _ignore_movie_impl(*, movie_id: int, ignored: bool) -> dict:
 @api_router.get("/", tags=["UI"], summary="Dashboard", description="Serve the main AnimeWorld Companion web UI.", include_in_schema=False)
 def dashboard() -> HTMLResponse:
     return HTMLResponse(build_dashboard_html())
+
+
+@api_router.get(
+    "/api/dashboard/stats",
+    tags=["UI"],
+    summary="Dashboard stats fragment",
+    description="Return the rendered dashboard stats fragment used by the web UI after mutations.",
+)
+def api_dashboard_stats(_: str = Depends(require_api_key)) -> dict:
+    return {"html": build_dashboard_stats_html()}
+
+
+@api_router.get(
+    "/api/dashboard/cards/{kind}/{item_id}",
+    tags=["UI"],
+    summary="Dashboard card fragment",
+    description="Return one rendered dashboard card fragment for a show or movie.",
+)
+def api_dashboard_card(kind: str, item_id: int, _: str = Depends(require_api_key)) -> dict:
+    html = build_dashboard_card_html(kind, item_id)
+    if html is None:
+        raise HTTPException(status_code=404, detail="Card not found")
+    return {"html": html}
 
 
 @api_router.post(

@@ -223,10 +223,7 @@ a{color:#58a6ff;text-decoration:none}a:hover{text-decoration:underline}
   </table>
 </div>
 
-<div class="stats">
-  <span>{{ shows|length }}</span> shows{% if movies is defined and movies|length > 0 %} &middot; <span>{{ movies|length }}</span> movies{% endif %} &middot;
-  to map <span id="stat-to-map">{{ to_map_count }}</span>
-</div>
+<div class="stats" id="dashboard-stats">{% include "_dashboard_stats.html" %}</div>
   
   <div class="filter-bar">
     <input type="text" id="search" placeholder="Filter shows..." oninput="filterShows()">
@@ -245,86 +242,14 @@ a{color:#58a6ff;text-decoration:none}a:hover{text-decoration:underline}
 
 
 {% if library_items|length == 0 %}
-<div style="text-align:center;padding:48px;color:#8b949e">
+<div id="empty-library-state" style="text-align:center;padding:48px;color:#8b949e">
   <p style="font-size:16px">No shows in database yet.</p>
   <p>Configure Sonarr or Radarr and click sync to populate.</p>
 </div>
 {% endif %}
 
 {% for card in library_items %}
-<div class="card {{ 'card-sonarr' if card.kind == 'show' else 'card-radarr' }}" data-title="{{ card.title|lower }}" data-status="{{ card.status.key }}" data-type="{{ card.kind }}" data-has-unaired="{{ 'true' if card.has_unaired else 'false' }}">
-  <div class="card-header" onclick="toggle(this)">
-    <div>
-      <span class="card-title">{{ card.title }}</span>
-      {% if card.alternate_titles %}
-      <div class="alt-titles">{{ card.alternate_titles[:3]|join(' / ') }}{% if card.alternate_titles|length > 3 %} +{{ card.alternate_titles|length - 3 }} more{% endif %}</div>
-      {% endif %}
-    </div>
-    <div class="card-meta">
-      {% if card.meta_label %}<span>{{ card.meta_label }}</span>{% endif %}
-      <span class="badge badge-{{ card.status.key }} card-status-badge">{{ card.status.label }}</span>
-      <span class="arrow">&#9654;</span>
-    </div>
-  </div>
-  <div class="card-body">
-    {% for row in card.rows %}
-    <div class="season-row{% if (not row.aired and not row.mapped) or row.ignored %} season-unaired{% endif %}"
-         data-kind="{{ row.item_kind }}"
-         data-itemid="{{ row.item_id }}"
-         {% if row.item_kind == 'show' %}data-showid="{{ row.item_id }}" data-season="{{ row.season_number }}"{% else %}data-movieid="{{ row.item_id }}"{% endif %}
-         data-mapped="{{ 'true' if row.mapped else 'false' }}"
-         data-ignored="{{ 'true' if row.ignored else 'false' }}"
-         data-aired="{{ 'true' if row.aired else 'false' }}">
-      <div class="season-label">{{ row.label }}</div>
-      <div class="season-status">
-        {% if row.status_badge %}
-        <span class="badge {{ row.status_badge.class }}">{{ row.status_badge.text }}</span>
-        {% else %}
-        <span style="color:#8b949e">--</span>
-        {% endif %}
-      </div>
-      <div class="season-link">
-        {% if row.links %}
-          {% for link in row.links %}
-          <div style="margin-left:8px;margin-top:4px">
-            {% if link.show_part %}
-            <span style="font-weight:600;margin-right:6px">P{{ link.part }}</span>
-            {% endif %}
-            <a href="{{ link.url }}" target="_blank">{{ link.url }}</a>
-            {% if link.episode_meta %}
-            <span style="font-size:11px;color:#8b949e;margin-left:8px">{{ link.episode_meta }}</span>
-            {% endif %}
-          </div>
-          {% endfor %}
-        {% elif not row.ignored %}
-        <form class="map-form" onsubmit="mapItem(event,'{{ row.item_kind }}',{{ row.item_id }},{{ 'null' if row.season_number is none else row.season_number }})">
-          <input type="text" name="aw_link" placeholder="{{ row.map_placeholder }}">
-          <button type="submit" class="btn btn-primary">Map</button>
-        </form>
-        {% endif %}
-      </div>
-      <div class="season-actions">
-        {% if row.mapped %}
-        <button class="btn btn-danger" onclick="unmapItem('{{ row.item_kind }}',{{ row.item_id }},{{ 'null' if row.season_number is none else row.season_number }},this)">Remove</button>
-        {% elif not row.ignored %}
-        <button class="btn" style="color:#8b949e;border-color:#30363d" onclick="setIgnored('{{ row.item_kind }}',{{ row.item_id }},{{ 'null' if row.season_number is none else row.season_number }},true,this)">Ignore</button>
-        {% else %}
-        <button class="btn" style="color:#8b949e;border-color:#30363d" onclick="setIgnored('{{ row.item_kind }}',{{ row.item_id }},{{ 'null' if row.season_number is none else row.season_number }},false,this)">Unignore</button>
-        {% endif %}
-      </div>
-    </div>
-    {% endfor %}
-
-    <div class="card-footer">
-      <div style="display:flex;gap:4px">
-        <button class="btn" style="font-size:12px" onclick="discoverItem('{{ card.kind }}',{{ card.id }},this)">Discover AW Links</button>
-        <button class="btn btn-primary" style="font-size:12px" onclick="automapItem('{{ card.kind }}',{{ card.id }},this)">{{ card.automap_label }}</button>
-      </div>
-      <button class="btn btn-danger" style="font-size:12px" onclick='deleteItem({{ card.kind|tojson }},{{ card.id }},{{ card.title|tojson }},this)'>{{ card.delete_label }}</button>
-    </div>
-    <div id="{{ card.discover_panel_id }}" class="discover-panel" style="display:none"></div>
-  </div>
-</div>
+{% include "_dashboard_card.html" %}
 {% endfor %}
 
 <script>
@@ -371,51 +296,76 @@ function filterShows(){
   });
 }
 
-function _refreshCardBadge(card){
-  const rows=card.querySelectorAll('.season-row');
-  let total=0,active=0,mapped=0,ignored=0;
-  rows.forEach(r=>{
-    const aired=r.dataset.aired==='true';
-    const isMapped=r.dataset.mapped==='true';
-    const isIgnored=r.dataset.ignored==='true';
-    if(aired){
-      total++;
-      if(isIgnored)ignored++;
-      else{
-        active++;
-        if(isMapped)mapped++;
-      }
-    }else if(isMapped){
-      // unaired but already mapped to a pre-release placeholder
-      total++;active++;mapped++;
-    }else if(isIgnored){
-      ignored++;
-    }
-  });
-  const effective=active;
-  const badge=card.querySelector('.card-status-badge');
-  if(!badge)return;
-  if(effective===0&&ignored>0){
-    badge.className='badge badge-ignored card-status-badge';badge.textContent='ignored';card.dataset.status='ignored';
-  }else if(mapped===effective&&effective>0){
-    badge.className='badge badge-mapped card-status-badge';badge.textContent='all mapped';card.dataset.status='mapped';
-  }else if(mapped>0){
-    badge.className='badge badge-partial card-status-badge';badge.textContent=mapped+'/'+effective;card.dataset.status='partial';
-  }else{
-    badge.className='badge badge-unmapped card-status-badge';badge.textContent='unmapped';card.dataset.status='unmapped';
+function _cardSelector(kind,id){
+  return '.card[data-card-kind="'+kind+'"][data-card-id="'+id+'"]';
+}
+
+function _emptyStateHtml(){
+  return '<div id="empty-library-state" style="text-align:center;padding:48px;color:#8b949e">'
+    +'<p style="font-size:16px">No shows in database yet.</p>'
+    +'<p>Configure Sonarr or Radarr and click sync to populate.</p>'
+    +'</div>';
+}
+
+function _ensureEmptyState(){
+  const content=document.querySelector('main.content');
+  if(!content)return;
+  const hasCards=Boolean(content.querySelector('.card'));
+  const empty=document.getElementById('empty-library-state');
+  if(hasCards){
+    if(empty)empty.remove();
+    return;
+  }
+  if(!empty){
+    content.insertAdjacentHTML('afterbegin',_emptyStateHtml());
   }
 }
 
-function _refreshToMapStat(){
-  let toMap=0;
-  document.querySelectorAll('.season-row').forEach(r=>{
-    const aired=r.dataset.aired==='true';
-    const isMapped=r.dataset.mapped==='true';
-    const isIgnored=r.dataset.ignored==='true';
-    if(aired && !isMapped && !isIgnored)toMap++;
-  });
-  const stat=document.getElementById('stat-to-map');
-  if(stat)stat.textContent=toMap;
+async function _refreshStatsFragment(){
+  const target=document.getElementById('dashboard-stats');
+  if(!target)return;
+  const r=await fetch('/api/dashboard/stats'+_kp(),{headers:_kh()});
+  if(!r.ok)throw new Error('stats refresh failed');
+  const data=await r.json();
+  target.innerHTML=data.html||'';
+}
+
+async function _refreshCardFragment(kind,id){
+  const current=document.querySelector(_cardSelector(kind,id));
+  if(!current)return;
+  const wasOpen=current.classList.contains('open');
+  const currentPanel=current.querySelector('.discover-panel');
+  const panelState=currentPanel&&currentPanel.style.display==='block'
+    ? {id:currentPanel.id,html:currentPanel.innerHTML}
+    : null;
+  const r=await fetch('/api/dashboard/cards/'+kind+'/'+id+_kp(),{headers:_kh()});
+  if(!r.ok)throw new Error('card refresh failed');
+  const data=await r.json();
+  const wrapper=document.createElement('div');
+  wrapper.innerHTML=(data.html||'').trim();
+  const next=wrapper.firstElementChild;
+  if(!next)throw new Error('card refresh failed');
+  if(wasOpen)next.classList.add('open');
+  if(panelState){
+    const nextPanel=next.querySelector('#'+panelState.id);
+    if(nextPanel){
+      nextPanel.style.display='block';
+      nextPanel.innerHTML=panelState.html;
+    }
+  }
+  current.replaceWith(next);
+}
+
+async function _refreshDashboardFragment(kind,id,remove=false){
+  if(remove){
+    const current=document.querySelector(_cardSelector(kind,id));
+    if(current)current.remove();
+  }else{
+    await _refreshCardFragment(kind,id);
+  }
+  await _refreshStatsFragment();
+  _ensureEmptyState();
+  filterShows();
 }
 
 function _btnErr(btn,label){
@@ -448,12 +398,6 @@ async function automapAll(btn){
     if(d.status==='already_running'){btn.textContent='Already running...';}
     // Button re-enabled by heartbeat when automap_running goes false
   }catch(e){_automapLaunched=false;_btnErr(btn,'Automap Library');}
-}
-
-function _mapPlaceholder(kind){
-  return kind==='show'
-    ? 'Paste AW link(s) (separate with newline/comma)...'
-    : 'Paste AW movie link...';
 }
 
 function _panelId(kind,id){
@@ -492,57 +436,12 @@ function _deleteEndpoint(kind,id){
   return kind==='show' ? '/api/shows/'+id+_kp() : '/api/movies/'+id+_kp();
 }
 
-function _buildLinkRows(mappings){
-  let html='';
-  mappings.forEach((p,i)=>{
-    const url=_slugToUrl(p.aw_link||'');
-    html+='<div style="margin-left:8px;margin-top:4px">';
-    if((mappings.length>1))html+='<span style="font-weight:600;margin-right:6px">P'+(p.part||i+1)+'</span>';
-    html+='<a href="'+url+'" target="_blank">'+url+'</a>';
-    if(p.aw_episode_count){
-      html+='<span style="font-size:11px;color:#8b949e;margin-left:8px">'+p.aw_episode_count+' eps';
-      if(p.aw_total_episodes&&Number(p.aw_total_episodes)>Number(p.aw_episode_count)){
-        html+=' (+'+(Number(p.aw_total_episodes)-Number(p.aw_episode_count))+' specials)';
-      }
-      html+='</span>';
-    }
-    html+='</div>';
-  });
-  return html||'<span style="color:#8b949e">mapped</span>';
-}
-
-function _mapFormHtml(kind,id,seasonNum){
-  const seasonArg=seasonNum===null?'null':String(seasonNum);
-  return '<form class="map-form" onsubmit="mapItem(event,\''+kind+'\','+id+','+seasonArg+')">'
-    +'<input type="text" name="aw_link" placeholder="'+_mapPlaceholder(kind)+'">'
-    +'<button type="submit" class="btn btn-primary">Map</button></form>';
-}
-
-function _ignoreButtonHtml(kind,id,seasonNum,ignored){
-  const seasonArg=seasonNum===null?'null':String(seasonNum);
-  if(ignored){
-    return '<button class="btn" style="color:#8b949e;border-color:#30363d" onclick="setIgnored(\''+kind+'\','+id+','+seasonArg+',false,this)">Unignore</button>';
-  }
-  return '<button class="btn" style="color:#8b949e;border-color:#30363d" onclick="setIgnored(\''+kind+'\','+id+','+seasonArg+',true,this)">Ignore</button>';
-}
-
-function _removeButtonHtml(kind,id,seasonNum){
-  const seasonArg=seasonNum===null?'null':String(seasonNum);
-  return '<button class="btn btn-danger" onclick="unmapItem(\''+kind+'\','+id+','+seasonArg+',this)">Remove</button>';
-}
-
 async function unmapItem(kind,id,seasonNum,btn){
   btn.disabled=true;
   try{
     const r=await fetch(_unmapEndpoint(kind,id,seasonNum),{method:'POST',headers:_kh()});
     if(!r.ok)throw new Error('unmap failed');
-    const row=btn.closest('.season-row');
-    row.dataset.mapped='false';
-    row.querySelector('.season-status').innerHTML='<span style="color:#8b949e">--</span>';
-    row.querySelector('.season-link').innerHTML=row.dataset.ignored==='true'?'':_mapFormHtml(kind,id,seasonNum);
-    row.querySelector('.season-actions').innerHTML=_ignoreButtonHtml(kind,id,seasonNum,row.dataset.ignored==='true');
-    _refreshCardBadge(row.closest('.card'));
-    _refreshToMapStat();
+    await _refreshDashboardFragment(kind,id,false);
   }catch(e){_btnErr(btn,'Remove');}
 }
 
@@ -551,16 +450,7 @@ async function setIgnored(kind,id,seasonNum,ignored,btn){
   try{
     const r=await fetch(_ignoreEndpoint(kind,id,seasonNum,ignored),{method:'POST',headers:_kh()});
     if(!r.ok)throw new Error('ignore failed');
-    const row=btn.closest('.season-row');
-    row.dataset.ignored=ignored?'true':'false';
-    if(ignored)row.classList.add('season-unaired'); else row.classList.remove('season-unaired');
-    row.querySelector('.season-status').innerHTML=ignored
-      ? '<span class="badge badge-ignored">ignored</span>'
-      : '<span style="color:#8b949e">--</span>';
-    row.querySelector('.season-link').innerHTML=ignored?'':_mapFormHtml(kind,id,seasonNum);
-    row.querySelector('.season-actions').innerHTML=_ignoreButtonHtml(kind,id,seasonNum,ignored);
-    _refreshCardBadge(row.closest('.card'));
-    _refreshToMapStat();
+    await _refreshDashboardFragment(kind,id,false);
   }catch(e){_btnErr(btn,ignored?'Ignore':'Unignore');}
 }
 
@@ -576,20 +466,7 @@ async function mapItem(evt,kind,id,seasonNum){
     const r=await fetch(_mapEndpoint(kind,id,seasonNum,link),{method:'POST',headers:_kh()});
     const d=await r.json();
     if(!(d.updated||d.status==='ok')){_btnErr(submitBtn,'Map');return;}
-    const row=form.closest('.season-row');
-    row.dataset.mapped='true';
-    row.dataset.ignored='false';
-    row.classList.remove('season-unaired');
-    const aired=row.dataset.aired==='true';
-    const statusHtml=kind==='show'
-      ? (aired?'<span class="badge badge-manual">manual</span>':'<span class="badge badge-prerelease">pre</span>')
-      : '<span style="color:#8b949e">--</span>';
-    row.querySelector('.season-status').innerHTML=statusHtml;
-    const mappings=d.mappings||[d.mapping].filter(Boolean);
-    row.querySelector('.season-link').innerHTML=_buildLinkRows(mappings);
-    row.querySelector('.season-actions').innerHTML=_removeButtonHtml(kind,id,seasonNum);
-    _refreshCardBadge(row.closest('.card'));
-    _refreshToMapStat();
+    await _refreshDashboardFragment(kind,id,false);
   }catch(e){_btnErr(submitBtn,'Map');}
 }
 
@@ -599,8 +476,7 @@ async function deleteItem(kind,id,title,btn){
   try{
     const r=await fetch(_deleteEndpoint(kind,id),{method:'DELETE',headers:_kh()});
     if(!r.ok)throw new Error('delete failed');
-    btn.closest('.card').remove();
-    _refreshToMapStat();
+    await _refreshDashboardFragment(kind,id,true);
   }catch(e){_btnErr(btn,kind==='show'?'Delete Show':'Delete Movie');}
 }
 
@@ -636,7 +512,7 @@ async function automapItem(kind,id,btn){
     if(kind==='movie'){
       if(data.status==='success'){
         panel.innerHTML='<div class="automap-note-title success">Successfully mapped!</div><div class="automap-note-link"><a href="'+_slugToUrl(data.mapping?.aw_link||'')+'" target="_blank">'+_slugToUrl(data.mapping?.aw_link||'')+'</a></div>';
-        setTimeout(()=>location.reload(),1200);
+        await _refreshDashboardFragment(kind,id,false);
       }else if(data.status==='ambiguous'){
         let html='<div class="automap-note-title">Multiple high-confidence candidates found!</div><div class="automap-note-subtitle">Please use Discover AW Links and manually copy and paste the correct one.</div>';
         for(const c of (data.candidates||[])){
@@ -654,7 +530,7 @@ async function automapItem(kind,id,btn){
       }
       return;
     }
-    renderAutomapPanel(id,data);
+    await renderAutomapPanel(id,data);
   }catch(e){
     panel.innerHTML='<span style="color:#f85149">Error: '+e.message+'</span>';
   }finally{btn.disabled=false;}
@@ -679,7 +555,7 @@ document.addEventListener('click',function(e){
   }
 });
 
-function renderAutomapPanel(showId,data){
+async function renderAutomapPanel(showId,data){
   const panel=document.getElementById(_panelId('show',showId));
   if(!panel)return;
   if(data.status==='success'){
@@ -699,7 +575,7 @@ function renderAutomapPanel(showId,data){
       html+='<div class="automap-note-link"><a href="'+mapUrl+'" target="_blank">'+mapUrl+'</a></div>';
     }
     panel.innerHTML=html;
-    setTimeout(()=>location.reload(),2000);
+    await _refreshDashboardFragment('show',showId,false);
   }else if(data.status==='ambiguous'){
     let html='<div class="automap-note-title">Multiple high-confidence candidates found!</div>';
     html+='<div class="automap-note-subtitle">Please use Discover AW Links and manually copy and paste the correct one.</div>';
@@ -727,7 +603,7 @@ function renderAutomapPanel(showId,data){
       html+='<div class="automap-note-meta">'+meta+'</div>';
     }
     panel.innerHTML=html;
-    setTimeout(()=>location.reload(),2000);
+    await _refreshDashboardFragment('show',showId,false);
   }else if(data.status==='not_found'){
     panel.innerHTML='<span style="color:#8b949e">No high-confidence matches found on AnimeWorld</span>';
   }else if(data.status==='already_mapped'){

@@ -10,6 +10,7 @@ from jinja2 import Environment, FileSystemLoader, select_autoescape
 
 from ..core.config import settings
 from ..integrations.animeworld_client import AnimeWorldClient
+from ..repositories.db import get_db
 from ..repositories.sync_meta import get_sync_meta
 from .automap_service import automap_status
 from .background_service import runtime_state
@@ -55,6 +56,43 @@ def slug_to_url(slug: str) -> str:
 _jinja.globals["season_has_aired"] = season_has_aired
 _jinja.globals["movie_has_released"] = movie_has_released
 _jinja.globals["slug_to_url"] = slug_to_url
+
+
+def _today_iso() -> str:
+    return datetime.now(UTC).date().isoformat()
+
+
+def count_dashboard_to_map() -> int:
+    today = _today_iso()
+    with get_db() as conn:
+        show_row = conn.execute(
+            """
+            SELECT COUNT(*) AS count
+            FROM show_seasons ss
+            LEFT JOIN aw_show_mappings asm
+                ON asm.show_id = ss.show_id
+               AND asm.season_number = ss.season_number
+            WHERE ss.season_number > 0
+              AND ss.ignored = 0
+              AND COALESCE(substr(ss.air_date_start, 1, 10), '') != ''
+              AND substr(ss.air_date_start, 1, 10) <= ?
+              AND asm.id IS NULL
+            """,
+            (today,),
+        ).fetchone()
+        movie_row = conn.execute(
+            """
+            SELECT COUNT(*) AS count
+            FROM movies m
+            LEFT JOIN aw_movie_mappings amm ON amm.movie_id = m.id
+            WHERE m.ignored = 0
+              AND COALESCE(substr(m.first_aired, 1, 10), '') != ''
+              AND substr(m.first_aired, 1, 10) <= ?
+              AND amm.id IS NULL
+            """,
+            (today,),
+        ).fetchone()
+    return int(show_row["count"]) + int(movie_row["count"])
 
 
 def _show_payload(show_id: int) -> dict | None:
@@ -200,6 +238,9 @@ def _show_card(show: dict) -> dict:
         "id": int(show["id"]),
         "title": str(show.get("title") or ""),
         "alternate_titles": list(show.get("alternate_titles") or []),
+        "filter_text": " ".join(
+            [str(show.get("title") or ""), *[str(item) for item in list(show.get("alternate_titles") or [])]]
+        ).casefold(),
         "manager_label": "Sonarr",
         "manager_badge_class": "badge-sonarr",
         "meta_label": f"{totals['total']} seasons",
@@ -248,6 +289,9 @@ def _movie_card(movie: dict) -> dict:
         "id": int(movie["id"]),
         "title": str(movie.get("title") or ""),
         "alternate_titles": list(movie.get("alternate_titles") or []),
+        "filter_text": " ".join(
+            [str(movie.get("title") or ""), *[str(item) for item in list(movie.get("alternate_titles") or [])]]
+        ).casefold(),
         "manager_label": "Radarr",
         "manager_badge_class": "badge-radarr",
         "meta_label": str(movie.get("year") or ""),
@@ -340,8 +384,30 @@ def build_heartbeat_snapshot() -> dict:
     }
 
 
+def build_dashboard_card(kind: str, item_id: int) -> dict | None:
+    normalized_kind = (kind or "").strip().lower()
+    if normalized_kind == "show":
+        show = _show_payload(item_id)
+        return _show_card(show) if show else None
+    if normalized_kind == "movie":
+        movie = _movie_payload(item_id)
+        return _movie_card(movie) if movie else None
+    return None
+
+
+def _build_dashboard_stats_context(catalog: dict | None = None) -> dict:
+    snapshot = catalog or build_catalog_snapshot(show_limit=0, movie_limit=0)
+    counts = snapshot.get("counts", {})
+    return {
+        "show_count": int(counts.get("shows") or 0),
+        "movie_count": int(counts.get("movies") or 0),
+        "to_map_count": count_dashboard_to_map(),
+    }
+
+
 def build_dashboard_context() -> dict:
     catalog = build_catalog_snapshot(show_limit=250, movie_limit=250)
+    stats_context = _build_dashboard_stats_context(catalog)
     shows = [_show_payload(show["id"]) for show in catalog["shows"]]
     movies = [_movie_payload(movie["id"]) for movie in catalog["movies"]]
     show_items = [item for item in shows if item]
@@ -349,27 +415,11 @@ def build_dashboard_context() -> dict:
     library_items = [_show_card(item) for item in show_items] + [_movie_card(item) for item in movie_items]
     library_items.sort(key=lambda item: (str(item.get("title") or "").casefold(), item.get("kind") != "show"))
 
-    to_map_count = 0
-    for show in show_items:
-        for season in show.get("seasons", []):
-            season_number = int(season.get("season_number", 0))
-            if season_number <= 0:
-                continue
-            ignored = bool(season.get("ignored"))
-            aired = season_has_aired(season)
-            has_mapping = bool(show.get("mappings", {}).get(season_number))
-            if aired and not ignored and not has_mapping:
-                to_map_count += 1
-
-    for movie in movie_items:
-        if movie_has_released(movie) and not movie.get("ignored") and not movie.get("mapping"):
-            to_map_count += 1
-
     return {
         "shows": show_items,
         "movies": movie_items,
         "library_items": library_items,
-        "to_map_count": to_map_count,
+        **stats_context,
         "automap_running": bool(automap_status().get("running")),
         "app_version": os.getenv("APP_VERSION", ""),
         "sonarr_sync_in_progress": bool(sync_status().get("running")),
@@ -381,3 +431,16 @@ def build_dashboard_context() -> dict:
 def build_dashboard_html() -> str:
     template = _jinja.get_template("index.html")
     return template.render(**build_dashboard_context())
+
+
+def build_dashboard_stats_html() -> str:
+    template = _jinja.get_template("_dashboard_stats.html")
+    return template.render(**_build_dashboard_stats_context())
+
+
+def build_dashboard_card_html(kind: str, item_id: int) -> str | None:
+    card = build_dashboard_card(kind, item_id)
+    if not card:
+        return None
+    template = _jinja.get_template("_dashboard_card.html")
+    return template.render(card=card)

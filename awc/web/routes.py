@@ -693,11 +693,12 @@ def api_logs(
 
 @api_router.post("/api/rss/update", tags=["System"], summary="Update RSS cache", description="Fetch the AnimeWorld RSS feed now and republish any matching items into the local cache.")
 def api_update_rss_cache(_: str = Depends(require_api_key)) -> dict:
+    log_info(logger, "rss.cache.update.started", "RSS cache update started")
     result = update_rss_cache()
     log_info(
         logger,
-        "rss.cache.update",
-        "RSS cache update requested",
+        "rss.cache.update.finished",
+        "RSS cache update completed",
         lines=[f"cached={result.get('cached', 0)}"],
         details=result,
     )
@@ -737,6 +738,15 @@ def manager_webhook(
         manager = str(normalized.get("manager") or "")
         manager_entity_id = int(normalized["manager_entity_id"])
         entity_title = str((normalized.get("entity") or {}).get("title") or manager_entity_id)
+        log_info(
+            logger,
+            f"webhook.{manager}.add.received",
+            f"Webhook {manager.capitalize()} add received: {entity_title}",
+            details={"manager": manager, "manager_id": manager_entity_id},
+            entity_kind=manager or None,
+            entity_id=manager_entity_id,
+            entity_title=entity_title,
+        )
 
         def _run() -> None:
             try:
@@ -791,6 +801,7 @@ def manager_webhook(
 
 @api_router.post("/api/sync", tags=["Integration"], summary="Sync all managers", description="Run a full Sonarr + Radarr sync immediately.")
 def manual_sync(_: str = Depends(require_api_key)) -> dict:
+    log_info(logger, "sync.manual.all.started", "Manual sync started")
     result = sync_all()
     log_info(
         logger,
@@ -804,6 +815,7 @@ def manual_sync(_: str = Depends(require_api_key)) -> dict:
 
 @api_router.post("/api/sync/sonarr", tags=["Integration"], summary="Sync Sonarr", description="Run a Sonarr-only sync immediately.")
 def manual_sync_sonarr(_: str = Depends(require_api_key)) -> dict:
+    log_info(logger, "sync.manual.sonarr.started", "Manual Sonarr sync started")
     result = sync_now_sonarr()
     log_info(
         logger,
@@ -817,6 +829,7 @@ def manual_sync_sonarr(_: str = Depends(require_api_key)) -> dict:
 
 @api_router.post("/api/sync/radarr", tags=["Integration"], summary="Sync Radarr", description="Run a Radarr-only sync immediately.")
 def manual_sync_radarr(_: str = Depends(require_api_key)) -> dict:
+    log_info(logger, "sync.manual.radarr.started", "Manual Radarr sync started")
     result = sync_now_radarr()
     log_info(
         logger,

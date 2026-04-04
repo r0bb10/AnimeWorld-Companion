@@ -15,7 +15,7 @@ import xml.etree.ElementTree as ET
 import requests
 
 from ..core.config import settings
-from ..core.log_events import log_block, log_exception, log_info, log_warning
+from ..core.log_events import log_block, log_debug, log_exception, log_info, log_warning
 from ..core.logging import get_logger
 from ..integrations.animeworld_client import AnimeWorldClient
 from ..integrations.radarr_client import RadarrClient
@@ -247,7 +247,7 @@ def _process_rss_item(fields: dict, client: AnimeWorldClient) -> int:
     return cached
 
 
-def update_rss_cache() -> dict:
+def update_rss_cache(*, emit_cycle_logs: bool = False) -> dict:
     if not settings.rss_enabled:
         _set_state("rss", enabled=False)
         return {"enabled": False, "cached": 0}
@@ -258,19 +258,31 @@ def update_rss_cache() -> dict:
 
     client = AnimeWorldClient()
 
+    if emit_cycle_logs:
+        log_debug(logger, "runtime.rss.cycle.started", "RSS poll cycle started")
+
     try:
         response = requests.get(url, timeout=15)
         response.raise_for_status()
         root = ET.fromstring(response.content)
     except requests.ConnectionError:
         log_warning(logger, "runtime.rss.skipped", "RSS poll skipped: AnimeWorld unreachable")
-        return {"enabled": True, "cached": 0, "error": "unreachable"}
+        result = {"enabled": True, "cached": 0, "error": "unreachable"}
+        if emit_cycle_logs:
+            log_debug(logger, "runtime.rss.cycle.finished", "RSS poll cycle finished", details={"cached": 0, "error": "unreachable"})
+        return result
     except requests.Timeout:
         log_warning(logger, "runtime.rss.skipped", "RSS poll skipped: request timed out")
-        return {"enabled": True, "cached": 0, "error": "timeout"}
+        result = {"enabled": True, "cached": 0, "error": "timeout"}
+        if emit_cycle_logs:
+            log_debug(logger, "runtime.rss.cycle.finished", "RSS poll cycle finished", details={"cached": 0, "error": "timeout"})
+        return result
     except Exception as exc:
         log_exception(logger, "runtime.rss.failed", "RSS fetch failed", details={"error": str(exc)})
-        return {"enabled": True, "cached": 0, "error": str(exc)}
+        result = {"enabled": True, "cached": 0, "error": str(exc)}
+        if emit_cycle_logs:
+            log_debug(logger, "runtime.rss.cycle.finished", "RSS poll cycle finished", details={"cached": 0, "error": str(exc)})
+        return result
 
     fields_list = []
     for item in root.findall(".//item"):
@@ -293,6 +305,8 @@ def update_rss_cache() -> dict:
     cleanup_rss_items(settings.rss_cache_retention_days)
     if cached:
         log_info(logger, "runtime.rss.cached", "RSS cached items", details={"cached": cached}, lines=[f"cached={cached}"])
+    if emit_cycle_logs:
+        log_debug(logger, "runtime.rss.cycle.finished", "RSS poll cycle finished", details={"cached": cached})
     _set_state(
         "rss",
         enabled=True,
@@ -316,7 +330,7 @@ def _run_rss_loop() -> None:
     )
     while not _stop_event.is_set():
         try:
-            update_rss_cache()
+            update_rss_cache(emit_cycle_logs=True)
         except Exception as exc:
             log_exception(logger, "runtime.rss.loop_failed", "RSS poller failed", details={"error": str(exc)})
             _set_state(
@@ -344,6 +358,7 @@ def _run_sync_loop() -> None:
         return
     while not _stop_event.is_set():
         try:
+            log_info(logger, "runtime.sync.started", "Background sync started")
             result = sync_all()
             log_info(
                 logger,
@@ -386,6 +401,7 @@ def _run_import_loop() -> None:
     while not _stop_event.is_set():
         marked = 0
         try:
+            log_debug(logger, "runtime.imports.cycle.started", "Import poll cycle started")
             for entry in completed_downloads():
                 sonarr_id = entry.get("sonarr_id")
                 radarr_id = entry.get("radarr_id")
@@ -426,6 +442,7 @@ def _run_import_loop() -> None:
                 last_error="",
                 last_marked=marked,
             )
+            log_debug(logger, "runtime.imports.cycle.finished", "Import poll cycle finished", details={"marked": marked})
         except Exception as exc:
             log_exception(logger, "runtime.imports.failed", "Import poller failed", details={"error": str(exc)})
             _set_state(

@@ -69,15 +69,30 @@ def upsert_show(payload: dict) -> int:
 
 def replace_show_seasons(show_id: int, seasons: list[dict]) -> None:
     with get_db(write=True) as conn:
-        conn.execute("DELETE FROM show_seasons WHERE show_id = ?", (show_id,))
+        season_numbers = [int(season.get("season_number") or 0) for season in seasons if season.get("season_number") is not None]
+        if season_numbers:
+            placeholders = ",".join("?" for _ in season_numbers)
+            conn.execute(
+                f"DELETE FROM show_seasons WHERE show_id = ? AND season_number NOT IN ({placeholders})",
+                (show_id, *season_numbers),
+            )
+        else:
+            conn.execute("DELETE FROM show_seasons WHERE show_id = ?", (show_id,))
         for season in seasons:
             conn.execute(
                 """
                 INSERT INTO show_seasons (
                     show_id, season_number, monitored, episode_count,
-                    air_date_start, air_date_end, segment_markers, updated_at
+                    air_date_start, air_date_end, segment_markers, created_at, updated_at
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(show_id, season_number) DO UPDATE SET
+                    monitored = excluded.monitored,
+                    episode_count = excluded.episode_count,
+                    air_date_start = excluded.air_date_start,
+                    air_date_end = excluded.air_date_end,
+                    segment_markers = excluded.segment_markers,
+                    updated_at = excluded.updated_at
                 """,
                 (
                     show_id,
@@ -87,6 +102,7 @@ def replace_show_seasons(show_id: int, seasons: list[dict]) -> None:
                     season.get("air_date_start"),
                     season.get("air_date_end"),
                     json.dumps(season.get("segment_markers", [])),
+                    _now(),
                     _now(),
                 ),
             )

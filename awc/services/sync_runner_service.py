@@ -1,5 +1,6 @@
 """Manager sync routines for the clean rebuild."""
 
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import UTC, datetime
 import json
 import logging
@@ -230,6 +231,31 @@ def _build_scene_episode_map(episodes: list[dict]) -> list[dict]:
     return items
 
 
+def _sync_show_payload(detail: dict, episodes: list[dict], *, targeted: bool, tags: dict[int, str], ignore_tag_ids: set[int]) -> int | None:
+    if _is_ignored_by_tag(detail, ignore_tag_ids):
+        delete_show_by_sonarr_id(int(detail.get("id") or 0))
+        ignored = ", ".join(_ignored_tag_names(detail, tags, ignore_tag_ids))
+        log_block(
+            logger,
+            _sync_log_level(targeted),
+            detail.get("title") or f"Sonarr {detail.get('id')}",
+            [f"skipped by ignore tag: {ignored or 'configured'}"],
+        )
+        return None
+    show_id = upsert_show(_build_show_payload(detail))
+    seasons = _build_show_seasons(detail, episodes)
+    replace_show_seasons(show_id, seasons)
+    replace_show_alternate_titles(show_id, _build_show_alt_titles(detail))
+    replace_scene_episode_map(show_id, _build_scene_episode_map(episodes))
+    log_block(
+        logger,
+        _sync_log_level(targeted),
+        f"Synced Sonarr: {detail.get('title')}",
+        [f"seasons={len([s for s in seasons if int(s.get('season_number') or 0) > 0])}"],
+    )
+    return show_id
+
+
 def sync_single_show(series_id: int, *, targeted: bool = True) -> int | None:
     client = SonarrClient()
     if not client.is_configured():
@@ -239,30 +265,11 @@ def sync_single_show(series_id: int, *, targeted: bool = True) -> int | None:
         return None
     tags = client.fetch_tags()
     ignore_tag_ids = _resolve_tag_ids(tags, settings.ignore_tags)
-    if _is_ignored_by_tag(detail, ignore_tag_ids):
-        delete_show_by_sonarr_id(int(detail.get("id") or series_id))
-        ignored = ", ".join(_ignored_tag_names(detail, tags, ignore_tag_ids))
-        log_block(
-            logger,
-            _sync_log_level(targeted),
-            detail.get("title") or f"Sonarr {series_id}",
-            [f"skipped by ignore tag: {ignored or 'configured'}"],
-        )
-        return None
     episodes = client.fetch_episodes(series_id)
-    show_id = upsert_show(_build_show_payload(detail))
-    seasons = _build_show_seasons(detail, episodes)
-    replace_show_seasons(show_id, seasons)
-    replace_show_alternate_titles(show_id, _build_show_alt_titles(detail))
-    replace_scene_episode_map(show_id, _build_scene_episode_map(episodes))
-    set_sync_meta("last_sonarr_sync", datetime.now(UTC).isoformat())
-    log_block(
-        logger,
-        _sync_log_level(targeted),
-        f"Synced Sonarr: {detail.get('title')}",
-        [f"seasons={len([s for s in seasons if int(s.get('season_number') or 0) > 0])}"],
-    )
-    return show_id
+    result = _sync_show_payload(detail, episodes, targeted=targeted, tags=tags, ignore_tag_ids=ignore_tag_ids)
+    if result:
+        set_sync_meta("last_sonarr_sync", datetime.now(UTC).isoformat())
+    return result
 
 
 def sync_sonarr_library() -> int:
@@ -279,6 +286,8 @@ def sync_sonarr_library() -> int:
     if not series_list and not client.health().ok:
         log_warning(logger, "sync.sonarr.skipped", "Sonarr sync skipped: manager unavailable")
         return 0
+
+    candidates: list[dict] = []
     seen: set[int] = set()
     for series in series_list:
         if anime_tag_id is not None and anime_tag_id not in (series.get("tags") or []):
@@ -287,9 +296,32 @@ def sync_sonarr_library() -> int:
             ignored = ", ".join(_ignored_tag_names(series, tags, ignore_tag_ids))
             log_block(logger, logging.DEBUG, series.get("title") or "Sonarr item", [f"skipped by ignore tag: {ignored or 'configured'}"], event_type="sync.sonarr.ignored", entity_kind="show", entity_id=series.get("id"), entity_title=series.get("title"))
             continue
-        if sync_single_show(series["id"], targeted=False):
+        candidates.append(series)
+        seen.add(series["id"])
+
+    episodes_by_series: dict[int, list[dict]] = {}
+    if candidates:
+        max_workers = min(8, max(1, len(candidates)))
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            future_map = {executor.submit(client.fetch_episodes, int(series["id"])): int(series["id"]) for series in candidates}
+            for future in as_completed(future_map):
+                series_id = future_map[future]
+                try:
+                    episodes_by_series[series_id] = future.result() or []
+                except Exception:
+                    episodes_by_series[series_id] = []
+                    log_warning(
+                        logger,
+                        "sync.sonarr.episodes_failed",
+                        "Sonarr episode fetch failed during sync",
+                        entity_kind="show",
+                        entity_id=series_id,
+                        details={"series_id": series_id},
+                    )
+
+    for series in candidates:
+        if _sync_show_payload(series, episodes_by_series.get(int(series["id"]), []), targeted=False, tags=tags, ignore_tag_ids=ignore_tag_ids):
             processed += 1
-            seen.add(series["id"])
     if seen or series_list:
         prune_missing_shows(seen)
     set_sync_meta("last_sonarr_sync", datetime.now(UTC).isoformat())
@@ -329,6 +361,31 @@ def _build_movie_alt_titles(movie: dict) -> list[dict]:
     return items
 
 
+def _sync_movie_payload(movie: dict, *, targeted: bool, tags: dict[int, str], ignore_tag_ids: set[int]) -> int | None:
+    if _is_ignored_by_tag(movie, ignore_tag_ids):
+        delete_movie_by_radarr_id(int(movie.get("id") or 0))
+        ignored = ", ".join(_ignored_tag_names(movie, tags, ignore_tag_ids))
+        log_block(
+            logger,
+            _sync_log_level(targeted),
+            movie.get("title") or f"Radarr {movie.get('id')}",
+            [f"skipped by ignore tag: {ignored or 'configured'}"],
+        )
+        return None
+    movie_id = upsert_movie(_build_movie_payload(movie))
+    replace_movie_alternate_titles(movie_id, _build_movie_alt_titles(movie))
+    emit_event(
+        logger,
+        _sync_log_level(targeted),
+        "sync.radarr.item",
+        f"Synced Radarr: {movie.get('title')}",
+        entity_kind="movie",
+        entity_id=movie_id,
+        entity_title=movie.get("title"),
+    )
+    return movie_id
+
+
 def sync_single_movie(movie_payload_or_id, *, targeted: bool = True) -> int | None:
     client = RadarrClient()
     if not client.is_configured():
@@ -341,29 +398,10 @@ def sync_single_movie(movie_payload_or_id, *, targeted: bool = True) -> int | No
         return None
     tags = client.fetch_tags()
     ignore_tag_ids = _resolve_tag_ids(tags, settings.ignore_tags)
-    if _is_ignored_by_tag(movie, ignore_tag_ids):
-        delete_movie_by_radarr_id(int(movie.get("id") or movie_payload_or_id))
-        ignored = ", ".join(_ignored_tag_names(movie, tags, ignore_tag_ids))
-        log_block(
-            logger,
-            _sync_log_level(targeted),
-            movie.get("title") or f"Radarr {movie_payload_or_id}",
-            [f"skipped by ignore tag: {ignored or 'configured'}"],
-        )
-        return None
-    movie_id = upsert_movie(_build_movie_payload(movie))
-    replace_movie_alternate_titles(movie_id, _build_movie_alt_titles(movie))
-    set_sync_meta("last_radarr_sync", datetime.now(UTC).isoformat())
-    emit_event(
-        logger,
-        _sync_log_level(targeted),
-        "sync.radarr.item",
-        f"Synced Radarr: {movie.get('title')}",
-        entity_kind="movie",
-        entity_id=movie_id,
-        entity_title=movie.get("title"),
-    )
-    return movie_id
+    result = _sync_movie_payload(movie, targeted=targeted, tags=tags, ignore_tag_ids=ignore_tag_ids)
+    if result:
+        set_sync_meta("last_radarr_sync", datetime.now(UTC).isoformat())
+    return result
 
 
 def sync_single_item(manager: str, item_id: int) -> int | None:
@@ -398,7 +436,7 @@ def sync_radarr_library() -> int:
             ignored = ", ".join(_ignored_tag_names(movie, tags, ignore_tag_ids))
             log_block(logger, logging.DEBUG, movie.get("title") or "Radarr item", [f"skipped by ignore tag: {ignored or 'configured'}"], event_type="sync.radarr.ignored", entity_kind="movie", entity_id=movie.get("id"), entity_title=movie.get("title"))
             continue
-        if sync_single_movie(movie, targeted=False):
+        if _sync_movie_payload(movie, targeted=False, tags=tags, ignore_tag_ids=ignore_tag_ids):
             processed += 1
             seen.add(movie["id"])
     if seen or movies:
@@ -413,8 +451,16 @@ def sync_all() -> dict:
         _sync_status["running"] = True
         _sync_status["last_started_at"] = datetime.now(UTC).isoformat()
         try:
-            sonarr_count = sync_sonarr_library()
-            radarr_count = sync_radarr_library()
+            with ThreadPoolExecutor(max_workers=2) as executor:
+                futures = {
+                    executor.submit(sync_sonarr_library): "sonarr",
+                    executor.submit(sync_radarr_library): "radarr",
+                }
+                results = {"sonarr": 0, "radarr": 0}
+                for future in as_completed(futures):
+                    results[futures[future]] = int(future.result() or 0)
+            sonarr_count = results["sonarr"]
+            radarr_count = results["radarr"]
             return {"sonarr": sonarr_count, "radarr": radarr_count}
         finally:
             _sync_status["running"] = False

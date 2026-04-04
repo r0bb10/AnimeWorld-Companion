@@ -43,6 +43,10 @@ _state = {
 }
 
 
+def _minutes_label(seconds: int) -> str:
+    return f"{max(1, int(seconds) // 60)}m"
+
+
 def runtime_state() -> dict:
     with _state_lock:
         return json.loads(json.dumps(_state))
@@ -302,7 +306,14 @@ def update_rss_cache() -> dict:
 
 def _run_rss_loop() -> None:
     _set_state("rss", enabled=settings.rss_enabled, running=True)
-    log_info(logger, "runtime.rss.loop_started", "RSS poller started", details={"interval": max(30, settings.rss_poll_interval)}, lines=[f"interval={max(30, settings.rss_poll_interval)}s"])
+    interval = max(30, settings.rss_poll_interval)
+    log_info(
+        logger,
+        "runtime.rss.loop_started",
+        "RSS poller started",
+        details={"interval_seconds": interval},
+        lines=[f"interval={_minutes_label(interval)}"],
+    )
     while not _stop_event.is_set():
         try:
             update_rss_cache()
@@ -321,7 +332,14 @@ def _run_rss_loop() -> None:
 
 def _run_sync_loop() -> None:
     _set_state("sync", running=True)
-    log_info(logger, "runtime.sync.loop_started", "Background sync loop started", details={"interval": max(60, settings.sync_interval_minutes * 60)}, lines=[f"interval={max(60, settings.sync_interval_minutes * 60)}s"])
+    interval = max(60, settings.sync_interval_minutes * 60)
+    log_info(
+        logger,
+        "runtime.sync.loop_started",
+        "Background sync loop started",
+        details={"interval_seconds": interval},
+        lines=[f"interval={_minutes_label(interval)}"],
+    )
     if _stop_event.wait(60):  # brief startup grace before first sync
         return
     while not _stop_event.is_set():
@@ -349,13 +367,20 @@ def _run_sync_loop() -> None:
                 last_run_at=datetime.now(UTC).isoformat(),
                 last_error=str(exc),
             )
-        if _stop_event.wait(max(60, settings.sync_interval_minutes * 60)):
+        if _stop_event.wait(interval):
             break
 
 
 def _run_import_loop() -> None:
     _set_state("imports", running=True)
-    log_info(logger, "runtime.imports.loop_started", "Import poller started", details={"interval": max(30, settings.import_poll_interval)}, lines=[f"interval={max(30, settings.import_poll_interval)}s"])
+    interval = max(30, settings.import_poll_interval)
+    log_info(
+        logger,
+        "runtime.imports.loop_started",
+        "Import poller started",
+        details={"interval_seconds": interval},
+        lines=[f"interval={_minutes_label(interval)}"],
+    )
     sonarr_client = SonarrClient()
     radarr_client = RadarrClient()
     while not _stop_event.is_set():
@@ -410,7 +435,7 @@ def _run_import_loop() -> None:
                 last_error=str(exc),
                 last_marked=marked,
             )
-        if _stop_event.wait(max(30, settings.import_poll_interval)):
+        if _stop_event.wait(interval):
             break
 
 
@@ -419,8 +444,16 @@ def _run_link_loop() -> None:
     if not settings.sanitizer_enabled:
         log_info(logger, "runtime.links.disabled", "Sanitizer loop disabled by env")
         return
-    log_info(logger, "runtime.links.scheduled", "Sanitizer loop scheduled", lines=["first_run=600s", "interval=86400s"], details={"first_run_seconds": 600, "interval_seconds": 86400})
-    if _stop_event.wait(60 * 10):
+    first_run = 60 * 10
+    interval = 60 * 60 * 24
+    log_info(
+        logger,
+        "runtime.links.scheduled",
+        "Sanitizer loop scheduled",
+        lines=[f"first_run={_minutes_label(first_run)}", f"interval={_minutes_label(interval)}"],
+        details={"first_run_seconds": first_run, "interval_seconds": interval},
+    )
+    if _stop_event.wait(first_run):
         return
     while not _stop_event.is_set():
         try:
@@ -442,7 +475,7 @@ def _run_link_loop() -> None:
                 last_error=str(exc),
                 last_result=sanitizer_status().get("last_result"),
             )
-        if _stop_event.wait(60 * 60 * 24):
+        if _stop_event.wait(interval):
             break
 
 
@@ -457,8 +490,8 @@ def _run_eligible_loop() -> None:
         "runtime.eligible.scheduled",
         "Eligible loop scheduled",
         lines=[
-            "first_run=300s",
-            f"interval={interval}s",
+            f"first_run={_minutes_label(300)}",
+            f"interval={_minutes_label(interval)}",
             f"lookback_days={max(0, int(settings.eligible_lookback_days or 0))}",
         ],
         details={
@@ -525,13 +558,9 @@ def start_background_workers() -> dict:
         logger,
         logging.INFO,
         "Background workers started",
-        [
-            f"workers={', '.join(started) if started else 'none'}",
-            f"restored={startup.get('restored', 0)}",
-            f"fixed={startup.get('fixed', 0)}",
-        ],
+        [f"workers={', '.join(started) if started else 'none'}"],
         event_type="runtime.workers.started",
-        details={"workers": started, "restored": startup.get("restored", 0), "fixed": startup.get("fixed", 0)},
+        details={"workers": started},
     )
     return {"started": started, "startup": startup}
 

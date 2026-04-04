@@ -14,28 +14,26 @@ logger = get_logger("lifecycle")
 
 @asynccontextmanager
 async def lifespan(app):
+    level_value = str(settings.log_level or "INFO").upper()
+    sonarr_enabled = bool(settings.sonarr_url and settings.sonarr_api_key)
+    radarr_enabled = bool(settings.radarr_url and settings.radarr_api_key)
+    details = {
+        "sonarr": "enabled" if sonarr_enabled else "disabled",
+        "radarr": "enabled" if radarr_enabled else "disabled",
+    }
+    lines = [
+        f"sonarr={'enabled' if sonarr_enabled else 'disabled'}",
+        f"radarr={'enabled' if radarr_enabled else 'disabled'}",
+    ]
+    if level_value != "INFO":
+        details["level"] = level_value
+        lines.insert(0, f"level={level_value}")
     log_info(
         logger,
         "lifecycle.start",
         "AWC starting",
-        details={
-            "level": settings.log_level,
-            "tz": settings.timezone_name,
-            "sonarr": "on" if settings.sonarr_url and settings.sonarr_api_key else "off",
-            "radarr": "on" if settings.radarr_url and settings.radarr_api_key else "off",
-            "rss": "on" if settings.rss_enabled else "off",
-            "sanitizer": "on" if settings.sanitizer_enabled else "off",
-            "eligible": "on" if settings.eligible_enabled else "off",
-        },
-        lines=[
-            f"level={settings.log_level}",
-            f"tz={settings.timezone_name}",
-            f"sonarr={'on' if settings.sonarr_url and settings.sonarr_api_key else 'off'}",
-            f"radarr={'on' if settings.radarr_url and settings.radarr_api_key else 'off'}",
-            f"rss={'on' if settings.rss_enabled else 'off'}",
-            f"sanitizer={'on' if settings.sanitizer_enabled else 'off'}",
-            f"eligible={'on' if settings.eligible_enabled else 'off'}",
-        ],
+        details=details,
+        lines=lines,
     )
     init_db()
     start_sse_streams()

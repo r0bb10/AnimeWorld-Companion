@@ -110,6 +110,39 @@ def _movie_payload(movie_id: int) -> dict | None:
     }
 
 
+def _filter_text(title: object, alternate_titles: list[str] | None) -> str:
+    return " ".join([str(title or ""), *[str(item) for item in list(alternate_titles or [])]]).casefold()
+
+
+def _mapping_episode_meta(mapping: dict) -> str:
+    episode_count = mapping.get("aw_episode_count")
+    total_episodes = mapping.get("aw_total_episodes")
+    if not episode_count:
+        return ""
+    meta = f"{episode_count} eps"
+    try:
+        if total_episodes and int(total_episodes) > int(episode_count):
+            meta += f" (+{int(total_episodes) - int(episode_count)} specials)"
+    except (TypeError, ValueError):
+        pass
+    return meta
+
+
+def _mapping_links(mapping_list: list[dict]) -> list[dict]:
+    links = []
+    for index, mapping in enumerate(mapping_list, start=1):
+        links.append(
+            {
+                "part": mapping.get("part") or index,
+                "show_part": len(mapping_list) > 1,
+                "aw_link": str(mapping.get("aw_link") or ""),
+                "url": slug_to_url(str(mapping.get("aw_link") or "")),
+                "episode_meta": _mapping_episode_meta(mapping),
+            }
+        )
+    return links
+
+
 def _show_card(show: dict) -> dict:
     mappings = show.get("mappings", {})
     totals = {
@@ -165,28 +198,6 @@ def _show_card(show: dict) -> dict:
         else:
             status_badge = None
 
-        row_links = []
-        for index, mapping in enumerate(mapping_list, start=1):
-            episode_meta = ""
-            episode_count = mapping.get("aw_episode_count")
-            total_episodes = mapping.get("aw_total_episodes")
-            if episode_count:
-                episode_meta = f"{episode_count} eps"
-                try:
-                    if total_episodes and int(total_episodes) > int(episode_count):
-                        episode_meta += f" (+{int(total_episodes) - int(episode_count)} specials)"
-                except (TypeError, ValueError):
-                    pass
-            row_links.append(
-                {
-                    "part": mapping.get("part") or index,
-                    "show_part": len(mapping_list) > 1,
-                    "aw_link": str(mapping.get("aw_link") or ""),
-                    "url": slug_to_url(str(mapping.get("aw_link") or "")),
-                    "episode_meta": episode_meta,
-                }
-            )
-
         rows.append(
             {
                 "item_kind": "show",
@@ -197,7 +208,7 @@ def _show_card(show: dict) -> dict:
                 "ignored": ignored,
                 "aired": aired,
                 "status_badge": status_badge,
-                "links": row_links,
+                "links": _mapping_links(mapping_list),
                 "map_placeholder": "Paste AW link(s) (separate with newline/comma)...",
             }
         )
@@ -217,11 +228,7 @@ def _show_card(show: dict) -> dict:
         "id": int(show["id"]),
         "title": str(show.get("title") or ""),
         "alternate_titles": list(show.get("alternate_titles") or []),
-        "filter_text": " ".join(
-            [str(show.get("title") or ""), *[str(item) for item in list(show.get("alternate_titles") or [])]]
-        ).casefold(),
-        "manager_label": "Sonarr",
-        "manager_badge_class": "badge-sonarr",
+        "filter_text": _filter_text(show.get("title"), show.get("alternate_titles")),
         "meta_label": f"{totals['total']} seasons",
         "status": status,
         "has_unaired": totals["unaired"] > 0,
@@ -237,17 +244,7 @@ def _movie_card(movie: dict) -> dict:
     mapping = movie.get("mapping")
     ignored = bool(movie.get("ignored"))
     released = movie_has_released(movie)
-    row_links = []
-    if mapping:
-        row_links.append(
-            {
-                "part": 1,
-                "show_part": False,
-                "aw_link": str(mapping.get("aw_link") or ""),
-                "url": slug_to_url(str(mapping.get("aw_link") or "")),
-                "episode_meta": "",
-            }
-        )
+    row_links = _mapping_links([mapping]) if mapping else []
     status_badge = {"class": "badge-ignored", "text": "ignored"} if ignored else None
     if not ignored and mapping:
         confidence = mapping.get("confidence_score")
@@ -268,11 +265,7 @@ def _movie_card(movie: dict) -> dict:
         "id": int(movie["id"]),
         "title": str(movie.get("title") or ""),
         "alternate_titles": list(movie.get("alternate_titles") or []),
-        "filter_text": " ".join(
-            [str(movie.get("title") or ""), *[str(item) for item in list(movie.get("alternate_titles") or [])]]
-        ).casefold(),
-        "manager_label": "Radarr",
-        "manager_badge_class": "badge-radarr",
+        "filter_text": _filter_text(movie.get("title"), movie.get("alternate_titles")),
         "meta_label": str(movie.get("year") or ""),
         "status": (
             {"key": "ignored", "label": "ignored"}

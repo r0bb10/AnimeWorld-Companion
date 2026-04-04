@@ -1,6 +1,6 @@
 """Legacy-style dashboard rendering backed by the rebuilt core."""
 
-from datetime import UTC, date, datetime
+from datetime import UTC, datetime
 import json
 from pathlib import Path
 import os
@@ -9,6 +9,7 @@ import time
 from jinja2 import Environment, FileSystemLoader, select_autoescape
 
 from ..core.config import settings
+from ..domain.release_window import has_started, utc_today_iso
 from ..integrations.animeworld_client import AnimeWorldClient
 from ..repositories.db import get_db
 from ..repositories.sync_meta import get_sync_meta
@@ -30,23 +31,11 @@ _jinja = Environment(
 
 
 def season_has_aired(season: dict) -> bool:
-    start_value = (season or {}).get("air_date_start")
-    if not start_value:
-        return False
-    try:
-        return date.fromisoformat(str(start_value)[:10]) <= datetime.now(UTC).date()
-    except ValueError:
-        return False
+    return has_started((season or {}).get("air_date_start"))
 
 
 def movie_has_released(movie: dict) -> bool:
-    release_value = (movie or {}).get("first_aired")
-    if not release_value:
-        return False
-    try:
-        return date.fromisoformat(str(release_value)[:10]) <= datetime.now(UTC).date()
-    except ValueError:
-        return False
+    return has_started((movie or {}).get("first_aired"))
 
 
 def slug_to_url(slug: str) -> str:
@@ -59,7 +48,7 @@ _jinja.globals["slug_to_url"] = slug_to_url
 
 
 def _today_iso() -> str:
-    return datetime.now(UTC).date().isoformat()
+    return utc_today_iso()
 
 
 def count_dashboard_to_map() -> int:

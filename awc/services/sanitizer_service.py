@@ -20,6 +20,7 @@ from ..core.log_events import (
     log_warning,
 )
 from ..core.logging import get_logger
+from ..domain.release_window import has_started
 from ..integrations.animeworld_client import AnimeWorldClient
 from ..repositories.db import get_db
 from ..repositories.mappings import (
@@ -77,10 +78,7 @@ def _is_transient_aw_error(exc: Exception) -> bool:
 
 
 def _has_aired(season: dict) -> bool:
-    start = str((season or {}).get("air_date_start") or "").strip()
-    if not start:
-        return False
-    return start[:10] <= datetime.now(UTC).date().isoformat()
+    return has_started((season or {}).get("air_date_start"))
 
 
 def _season_by_number(show: dict, season_number: int) -> dict | None:

@@ -10,6 +10,7 @@ import threading
 from ..core.config import settings
 from ..core.log_events import format_movie_automap_lines, format_show_automap_lines, log_block, log_info, log_warning
 from ..core.logging import get_logger
+from ..domain.release_window import has_started
 from ..repositories.db import get_db
 from ..repositories.mappings import (
     list_show_mappings,
@@ -380,7 +381,7 @@ def automap_show(show_id: int, season_number: int | None = None, force: bool = F
         if bool(season.get("ignored")):
             ignored_seasons.append(season_number_value)
             continue
-        target_seasons.append({**season, "has_aired": bool(season.get("air_date_start")) and str(season.get("air_date_start"))[:10] <= datetime.now(UTC).date().isoformat()})
+        target_seasons.append({**season, "has_aired": has_started(season.get("air_date_start"))})
     if not target_seasons:
         if ignored_seasons:
             if emit_logs:

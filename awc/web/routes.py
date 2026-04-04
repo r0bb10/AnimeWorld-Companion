@@ -73,6 +73,24 @@ api_router = APIRouter()
 logger = get_logger("routes")
 
 
+def _entity_snapshot(kind: str, item_id: int) -> dict | None:
+    return build_show_snapshot(item_id) if kind == "show" else build_movie_snapshot(item_id)
+
+
+def _entity_title(kind: str, item_id: int, snapshot: dict | None = None) -> str:
+    payload = snapshot or _entity_snapshot(kind, item_id) or {}
+    return str(payload.get("title") or f"{kind}:{item_id}")
+
+
+def _log_entity_block(kind: str, item_id: int, lines: list[str], snapshot: dict | None = None) -> None:
+    log_block(
+        logger,
+        logging.INFO,
+        _entity_title(kind, item_id, snapshot),
+        lines,
+    )
+
+
 def _webhook_log_level(status: str) -> int:
     return logging.INFO if status in {"success", "already_mapped"} else logging.WARNING
 
@@ -80,7 +98,7 @@ def _webhook_log_level(status: str) -> int:
 def _log_webhook_show_result(title: str, show_id: int, result: dict) -> None:
     status = str(result.get("status") or "")
     if status in {"success", "partial", "ambiguous"}:
-        show = build_show_snapshot(show_id) or {}
+        show = _entity_snapshot("show", show_id) or {}
         lines = format_show_automap_lines(show, result.get("mapped_seasons", []), result.get("ambiguous", []))
     elif status == "already_mapped":
         lines = ["already mapped"]
@@ -104,7 +122,7 @@ def _log_webhook_show_result(title: str, show_id: int, result: dict) -> None:
 def _log_webhook_movie_result(title: str, movie_id: int, result: dict) -> None:
     status = str(result.get("status") or "")
     if status == "success":
-        movie = build_movie_snapshot(movie_id) or {}
+        movie = _entity_snapshot("movie", movie_id) or {}
         lines = format_movie_automap_lines(movie.get("mapping"))
     elif status == "already_mapped":
         lines = ["already mapped"]
@@ -138,7 +156,7 @@ def _map_show_season_impl(
     aw_category: str = "",
     linked_with_season: int | None = None,
 ) -> dict:
-    show = build_show_snapshot(show_id)
+    show = _entity_snapshot("show", show_id)
     result = map_show_season(
         show_id=show_id,
         season_number=season_number,
@@ -154,38 +172,23 @@ def _map_show_season_impl(
     if not result["updated"]:
         raise HTTPException(status_code=404, detail=result["reason"])
     mapped_link = result.get("mapping", {}).get("aw_link", aw_link)
-    log_block(
-        logger,
-        logging.INFO,
-        str((show or {}).get("title") or f"show:{show_id}"),
-        [f"S{season_number:02d} manual → {mapped_link}"],
-    )
+    _log_entity_block("show", show_id, [f"S{season_number:02d} manual → {mapped_link}"], show)
     return result
 
 
 def _unmap_show_season_impl(*, show_id: int, season_number: int) -> dict:
-    show = build_show_snapshot(show_id)
+    show = _entity_snapshot("show", show_id)
     result = unmap_show_season(show_id, season_number)
-    log_block(
-        logger,
-        logging.INFO,
-        str((show or {}).get("title") or f"show:{show_id}"),
-        [f"S{season_number:02d} removed"],
-    )
+    _log_entity_block("show", show_id, [f"S{season_number:02d} removed"], show)
     return result
 
 
 def _ignore_show_season_impl(*, show_id: int, season_number: int, ignored: bool) -> dict:
-    show = build_show_snapshot(show_id)
+    show = _entity_snapshot("show", show_id)
     result = ignore_show_season(show_id, season_number, ignored)
     if not result["updated"]:
         raise HTTPException(status_code=404, detail="Season not found")
-    log_block(
-        logger,
-        logging.INFO,
-        str((show or {}).get("title") or f"show:{show_id}"),
-        [f"S{season_number:02d} {'ignored' if ignored else 'unignored'}"],
-    )
+    _log_entity_block("show", show_id, [f"S{season_number:02d} {'ignored' if ignored else 'unignored'}"], show)
     return result
 
 
@@ -197,7 +200,7 @@ def _map_movie_impl(
     aw_status: str = "",
     aw_category: str = "",
 ) -> dict:
-    movie = build_movie_snapshot(movie_id)
+    movie = _entity_snapshot("movie", movie_id)
     result = map_movie(
         movie_id=movie_id,
         aw_link=aw_link,
@@ -208,24 +211,14 @@ def _map_movie_impl(
     if not result["updated"]:
         raise HTTPException(status_code=404, detail=result["reason"])
     mapped_link = result.get("mapping", {}).get("aw_link", aw_link)
-    log_block(
-        logger,
-        logging.INFO,
-        str((movie or {}).get("title") or f"movie:{movie_id}"),
-        [f"manual → {mapped_link}"],
-    )
+    _log_entity_block("movie", movie_id, [f"manual → {mapped_link}"], movie)
     return result
 
 
 def _unmap_movie_impl(*, movie_id: int) -> dict:
-    movie = build_movie_snapshot(movie_id)
+    movie = _entity_snapshot("movie", movie_id)
     result = unmap_movie(movie_id)
-    log_block(
-        logger,
-        logging.INFO,
-        str((movie or {}).get("title") or f"movie:{movie_id}"),
-        ["removed"],
-    )
+    _log_entity_block("movie", movie_id, ["removed"], movie)
     return result
 
 
@@ -233,13 +226,8 @@ def _ignore_movie_impl(*, movie_id: int, ignored: bool) -> dict:
     result = ignore_movie(movie_id, ignored)
     if not result["updated"]:
         raise HTTPException(status_code=404, detail="Movie not found")
-    movie = build_movie_snapshot(movie_id)
-    log_block(
-        logger,
-        logging.INFO,
-        str((movie or {}).get("title") or f"movie:{movie_id}"),
-        ["ignored" if ignored else "unignored"],
-    )
+    movie = _entity_snapshot("movie", movie_id)
+    _log_entity_block("movie", movie_id, ["ignored" if ignored else "unignored"], movie)
     return result
 
 
@@ -374,31 +362,21 @@ def api_unignore_movie(
 
 @api_router.delete("/api/shows/{show_id}", tags=["Mutation"], summary="Delete show", description="Remove a synced show and all related local AWC state.")
 def api_delete_show(show_id: int, _: str = Depends(require_api_key)) -> dict:
-    show = build_show_snapshot(show_id)
+    show = _entity_snapshot("show", show_id)
     result = remove_show(show_id)
     if not result["removed"]:
         raise HTTPException(status_code=404, detail="Show not found")
-    log_block(
-        logger,
-        logging.INFO,
-        str((show or {}).get("title") or f"show:{show_id}"),
-        ["deleted"],
-    )
+    _log_entity_block("show", show_id, ["deleted"], show)
     return result
 
 
 @api_router.delete("/api/movies/{movie_id}", tags=["Mutation"], summary="Delete movie", description="Remove a synced movie and all related local AWC state.")
 def api_delete_movie(movie_id: int, _: str = Depends(require_api_key)) -> dict:
-    movie = build_movie_snapshot(movie_id)
+    movie = _entity_snapshot("movie", movie_id)
     result = remove_movie(movie_id)
     if not result["removed"]:
         raise HTTPException(status_code=404, detail="Movie not found")
-    log_block(
-        logger,
-        logging.INFO,
-        str((movie or {}).get("title") or f"movie:{movie_id}"),
-        ["deleted"],
-    )
+    _log_entity_block("movie", movie_id, ["deleted"], movie)
     return result
 
 
@@ -511,7 +489,7 @@ def api_shows(limit: int = 100, _: str = Depends(require_api_key)) -> list[dict]
 
 @api_router.get("/api/shows/{show_id}", tags=["Catalog"], summary="Get show", description="Return one synced show with seasons, mappings, and alternate titles.")
 def api_show_detail(show_id: int, _: str = Depends(require_api_key)) -> dict:
-    show = build_show_snapshot(show_id)
+    show = _entity_snapshot("show", show_id)
     if not show:
         raise HTTPException(status_code=404, detail="Show not found")
     return show
@@ -523,7 +501,7 @@ def api_movies(limit: int = 100, _: str = Depends(require_api_key)) -> list[dict
 
 @api_router.get("/api/movies/{movie_id}", tags=["Catalog"], summary="Get movie", description="Return one synced movie with mapping and alternate titles.")
 def api_movie_detail(movie_id: int, _: str = Depends(require_api_key)) -> dict:
-    movie = build_movie_snapshot(movie_id)
+    movie = _entity_snapshot("movie", movie_id)
     if not movie:
         raise HTTPException(status_code=404, detail="Movie not found")
     return movie

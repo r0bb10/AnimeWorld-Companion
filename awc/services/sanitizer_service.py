@@ -36,6 +36,7 @@ from ..repositories.movies import get_movie_detail
 from ..repositories.shows import get_show_detail
 from .automap_language import resolve_movie_language_preference, resolve_show_language_preference
 from .automap_scoring import calculate_movie_confidence, calculate_show_confidence, parse_italian_date
+from .events_service import publish_library_card_changed, publish_library_stats_changed
 
 _state_lock = threading.Lock()
 logger = get_logger("sanitizer")
@@ -149,6 +150,11 @@ def _touch_movie_mapping(row_id: int, now: str) -> None:
         )
 
 
+def _publish_library_change(kind: str, item_id: int) -> None:
+    publish_library_card_changed(kind, item_id)
+    publish_library_stats_changed()
+
+
 def _refresh_show_mapping_metadata(show: dict, season: dict, row: dict, slug_metadata: dict, now: str) -> bool:
     candidate = _candidate_from_slug_metadata(
         metadata=slug_metadata,
@@ -196,6 +202,7 @@ def _refresh_show_mapping_metadata(show: dict, season: dict, row: dict, slug_met
     is_pre = factors_are_preaired(factors)
     changed = candidate["aw_link"] != row["aw_link"] or was_pre != is_pre
     if changed:
+        _publish_library_change("show", int(row["show_id"]))
         lines = format_show_automap_lines(show, [int(row["season_number"])])
         if candidate["aw_link"] != row["aw_link"]:
             lines.append(
@@ -254,6 +261,7 @@ def _refresh_movie_mapping_metadata(movie: dict, row: dict, slug_metadata: dict,
         )
     changed = candidate["aw_link"] != row["aw_link"]
     if changed:
+        _publish_library_change("movie", int(row["movie_id"]))
         lines = format_movie_automap_lines(
             {
                 "aw_link": candidate["aw_link"],
@@ -470,6 +478,7 @@ def sanitize_links_once() -> dict:
                 with get_db(write=True) as conn:
                     conn.execute("DELETE FROM aw_show_mappings WHERE id = ?", (row["id"],))
                 queue_show_sanitizer_retry(int(row["show_id"]), int(row["season_number"]))
+                _publish_library_change("show", int(row["show_id"]))
                 log_warning(
                     logger,
                     "sanitizer.show.removed",
@@ -535,6 +544,7 @@ def sanitize_links_once() -> dict:
                 with get_db(write=True) as conn:
                     conn.execute("DELETE FROM aw_movie_mappings WHERE id = ?", (row["id"],))
                 queue_movie_sanitizer_retry(int(row["movie_id"]))
+                _publish_library_change("movie", int(row["movie_id"]))
                 log_warning(
                     logger,
                     "sanitizer.movie.removed",

@@ -48,7 +48,12 @@ from ..services.download_service import (
     resume_download,
 )
 from ..services.discovery_service import discover_movie, discover_show, search_animeworld
-from ..services.events_service import stream_events
+from ..services.events_service import (
+    publish_library_card_changed,
+    publish_library_card_removed,
+    publish_library_stats_changed,
+    stream_events,
+)
 from ..services.health_service import build_health_report
 from ..services.log_service import build_log_snapshot
 from ..services.sanitizer_service import sanitizer_status, start_link_sanitizer
@@ -89,6 +94,11 @@ def _log_entity_block(kind: str, item_id: int, lines: list[str], snapshot: dict 
         _entity_title(kind, item_id, snapshot),
         lines,
     )
+
+
+def _publish_library_change(kind: str, item_id: int) -> None:
+    publish_library_card_changed(kind, item_id)
+    publish_library_stats_changed()
 
 
 def _webhook_log_level(status: str) -> int:
@@ -173,6 +183,7 @@ def _map_show_season_impl(
         raise HTTPException(status_code=404, detail=result["reason"])
     mapped_link = result.get("mapping", {}).get("aw_link", aw_link)
     _log_entity_block("show", show_id, [f"S{season_number:02d} manual → {mapped_link}"], show)
+    _publish_library_change("show", show_id)
     return result
 
 
@@ -180,6 +191,8 @@ def _unmap_show_season_impl(*, show_id: int, season_number: int) -> dict:
     show = _entity_snapshot("show", show_id)
     result = unmap_show_season(show_id, season_number)
     _log_entity_block("show", show_id, [f"S{season_number:02d} removed"], show)
+    if result.get("updated"):
+        _publish_library_change("show", show_id)
     return result
 
 
@@ -189,6 +202,7 @@ def _ignore_show_season_impl(*, show_id: int, season_number: int, ignored: bool)
     if not result["updated"]:
         raise HTTPException(status_code=404, detail="Season not found")
     _log_entity_block("show", show_id, [f"S{season_number:02d} {'ignored' if ignored else 'unignored'}"], show)
+    _publish_library_change("show", show_id)
     return result
 
 
@@ -212,6 +226,7 @@ def _map_movie_impl(
         raise HTTPException(status_code=404, detail=result["reason"])
     mapped_link = result.get("mapping", {}).get("aw_link", aw_link)
     _log_entity_block("movie", movie_id, [f"manual → {mapped_link}"], movie)
+    _publish_library_change("movie", movie_id)
     return result
 
 
@@ -219,6 +234,8 @@ def _unmap_movie_impl(*, movie_id: int) -> dict:
     movie = _entity_snapshot("movie", movie_id)
     result = unmap_movie(movie_id)
     _log_entity_block("movie", movie_id, ["removed"], movie)
+    if result.get("updated"):
+        _publish_library_change("movie", movie_id)
     return result
 
 
@@ -228,6 +245,7 @@ def _ignore_movie_impl(*, movie_id: int, ignored: bool) -> dict:
         raise HTTPException(status_code=404, detail="Movie not found")
     movie = _entity_snapshot("movie", movie_id)
     _log_entity_block("movie", movie_id, ["ignored" if ignored else "unignored"], movie)
+    _publish_library_change("movie", movie_id)
     return result
 
 
@@ -367,6 +385,8 @@ def api_delete_show(show_id: int, _: str = Depends(require_api_key)) -> dict:
     if not result["removed"]:
         raise HTTPException(status_code=404, detail="Show not found")
     _log_entity_block("show", show_id, ["deleted"], show)
+    publish_library_card_removed("show", show_id)
+    publish_library_stats_changed()
     return result
 
 
@@ -377,6 +397,8 @@ def api_delete_movie(movie_id: int, _: str = Depends(require_api_key)) -> dict:
     if not result["removed"]:
         raise HTTPException(status_code=404, detail="Movie not found")
     _log_entity_block("movie", movie_id, ["deleted"], movie)
+    publish_library_card_removed("movie", movie_id)
+    publish_library_stats_changed()
     return result
 
 
@@ -479,6 +501,7 @@ def api_unmap_all_mappings(
         f"Bulk unmap: cleared {result.get('shows', {}).get('shows', 0)} shows and {result.get('movies', {}).get('movies', 0)} movies.",
         details=result,
     )
+    publish_library_stats_changed()
     return result
 
 

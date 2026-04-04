@@ -23,6 +23,7 @@ from ..repositories.shows import get_show_detail
 from .automap_candidates import discover_candidates_for_titles
 from .automap_language import resolve_movie_language_preference, resolve_show_language_preference
 from .automap_scoring import calculate_movie_confidence, calculate_show_confidence
+from .events_service import publish_library_batch, publish_library_card_changed, publish_library_stats_changed
 
 _automap_lock = threading.Lock()
 logger = get_logger("automap")
@@ -43,6 +44,25 @@ def automap_status() -> dict:
 def _set_state(**updates) -> None:
     with _automap_lock:
         _automap_state.update(updates)
+
+
+def _publish_library_change(kind: str, item_id: int) -> None:
+    publish_library_card_changed(kind, item_id)
+    publish_library_stats_changed()
+
+
+def _summarize_automap_all(result: dict) -> dict:
+    show_results = list(result.get("shows") or [])
+    movie_results = list(result.get("movies") or [])
+    return {
+        "shows": len(show_results),
+        "movies": len(movie_results),
+        "mapped_show_seasons": sum(len(item.get("mapped_seasons") or []) for item in show_results),
+        "mapped_movies": sum(1 for item in movie_results if item.get("status") == "success"),
+        "ambiguous_shows": sum(1 for item in show_results if item.get("status") in {"ambiguous", "partial"}),
+        "not_found_shows": sum(1 for item in show_results if item.get("status") == "not_found"),
+        "not_found_movies": sum(1 for item in movie_results if item.get("status") == "not_found"),
+    }
 
 
 def _show_alternate_titles(show: dict) -> list[str]:
@@ -319,7 +339,9 @@ def automap_movie(movie_id: int, force: bool = False, *, emit_logs: bool = True)
 
     if not candidates or candidates[0]["confidence_score"] < settings.automap_movie_confidence_threshold:
         if force:
-            remove_movie_mapping(movie_id)
+            removed = remove_movie_mapping(movie_id)
+            if removed:
+                _publish_library_change("movie", movie_id)
         if emit_logs:
             log_block(
                 logger,
@@ -343,6 +365,7 @@ def automap_movie(movie_id: int, force: bool = False, *, emit_logs: bool = True)
         confidence_score=best["confidence_score"],
         confidence_factors=json.dumps(best["confidence_factors"]),
     )
+    _publish_library_change("movie", movie_id)
     if emit_logs:
         log_block(
             logger,
@@ -533,6 +556,8 @@ def automap_show(show_id: int, season_number: int | None = None, force: bool = F
         status = "already_mapped" if any(list_show_mappings(show_id, season["season_number"]) for season in target_seasons) else "not_found"
 
     refreshed_show = get_show_detail(show_id) if mapped_seasons else show
+    if mapped_seasons:
+        _publish_library_change("show", show_id)
     if emit_logs:
         if status == "success":
             log_block(
@@ -603,6 +628,21 @@ def _run_background(target, *args, **kwargs) -> dict:
         try:
             result = target(*args, **kwargs)
             _set_state(last_result=result)
+            if target is automap_all:
+                summary = _summarize_automap_all(result)
+                log_info(
+                    logger,
+                    "automap.library.finished",
+                    "Library automap completed",
+                    lines=[
+                        f"shows={summary['shows']}",
+                        f"movies={summary['movies']}",
+                        f"mapped_show_seasons={summary['mapped_show_seasons']}",
+                        f"mapped_movies={summary['mapped_movies']}",
+                    ],
+                    details=summary,
+                )
+                publish_library_batch("automap", "finished", **summary)
         except Exception as exc:
             _set_state(last_error=str(exc))
             raise
@@ -670,4 +710,12 @@ def automap_all(force: bool = False) -> dict:
 
 
 def start_automap_all(force: bool = False) -> dict:
+    log_info(
+        logger,
+        "automap.library.started",
+        "Library automap started",
+        lines=[f"force={'true' if force else 'false'}"],
+        details={"force": force},
+    )
+    publish_library_batch("automap", "started", force=force)
     return _run_background(automap_all, force)

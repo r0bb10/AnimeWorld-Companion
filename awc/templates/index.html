@@ -412,8 +412,6 @@ async function _runButtonAction(btn,label,work){
   return true;
 }
 
-function _fd(obj){const f=new FormData();Object.entries(obj).forEach(([k,v])=>f.append(k,v));return f;}
-
 async function syncManager(btn,manager){
   const label=manager==='radarr'?'Sync Radarr':'Sync Sonarr';
   btn.disabled=true;btn.textContent='Syncing...';
@@ -427,6 +425,65 @@ async function syncManager(btn,manager){
 }
 
 let _automapLaunched=false;
+let _pendingCardRefresh=new Map();
+let _pendingCardRemoval=new Map();
+let _libraryStatsDirty=false;
+let _libraryFlushTimer=null;
+
+function _cardEventKey(kind,id){
+  return kind+':'+id;
+}
+
+function _queueLibraryCardChanged(kind,id){
+  const key=_cardEventKey(kind,id);
+  _pendingCardRemoval.delete(key);
+  _pendingCardRefresh.set(key,{kind,id});
+  _libraryStatsDirty=true;
+  _scheduleLibraryFlush();
+}
+
+function _queueLibraryCardRemoved(kind,id){
+  const key=_cardEventKey(kind,id);
+  _pendingCardRefresh.delete(key);
+  _pendingCardRemoval.set(key,{kind,id});
+  _libraryStatsDirty=true;
+  _scheduleLibraryFlush();
+}
+
+function _queueLibraryStatsChanged(){
+  _libraryStatsDirty=true;
+  _scheduleLibraryFlush();
+}
+
+function _scheduleLibraryFlush(){
+  if(_libraryFlushTimer)return;
+  _libraryFlushTimer=setTimeout(_flushLibraryEvents,300);
+}
+
+async function _flushLibraryEvents(){
+  _libraryFlushTimer=null;
+  const removals=[..._pendingCardRemoval.values()];
+  const refreshes=[..._pendingCardRefresh.values()];
+  const statsDirty=_libraryStatsDirty;
+  _pendingCardRemoval.clear();
+  _pendingCardRefresh.clear();
+  _libraryStatsDirty=false;
+
+  for(const item of removals){
+    const current=document.querySelector(_cardSelector(item.kind,item.id));
+    if(current)current.remove();
+  }
+  for(const item of refreshes){
+    if(!document.querySelector(_cardSelector(item.kind,item.id)))continue;
+    try{await _refreshCardFragment(item.kind,item.id);}catch(e){}
+  }
+  if(statsDirty||removals.length||refreshes.length){
+    try{await _refreshStatsFragment();}catch(e){}
+  }
+  _ensureEmptyState();
+  filterShows();
+}
+
 async function automapAll(btn){
   if(!confirm('This will search AnimeWorld for ALL unmapped seasons.\nIt may take several minutes. Continue?'))return;
   btn.disabled=true;btn.textContent='Auto-mapping...';
@@ -933,6 +990,29 @@ if(window.EventSource){
     });
     es.addEventListener('heartbeat', function(ev){
       try{const payload=JSON.parse(ev.data); renderHeartbeatPayload(payload);}catch(e){}
+    });
+    es.addEventListener('library_card_changed', function(ev){
+      try{
+        const payload=JSON.parse(ev.data);
+        _queueLibraryCardChanged(payload.kind,payload.id);
+      }catch(e){}
+    });
+    es.addEventListener('library_card_removed', function(ev){
+      try{
+        const payload=JSON.parse(ev.data);
+        _queueLibraryCardRemoved(payload.kind,payload.id);
+      }catch(e){}
+    });
+    es.addEventListener('library_stats_changed', function(){
+      _queueLibraryStatsChanged();
+    });
+    es.addEventListener('library_batch', function(ev){
+      try{
+        const payload=JSON.parse(ev.data);
+        if(payload.name==='automap'&&payload.status==='finished'){
+          _queueLibraryStatsChanged();
+        }
+      }catch(e){}
     });
     es.onerror=function(err){
       // leave polling as a fallback; console for debugging

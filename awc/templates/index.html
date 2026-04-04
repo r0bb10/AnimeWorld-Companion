@@ -373,6 +373,45 @@ function _btnErr(btn,label){
   setTimeout(()=>{btn.textContent=label;btn.style.background='';btn.disabled=false;},2000);
 }
 
+function _mutedHtml(text){
+  return '<span style="color:#8b949e">'+text+'</span>';
+}
+
+function _errorHtml(text){
+  return '<span style="color:#f85149">'+text+'</span>';
+}
+
+function _panelSet(panel,html){
+  if(panel)panel.innerHTML=html;
+}
+
+async function _fetchOk(url,options){
+  const r=await fetch(url,options);
+  if(!r.ok)throw new Error('request failed');
+  return r;
+}
+
+async function _fetchJson(url,options){
+  const r=await _fetchOk(url,options);
+  return r.json();
+}
+
+async function _runButtonAction(btn,label,work){
+  btn.disabled=true;
+  try{
+    await work();
+  }catch(e){
+    _btnErr(btn,label);
+    return false;
+  }
+  btn.disabled=false;
+  if(btn.textContent==='Error'){
+    btn.textContent=label;
+    btn.style.background='';
+  }
+  return true;
+}
+
 function _fd(obj){const f=new FormData();Object.entries(obj).forEach(([k,v])=>f.append(k,v));return f;}
 
 async function syncManager(btn,manager){
@@ -437,21 +476,17 @@ function _deleteEndpoint(kind,id){
 }
 
 async function unmapItem(kind,id,seasonNum,btn){
-  btn.disabled=true;
-  try{
-    const r=await fetch(_unmapEndpoint(kind,id,seasonNum),{method:'POST',headers:_kh()});
-    if(!r.ok)throw new Error('unmap failed');
+  await _runButtonAction(btn,'Remove',async()=>{
+    await _fetchOk(_unmapEndpoint(kind,id,seasonNum),{method:'POST',headers:_kh()});
     await _refreshDashboardFragment(kind,id,false);
-  }catch(e){_btnErr(btn,'Remove');}
+  });
 }
 
 async function setIgnored(kind,id,seasonNum,ignored,btn){
-  btn.disabled=true;
-  try{
-    const r=await fetch(_ignoreEndpoint(kind,id,seasonNum,ignored),{method:'POST',headers:_kh()});
-    if(!r.ok)throw new Error('ignore failed');
+  await _runButtonAction(btn,ignored?'Ignore':'Unignore',async()=>{
+    await _fetchOk(_ignoreEndpoint(kind,id,seasonNum,ignored),{method:'POST',headers:_kh()});
     await _refreshDashboardFragment(kind,id,false);
-  }catch(e){_btnErr(btn,ignored?'Ignore':'Unignore');}
+  });
 }
 
 async function mapItem(evt,kind,id,seasonNum){
@@ -463,55 +498,52 @@ async function mapItem(evt,kind,id,seasonNum){
   if(!link)return;
   submitBtn.disabled=true;submitBtn.textContent='Mapping...';
   try{
-    const r=await fetch(_mapEndpoint(kind,id,seasonNum,link),{method:'POST',headers:_kh()});
-    const d=await r.json();
+    const d=await _fetchJson(_mapEndpoint(kind,id,seasonNum,link),{method:'POST',headers:_kh()});
     if(!(d.updated||d.status==='ok')){_btnErr(submitBtn,'Map');return;}
     await _refreshDashboardFragment(kind,id,false);
+    submitBtn.disabled=false;
+    submitBtn.textContent='Map';
   }catch(e){_btnErr(submitBtn,'Map');}
 }
 
 async function deleteItem(kind,id,title,btn){
   if(!confirm('Delete '+title+'? '+(kind==='show'?'Sonarr':'Radarr')+' sync will re-add it.'))return;
-  btn.disabled=true;
-  try{
-    const r=await fetch(_deleteEndpoint(kind,id),{method:'DELETE',headers:_kh()});
-    if(!r.ok)throw new Error('delete failed');
+  await _runButtonAction(btn,kind==='show'?'Delete Show':'Delete Movie',async()=>{
+    await _fetchOk(_deleteEndpoint(kind,id),{method:'DELETE',headers:_kh()});
     await _refreshDashboardFragment(kind,id,true);
-  }catch(e){_btnErr(btn,kind==='show'?'Delete Show':'Delete Movie');}
+  });
 }
 
 async function discoverItem(kind,id,btn){
   const panel=document.getElementById(_panelId(kind,id));
   if(panel.style.display==='block'){panel.style.display='none';return;}
   panel.style.display='block';
-  panel.innerHTML=_statusLine('Searching AnimeWorld...','discover');
+  _panelSet(panel,_statusLine('Searching AnimeWorld...','discover'));
   btn.disabled=true;
   try{
-    const r=await fetch(_discoverEndpoint(kind,id));
-    const data=await r.json();
+    const data=await _fetchJson(_discoverEndpoint(kind,id));
     const links=(data.links||data.results||[]).map(l=>({link:l.link||l.url||_slugToUrl(l.aw_link||l.slug||''),eps:l.eps||l.aw_episode_count||0}));
-    if(!links||links.length===0){panel.innerHTML='<span style="color:#8b949e">No results found</span>';return;}
+    if(!links||links.length===0){_panelSet(panel,_mutedHtml('No results found'));return;}
     let html='';
     for(const l of links){
       html+=_discoverRow(l.link,l.eps+' eps',l.link);
     }
-    panel.innerHTML=html;
+    _panelSet(panel,html);
   }catch(e){
-    panel.innerHTML='<span style="color:#f85149">Error: '+e.message+'</span>';
+    _panelSet(panel,_errorHtml('Error: '+e.message));
   }finally{btn.disabled=false;}
 }
 
 async function automapItem(kind,id,btn){
   const panel=document.getElementById(_panelId(kind,id));
   panel.style.display='block';
-  panel.innerHTML=_statusLine('Running automap with confidence scoring...','automap');
+  _panelSet(panel,_statusLine('Running automap with confidence scoring...','automap'));
   btn.disabled=true;
   try{
-    const r=await fetch(_automapEndpoint(kind,id),{method:'POST',headers:_kh()});
-    const data=await r.json();
+    const data=await _fetchJson(_automapEndpoint(kind,id),{method:'POST',headers:_kh()});
     if(kind==='movie'){
       if(data.status==='success'){
-        panel.innerHTML='<div class="automap-note-title success">Successfully mapped!</div><div class="automap-note-link"><a href="'+_slugToUrl(data.mapping?.aw_link||'')+'" target="_blank">'+_slugToUrl(data.mapping?.aw_link||'')+'</a></div>';
+        _panelSet(panel,'<div class="automap-note-title success">Successfully mapped!</div><div class="automap-note-link"><a href="'+_slugToUrl(data.mapping?.aw_link||'')+'" target="_blank">'+_slugToUrl(data.mapping?.aw_link||'')+'</a></div>');
         await _refreshDashboardFragment(kind,id,false);
       }else if(data.status==='ambiguous'){
         let html='<div class="automap-note-title">Multiple high-confidence candidates found!</div><div class="automap-note-subtitle">Please use Discover AW Links and manually copy and paste the correct one.</div>';
@@ -520,19 +552,19 @@ async function automapItem(kind,id,btn){
           const meta=((c.aw_episode_count||0)+' eps | confidence: '+(((c.confidence_score||0)*100).toFixed(1))+'%');
           html+=_discoverRow(url,meta,url);
         }
-        panel.innerHTML=html;
+        _panelSet(panel,html);
       }else if(data.status==='not_found'){
-        panel.innerHTML='<span style="color:#8b949e">No match found on AnimeWorld</span>';
+        _panelSet(panel,_mutedHtml('No match found on AnimeWorld'));
       }else if(data.status==='already_mapped'){
-        panel.innerHTML='<span style="color:#8b949e">Already mapped</span>';
+        _panelSet(panel,_mutedHtml('Already mapped'));
       }else{
-        panel.innerHTML='<span style="color:#f85149">'+(data.message||'Error')+'</span>';
+        _panelSet(panel,_errorHtml(data.message||'Error'));
       }
       return;
     }
     await renderAutomapPanel(id,data);
   }catch(e){
-    panel.innerHTML='<span style="color:#f85149">Error: '+e.message+'</span>';
+    _panelSet(panel,_errorHtml('Error: '+e.message));
   }finally{btn.disabled=false;}
 }
 
@@ -574,7 +606,7 @@ async function renderAutomapPanel(showId,data){
       const mapUrl=_slugToUrl(data.mapping.aw_link);
       html+='<div class="automap-note-link"><a href="'+mapUrl+'" target="_blank">'+mapUrl+'</a></div>';
     }
-    panel.innerHTML=html;
+    _panelSet(panel,html);
     await _refreshDashboardFragment('show',showId,false);
   }else if(data.status==='ambiguous'){
     let html='<div class="automap-note-title">Multiple high-confidence candidates found!</div>';
@@ -588,7 +620,7 @@ async function renderAutomapPanel(showId,data){
         html+=_discoverRow(_slugToUrl(c.aw_link||''),meta,c.aw_link,'#d29922');
       }
     }
-    panel.innerHTML=html;
+    _panelSet(panel,html);
   }else if(data.status==='partial'){
     let html='<div class="automap-note-title">Partially mapped</div>';
     html+='<div class="automap-note-subtitle">Some seasons were mapped automatically, but a few still need manual review.</div>';
@@ -602,16 +634,16 @@ async function renderAutomapPanel(showId,data){
     if(meta){
       html+='<div class="automap-note-meta">'+meta+'</div>';
     }
-    panel.innerHTML=html;
+    _panelSet(panel,html);
     await _refreshDashboardFragment('show',showId,false);
   }else if(data.status==='not_found'){
-    panel.innerHTML='<span style="color:#8b949e">No high-confidence matches found on AnimeWorld</span>';
+    _panelSet(panel,_mutedHtml('No high-confidence matches found on AnimeWorld'));
   }else if(data.status==='already_mapped'){
-    panel.innerHTML='<span style="color:#8b949e">All seasons already mapped</span>';
+    _panelSet(panel,_mutedHtml('All seasons already mapped'));
   }else if(data.status==='error'){
-    panel.innerHTML='<span style="color:#f85149">Error: '+(data.message||'Unknown error')+'</span>';
+    _panelSet(panel,_errorHtml('Error: '+(data.message||'Unknown error')));
   }else{
-    panel.innerHTML='<span style="color:#8b949e">'+data.message+'</span>';
+    _panelSet(panel,_mutedHtml(data.message));
   }
 }
 

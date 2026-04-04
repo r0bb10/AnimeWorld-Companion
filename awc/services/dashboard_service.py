@@ -38,11 +38,22 @@ def season_has_aired(season: dict) -> bool:
         return False
 
 
+def movie_has_released(movie: dict) -> bool:
+    release_value = (movie or {}).get("first_aired")
+    if not release_value:
+        return False
+    try:
+        return date.fromisoformat(str(release_value)[:10]) <= datetime.now(UTC).date()
+    except ValueError:
+        return False
+
+
 def slug_to_url(slug: str) -> str:
     return AnimeWorldClient().slug_to_url(slug)
 
 
 _jinja.globals["season_has_aired"] = season_has_aired
+_jinja.globals["movie_has_released"] = movie_has_released
 _jinja.globals["slug_to_url"] = slug_to_url
 
 
@@ -205,6 +216,7 @@ def _show_card(show: dict) -> dict:
 def _movie_card(movie: dict) -> dict:
     mapping = movie.get("mapping")
     ignored = bool(movie.get("ignored"))
+    released = movie_has_released(movie)
     row_links = []
     if mapping:
         row_links.append(
@@ -229,6 +241,8 @@ def _movie_card(movie: dict) -> dict:
             if mapping.get("mapping_type") == "auto" and confidence:
                 text += f" {int(confidence * 100)}%"
             status_badge = {"class": f"badge-{mapping.get('mapping_type')}", "text": text}
+    elif not ignored and not released:
+        status_badge = {"class": "badge-unaired", "text": "unaired"}
     return {
         "kind": "movie",
         "id": int(movie["id"]),
@@ -243,7 +257,7 @@ def _movie_card(movie: dict) -> dict:
             else {"key": "mapped", "label": "all mapped"} if mapping
             else {"key": "unmapped", "label": "unmapped"}
         ),
-        "has_unaired": False,
+        "has_unaired": not released,
         "rows": [
             {
                 "item_kind": "movie",
@@ -252,7 +266,7 @@ def _movie_card(movie: dict) -> dict:
                 "label": "Film",
                 "mapped": bool(mapping),
                 "ignored": ignored,
-                "aired": True,
+                "aired": released,
                 "status_badge": status_badge,
                 "links": row_links,
                 "map_placeholder": "Paste AW movie link...",
@@ -335,8 +349,7 @@ def build_dashboard_context() -> dict:
     library_items = [_show_card(item) for item in show_items] + [_movie_card(item) for item in movie_items]
     library_items.sort(key=lambda item: (str(item.get("title") or "").casefold(), item.get("kind") != "show"))
 
-    mapped_count = 0
-    unmapped_count = 0
+    to_map_count = 0
     for show in show_items:
         for season in show.get("seasons", []):
             season_number = int(season.get("season_number", 0))
@@ -345,22 +358,18 @@ def build_dashboard_context() -> dict:
             ignored = bool(season.get("ignored"))
             aired = season_has_aired(season)
             has_mapping = bool(show.get("mappings", {}).get(season_number))
-            if aired:
-                if ignored:
-                    continue
-                if has_mapping:
-                    mapped_count += 1
-                else:
-                    unmapped_count += 1
-            elif has_mapping:
-                mapped_count += 1
+            if aired and not ignored and not has_mapping:
+                to_map_count += 1
+
+    for movie in movie_items:
+        if movie_has_released(movie) and not movie.get("ignored") and not movie.get("mapping"):
+            to_map_count += 1
 
     return {
         "shows": show_items,
         "movies": movie_items,
         "library_items": library_items,
-        "mapped_count": mapped_count,
-        "unmapped_count": unmapped_count,
+        "to_map_count": to_map_count,
         "automap_running": bool(automap_status().get("running")),
         "app_version": os.getenv("APP_VERSION", ""),
         "sonarr_sync_in_progress": bool(sync_status().get("running")),

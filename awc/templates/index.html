@@ -225,7 +225,7 @@ a{color:#58a6ff;text-decoration:none}a:hover{text-decoration:underline}
 
 <div class="stats">
   <span>{{ shows|length }}</span> shows{% if movies is defined and movies|length > 0 %} &middot; <span>{{ movies|length }}</span> movies{% endif %} &middot;
-  mapped <span id="stat-mapped">{{ mapped_count + (movies|selectattr('mapping')|list|length if movies is defined else 0) }}</span>/<span id="stat-total">{{ mapped_count + unmapped_count + (movies|length if movies is defined else 0) }}</span>
+  to map <span id="stat-to-map">{{ to_map_count }}</span>
 </div>
   
   <div class="filter-bar">
@@ -406,25 +406,16 @@ function _refreshCardBadge(card){
   }
 }
 
-function _refreshGlobalStats(){
-  let mapped=0,total=0;
+function _refreshToMapStat(){
+  let toMap=0;
   document.querySelectorAll('.season-row').forEach(r=>{
-    if(r.dataset.ignored==='true')return;
     const aired=r.dataset.aired==='true';
     const isMapped=r.dataset.mapped==='true';
-    if(aired){total++;if(isMapped)mapped++;}
-    else if(isMapped){total++;mapped++;}
+    const isIgnored=r.dataset.ignored==='true';
+    if(aired && !isMapped && !isIgnored)toMap++;
   });
-  // Count movie cards
-  document.querySelectorAll('.card[data-type="movie"]').forEach(c=>{
-    if(c.dataset.status==='ignored')return;
-    total++;
-    if(c.dataset.status==='mapped')mapped++;
-  });
-  const sm=document.getElementById('stat-mapped');
-  const st=document.getElementById('stat-total');
-  if(sm)sm.textContent=mapped;
-  if(st)st.textContent=total;
+  const stat=document.getElementById('stat-to-map');
+  if(stat)stat.textContent=toMap;
 }
 
 function _btnErr(btn,label){
@@ -551,7 +542,7 @@ async function unmapItem(kind,id,seasonNum,btn){
     row.querySelector('.season-link').innerHTML=row.dataset.ignored==='true'?'':_mapFormHtml(kind,id,seasonNum);
     row.querySelector('.season-actions').innerHTML=_ignoreButtonHtml(kind,id,seasonNum,row.dataset.ignored==='true');
     _refreshCardBadge(row.closest('.card'));
-    _refreshGlobalStats();
+    _refreshToMapStat();
   }catch(e){_btnErr(btn,'Remove');}
 }
 
@@ -569,7 +560,7 @@ async function setIgnored(kind,id,seasonNum,ignored,btn){
     row.querySelector('.season-link').innerHTML=ignored?'':_mapFormHtml(kind,id,seasonNum);
     row.querySelector('.season-actions').innerHTML=_ignoreButtonHtml(kind,id,seasonNum,ignored);
     _refreshCardBadge(row.closest('.card'));
-    _refreshGlobalStats();
+    _refreshToMapStat();
   }catch(e){_btnErr(btn,ignored?'Ignore':'Unignore');}
 }
 
@@ -598,7 +589,7 @@ async function mapItem(evt,kind,id,seasonNum){
     row.querySelector('.season-link').innerHTML=_buildLinkRows(mappings);
     row.querySelector('.season-actions').innerHTML=_removeButtonHtml(kind,id,seasonNum);
     _refreshCardBadge(row.closest('.card'));
-    _refreshGlobalStats();
+    _refreshToMapStat();
   }catch(e){_btnErr(submitBtn,'Map');}
 }
 
@@ -609,7 +600,7 @@ async function deleteItem(kind,id,title,btn){
     const r=await fetch(_deleteEndpoint(kind,id),{method:'DELETE',headers:_kh()});
     if(!r.ok)throw new Error('delete failed');
     btn.closest('.card').remove();
-    _refreshGlobalStats();
+    _refreshToMapStat();
   }catch(e){_btnErr(btn,kind==='show'?'Delete Show':'Delete Movie');}
 }
 

@@ -115,6 +115,18 @@ a{color:#58a6ff;text-decoration:none}a:hover{text-decoration:underline}
 .dl-table th:last-child,.dl-table td:last-child{border-right:none}
 .dl-pct{font-variant-numeric:tabular-nums;text-align:center;color:#58a6ff;font-weight:600}
 
+.app-modal-backdrop{position:fixed;inset:0;background:rgba(1,4,9,.72);backdrop-filter:blur(3px);display:none;align-items:center;justify-content:center;z-index:3000;padding:20px}
+.app-modal{width:min(560px,100%);background:#161b22;border:1px solid #30363d;border-radius:14px;box-shadow:0 18px 42px rgba(0,0,0,.38);overflow:hidden}
+.app-modal-head{padding:16px 18px 10px;border-bottom:1px solid #21262d;display:flex;align-items:center;justify-content:space-between;gap:12px}
+.app-modal-title{margin:0;font-size:18px;font-weight:700}
+.app-modal-close{display:inline-flex;align-items:center;justify-content:center;width:30px;height:30px;border:none;background:transparent;color:#8b949e;font-size:20px;line-height:1;cursor:pointer;border-radius:8px}
+.app-modal-close:hover{background:#21262d;color:#f0f6fc}
+.app-modal-body{padding:16px 18px;color:#c9d1d9;line-height:1.5}
+.app-modal-body p{margin:0 0 10px}
+.app-modal-actions{display:flex;justify-content:flex-end;gap:10px;padding:14px 18px 18px;border-top:1px solid #21262d;flex-wrap:nowrap}
+.app-modal-actions .btn{min-width:0;white-space:nowrap}
+.app-modal-note{color:#8b949e;font-size:12px}
+
 .alt-titles{font-size:11px;color:#8b949e;margin-top:2px}
 .season-unaired{opacity:0.4}
 .badge-unaired{background:#30363d;color:#8b949e}
@@ -192,15 +204,15 @@ a{color:#58a6ff;text-decoration:none}a:hover{text-decoration:underline}
   <div class="header-actions">
     <button class="btn btn-sonarr" id="sync-sonarr-btn" onclick="syncManager(this,'sonarr')">Sync Sonarr</button>
     <button class="btn btn-radarr" id="sync-radarr-btn" onclick="syncManager(this,'radarr')">Sync Radarr</button>
-    <button class="btn btn-primary" id="automap-all-btn" onclick="automapAll(this)" {% if automap_running %}disabled{% endif %}>
-      {{ "Auto-mapping..." if automap_running else "Automap Library" }}
+    <button class="btn btn-primary" id="automap-all-btn" onclick="openAutomapModal()" {% if automap_running %}disabled{% endif %}>
+      {{ "Auto-mapping..." if automap_running else "Automap" }}
     </button>
-    <button class="btn btn-danger" onclick="restartCompanion(this)">Restart</button>
+    <button class="btn btn-danger" id="restart-btn" onclick="openRestartModal()">Restart</button>
   </div>
 </div>
 
 <div class="heartbeat" id="heartbeat">
-  <div class="hb-item"><a href="/health" target="_blank" style="color:inherit;text-decoration:none">Companion</a>: <span class="hb-dot hb-wait" id="hb-companion"></span> <span id="hb-companion-txt">{% if app_version and app_version.lower() not in ('local','unspecified') %}{{ app_version }}{% else %}local{% endif %}</span></div>
+  <div class="hb-item">Companion: <span class="hb-dot hb-wait" id="hb-companion"></span> <span id="hb-companion-txt">{% if app_version and app_version.lower() not in ('local','unspecified') %}{{ app_version }}{% else %}local{% endif %}</span></div>
   <div class="hb-item" id="hb-sonarr-item">Sonarr: <span class="hb-dot hb-wait" id="hb-sonarr"></span> <span id="hb-sonarr-txt">{% if sonarr_sync_in_progress %}syncing...{% else %}checking...{% endif %}</span></div>
   <div class="hb-item" id="hb-radarr-item" style="display:none">Radarr: <span class="hb-dot hb-wait" id="hb-radarr"></span> <span id="hb-radarr-txt">checking...</span></div>
   <div class="hb-item">AnimeWorld: <span class="hb-dot hb-wait" id="hb-aw"></span> <span id="hb-aw-txt">checking...</span></div>
@@ -251,6 +263,17 @@ a{color:#58a6ff;text-decoration:none}a:hover{text-decoration:underline}
 {% for card in library_items %}
 {% include "_dashboard_card.html" %}
 {% endfor %}
+
+<div class="app-modal-backdrop" id="app-modal-backdrop" onclick="if(event.target===this)closeAppModal()">
+  <div class="app-modal" role="dialog" aria-modal="true" aria-labelledby="app-modal-title">
+    <div class="app-modal-head">
+      <h3 class="app-modal-title" id="app-modal-title">Action</h3>
+      <button class="app-modal-close" type="button" aria-label="Chiudi" onclick="closeAppModal()">×</button>
+    </div>
+    <div class="app-modal-body" id="app-modal-body"></div>
+    <div class="app-modal-actions" id="app-modal-actions"></div>
+  </div>
+</div>
 
 <script>
 const AWC_KEY={{ api_key|tojson }};
@@ -373,6 +396,37 @@ function _btnErr(btn,label){
   setTimeout(()=>{btn.textContent=label;btn.style.background='';btn.disabled=false;},2000);
 }
 
+function closeAppModal(){
+  const backdrop=document.getElementById('app-modal-backdrop');
+  if(backdrop)backdrop.style.display='none';
+}
+
+function openAppModal(title,bodyHtml,actions){
+  const backdrop=document.getElementById('app-modal-backdrop');
+  const titleEl=document.getElementById('app-modal-title');
+  const bodyEl=document.getElementById('app-modal-body');
+  const actionsEl=document.getElementById('app-modal-actions');
+  if(!backdrop||!titleEl||!bodyEl||!actionsEl)return;
+  titleEl.textContent=title;
+  bodyEl.innerHTML=bodyHtml||'';
+  actionsEl.innerHTML='';
+  for(const action of (actions||[])){
+    const btn=document.createElement('button');
+    btn.className='btn '+(action.className||'');
+    btn.textContent=action.label||'OK';
+    btn.onclick=async()=>{
+      if(action.close!==false)closeAppModal();
+      if(action.onClick)await action.onClick(btn);
+    };
+    actionsEl.appendChild(btn);
+  }
+  backdrop.style.display='flex';
+}
+
+document.addEventListener('keydown',function(e){
+  if(e.key==='Escape')closeAppModal();
+});
+
 function _mutedHtml(text){
   return '<span style="color:#8b949e">'+text+'</span>';
 }
@@ -484,16 +538,38 @@ async function _flushLibraryEvents(){
   filterShows();
 }
 
-async function automapAll(btn){
-  if(!confirm('This will search AnimeWorld for ALL unmapped seasons.\nIt may take several minutes. Continue?'))return;
+async function automapAll(btn,force=false){
   btn.disabled=true;btn.textContent='Auto-mapping...';
   _automapLaunched=true;
   try{
-    const r=await fetch('/api/automap',{method:'POST',headers:_kh()});
+    const r=await fetch('/api/automap'+(force?'?force=true'+_kp('&'):_kp()),{method:'POST',headers:_kh()});
     const d=await r.json();
     if(d.status==='already_running'){btn.textContent='Already running...';}
     // Button re-enabled by heartbeat when automap_running goes false
-  }catch(e){_automapLaunched=false;_btnErr(btn,'Automap Library');}
+  }catch(e){_automapLaunched=false;_btnErr(btn,'Automap');}
+}
+
+function openAutomapModal(){
+  openAppModal(
+    'Automap',
+    '<p>Choose how you want AWC to run the library automap.</p><p class="app-modal-note">Missing maps only currently unmapped entries. Force Full re-evaluates the whole library. Unmap All clears every saved mapping first.</p>',
+    [
+      {label:'Missing', className:'btn-primary', onClick:()=>automapAll(document.getElementById('automap-all-btn'),false)},
+      {label:'Force Full', className:'btn-warning', onClick:()=>automapAll(document.getElementById('automap-all-btn'),true)},
+      {label:'Unmap All', className:'btn-danger', onClick:()=>unmapAllMappings()},
+    ]
+  );
+}
+
+async function unmapAllMappings(){
+  const btn=document.getElementById('automap-all-btn');
+  await _runButtonAction(btn,'Automap',async()=>{
+    await _fetchOk('/api/mappings/unmap-all?kind=all'+_kp('&'),{method:'POST',headers:_kh()});
+    document.querySelectorAll('main.content .card').forEach(card=>card.remove());
+    await _refreshStatsFragment();
+    _ensureEmptyState();
+    filterShows();
+  });
 }
 
 function _panelId(kind,id){
@@ -740,7 +816,7 @@ function renderHeartbeatPayload(data){
       }else if(_automapLaunched){
         // POST just fired — server hasn't set the flag yet, ignore this tick
       }else if(automapBtn.textContent==='Auto-mapping...'||automapBtn.textContent==='Already running...'){
-        automapBtn.disabled=false;automapBtn.textContent='Automap Library';
+        automapBtn.disabled=false;automapBtn.textContent='Automap';
       }
     }
     document.getElementById('hb-companion').className='hb-dot hb-ok';
@@ -1024,7 +1100,6 @@ if(window.EventSource){
 
 // --- Restart companion ---
 async function restartCompanion(btn){
-  if(!confirm('Restart AnimeWorld Companion?\nThe page will reload once it comes back up.')) return;
   btn.disabled=true;btn.textContent='Restarting...';
   try{ await fetch('/api/system/restart'+_kp(),{method:'POST',headers:_kh()}); }catch(e){}
   // Poll until the server comes back
@@ -1034,6 +1109,16 @@ async function restartCompanion(btn){
       if(r.ok){ clearInterval(poll); location.reload(); }
     }catch(e){}
   },2000);
+}
+
+function openRestartModal(){
+  openAppModal(
+    'Restart Companion',
+    '<p>Restart AnimeWorld Companion now?</p><p class="app-modal-note">The page will try to reconnect automatically once the service is back up.</p>',
+    [
+      {label:'Restart', className:'btn-danger', onClick:()=>restartCompanion(document.getElementById('restart-btn'))},
+    ]
+  );
 }
 </script>
 </body>

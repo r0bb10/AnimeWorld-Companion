@@ -100,15 +100,15 @@ def _filter_language_candidates(candidates: list[dict], want_dubbed: bool) -> li
         return "giapp" in audio or "japan" in audio
 
     if want_dubbed:
-        dubbed = [candidate for candidate in candidates if bool(candidate.get("dub"))]
-        if dubbed:
-            return dubbed
-        italian = [candidate for candidate in candidates if is_italian(candidate)]
-        if italian:
-            return italian
+        # Accept candidates that are explicitly dubbed OR have Italian audio.
+        # The `dub` field is only reliable for V2 API results; scrape-sourced
+        # candidates carry no `dub` flag but do have `aw_audio` after enrichment.
+        dubbed_or_italian = [candidate for candidate in candidates if bool(candidate.get("dub")) or is_italian(candidate)]
+        if dubbed_or_italian:
+            return dubbed_or_italian
         return candidates
 
-    non_dubbed = [candidate for candidate in candidates if not bool(candidate.get("dub"))]
+    non_dubbed = [candidate for candidate in candidates if not bool(candidate.get("dub")) and not is_italian(candidate)]
     japanese = [candidate for candidate in non_dubbed if is_japanese(candidate)]
     if japanese:
         return japanese

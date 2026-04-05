@@ -182,6 +182,10 @@ class AnimeWorldClient:
             full_slug = f"{slug}.{identifier}" if slug and identifier and "." not in slug else slug
             url = self.slug_to_url(full_slug) if full_slug and not full_slug.startswith("http") else slug
             dub_value = item.get("dub", 0)
+            kind_value = str(item.get("type") or "")
+            # V2 API signals dubbed via either a non-zero `dub` integer (older
+            # entries) or a `type: "DUB"` string (newer entries).  Accept both.
+            is_dub = (int(dub_value) != 0 if str(dub_value).isdigit() else bool(dub_value)) or kind_value.upper() == "DUB"
             results.append(
                 {
                     "title": item.get("name") or item.get("title") or "",
@@ -189,8 +193,8 @@ class AnimeWorldClient:
                     "url": url,
                     "slug": self.url_to_slug(url or full_slug),
                     "poster": item.get("image") or item.get("poster") or "",
-                    "kind": item.get("type") or item.get("status") or "",
-                    "dub": int(dub_value) != 0 if str(dub_value).isdigit() else bool(dub_value),
+                    "kind": kind_value,
+                    "dub": is_dub,
                     "episodes": int(item.get("episodes") or 0) if str(item.get("episodes", "")).isdigit() else 0,
                 }
             )

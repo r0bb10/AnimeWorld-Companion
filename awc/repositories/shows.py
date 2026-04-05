@@ -228,6 +228,45 @@ def find_show_by_tvdb_id(tvdb_id: int | None) -> dict | None:
     return dict(row) if row else None
 
 
+def get_scene_episode_range_for_season(show_id: int, season_number: int) -> dict | None:
+    """Return the scene episode range for one internal season if the show uses
+    a single continuous scene season across multiple internal seasons.
+
+    Returns a dict with ``first`` and ``last`` scene episode numbers, or None
+    when the show has no scene data or its scene seasons map 1:1 with internal
+    seasons (normal case — filter is a no-op for those shows).
+    """
+    with get_db() as conn:
+        # Only activate for shows where all scene episodes share a single
+        # scene_season value but span more than one internal season.  This is
+        # the signature of a long-runner whose episodes are numbered absolutely
+        # across what the manager splits into multiple seasons.
+        meta = conn.execute(
+            """
+            SELECT COUNT(DISTINCT scene_season)  AS distinct_scene_seasons,
+                   COUNT(DISTINCT internal_season) AS distinct_internal_seasons
+            FROM show_scene_episodes
+            WHERE show_id = ?
+            """,
+            (show_id,),
+        ).fetchone()
+        if not meta:
+            return None
+        if meta["distinct_scene_seasons"] != 1 or meta["distinct_internal_seasons"] <= 1:
+            return None
+        row = conn.execute(
+            """
+            SELECT MIN(scene_episode) AS first, MAX(scene_episode) AS last
+            FROM show_scene_episodes
+            WHERE show_id = ? AND internal_season = ?
+            """,
+            (show_id, season_number),
+        ).fetchone()
+    if not row or row["first"] is None:
+        return None
+    return {"first": int(row["first"]), "last": int(row["last"])}
+
+
 def set_season_ignored(show_id: int, season_number: int, ignored: bool) -> bool:
     with get_db(write=True) as conn:
         cursor = conn.execute(

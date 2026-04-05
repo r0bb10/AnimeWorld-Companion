@@ -55,6 +55,16 @@ def _enrich_result(client: AnimeWorldClient, item: dict) -> dict:
     declared_episodes = client.parse_episode_count_value(info.get("Episodi") or info.get("episodes"))
     release_value = str(info.get("Data di Uscita") or info.get("release_date") or "")
     release_dt = parse_italian_date(release_value) if release_value else None
+    # Capture the first episode number listed on the AW page.  For most shows
+    # this is 1.  For continuation pages (e.g. a long-runner whose main page
+    # was eventually split and a second page opens mid-series) the first number
+    # will be greater than 1.  This is used by automap to match each season to
+    # the page that actually covers its episode range when scene numbering data
+    # is available.
+    try:
+        aw_first_episode = int(episodes[0]["number"]) if episodes else None
+    except (KeyError, TypeError, ValueError):
+        aw_first_episode = None
     return {
         **item,
         "aw_link": client.url_to_slug(target),
@@ -69,6 +79,7 @@ def _enrich_result(client: AnimeWorldClient, item: dict) -> dict:
         "aw_episode_count": declared_episodes if declared_episodes is not None else non_special,
         "aw_total_episodes": total,
         "aw_is_placeholder": is_placeholder,
+        "aw_first_episode": aw_first_episode,
     }
 
 

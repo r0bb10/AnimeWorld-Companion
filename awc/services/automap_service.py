@@ -95,10 +95,6 @@ def _filter_language_candidates(candidates: list[dict], want_dubbed: bool) -> li
     def is_italian(candidate: dict) -> bool:
         return "ital" in str(candidate.get("aw_audio") or "").lower()
 
-    def is_japanese(candidate: dict) -> bool:
-        audio = str(candidate.get("aw_audio") or "").lower()
-        return "giapp" in audio or "japan" in audio
-
     if want_dubbed:
         # Accept candidates that are explicitly dubbed OR have Italian audio.
         # The `dub` field is only reliable for V2 API results; scrape-sourced
@@ -108,10 +104,12 @@ def _filter_language_candidates(candidates: list[dict], want_dubbed: bool) -> li
             return dubbed_or_italian
         return candidates
 
+    # For non-dubbed shows, exclude dubbed/Italian entries.
+    # Do NOT further narrow to Japanese-only: Chinese-audio pages (correct for
+    # Chinese-origin shows) live in non_dubbed and would be silently dropped if
+    # any unrelated Japanese result also exists.  The scoring layer already
+    # rewards Japanese audio with +LANGUAGE_WEIGHT so Japanese shows still win.
     non_dubbed = [candidate for candidate in candidates if not bool(candidate.get("dub")) and not is_italian(candidate)]
-    japanese = [candidate for candidate in non_dubbed if is_japanese(candidate)]
-    if japanese:
-        return japanese
     if non_dubbed:
         return non_dubbed
     return candidates

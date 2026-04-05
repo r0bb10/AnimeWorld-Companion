@@ -261,6 +261,7 @@ def _propagate_single_link(
     reserved_links: set[str],
 ) -> None:
     available = int(best.get("aw_episode_count") or 0)
+    is_ongoing = (best.get("aw_status") or "").lower() != "finito"
     if available <= 0:
         return
 
@@ -275,7 +276,10 @@ def _propagate_single_link(
         season_count = int(season.get("episode_count") or 0)
         if season_count <= 0:
             break
-        if consumed + season_count > available:
+        # For ongoing AW entries the episode count will keep growing, so the
+        # current count may lag behind Sonarr's arc breakdown.  Only apply
+        # the episode-count cap for finished shows.
+        if not is_ongoing and consumed + season_count > available:
             break
         consumed += season_count
         chain.append(season)

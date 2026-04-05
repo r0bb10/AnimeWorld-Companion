@@ -228,19 +228,16 @@ def find_show_by_tvdb_id(tvdb_id: int | None) -> dict | None:
     return dict(row) if row else None
 
 
-def get_scene_episode_range_for_season(show_id: int, season_number: int) -> dict | None:
-    """Return the scene episode range for one internal season if the show uses
-    a single continuous scene season across multiple internal seasons.
+def is_single_sequence_show(show_id: int) -> bool:
+    """Return True if this show uses one continuous scene season across multiple
+    internal seasons — the signature of a long-runner numbered absolutely by
+    scene groups across what the manager splits into separate seasons.
 
-    Returns a dict with ``first`` and ``last`` scene episode numbers, or None
-    when the show has no scene data or its scene seasons map 1:1 with internal
-    seasons (normal case — filter is a no-op for those shows).
+    This is the show-level gate for the scene episode range filter.  Call it
+    once per show before the per-season loop; it is False for the vast majority
+    of shows so the per-season range query is never issued for them.
     """
     with get_db() as conn:
-        # Only activate for shows where all scene episodes share a single
-        # scene_season value but span more than one internal season.  This is
-        # the signature of a long-runner whose episodes are numbered absolutely
-        # across what the manager splits into multiple seasons.
         meta = conn.execute(
             """
             SELECT COUNT(DISTINCT scene_season)  AS distinct_scene_seasons,
@@ -250,10 +247,19 @@ def get_scene_episode_range_for_season(show_id: int, season_number: int) -> dict
             """,
             (show_id,),
         ).fetchone()
-        if not meta:
-            return None
-        if meta["distinct_scene_seasons"] != 1 or meta["distinct_internal_seasons"] <= 1:
-            return None
+    if not meta:
+        return False
+    return meta["distinct_scene_seasons"] == 1 and meta["distinct_internal_seasons"] > 1
+
+
+def get_scene_episode_range_for_season(show_id: int, season_number: int) -> dict | None:
+    """Return the scene episode range for one internal season.
+
+    Only call this after ``is_single_sequence_show`` returned True for the show.
+    Returns a dict with ``first`` and ``last`` scene episode numbers, or None
+    if no rows exist for this season.
+    """
+    with get_db() as conn:
         row = conn.execute(
             """
             SELECT MIN(scene_episode) AS first, MAX(scene_episode) AS last

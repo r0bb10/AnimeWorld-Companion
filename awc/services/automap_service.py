@@ -12,7 +12,7 @@ from ..core.log_events import format_movie_automap_lines, format_show_automap_li
 from ..core.logging import get_logger
 from ..domain.release_window import has_started
 from ..repositories.db import get_db
-from ..repositories.shows import get_scene_episode_range_for_season
+from ..repositories.shows import get_scene_episode_range_for_season, is_single_sequence_show
 from ..repositories.mappings import (
     list_show_mappings,
     remove_movie_mapping,
@@ -116,7 +116,7 @@ def _filter_language_candidates(candidates: list[dict], want_dubbed: bool) -> li
     return candidates
 
 
-def _build_scored_candidates(show: dict, season: dict, candidates: list[dict], want_dubbed: bool, reserved_links: set[str]) -> list[dict]:
+def _build_scored_candidates(show: dict, season: dict, candidates: list[dict], want_dubbed: bool, reserved_links: set[str], *, is_sequence_show: bool = False) -> list[dict]:
     own_links = {
         (mapping.get("aw_link") or "").strip()
         for mapping in season.get("mappings", [])
@@ -125,19 +125,18 @@ def _build_scored_candidates(show: dict, season: dict, candidates: list[dict], w
     blocked_links = reserved_links - own_links
     filtered = _filter_language_candidates(candidates, want_dubbed)
 
-    # Scene-range filter: when a show uses a single continuous scene season
-    # across multiple internal seasons (i.e. the scene numbering is one long
-    # absolute sequence rather than per-season), each internal season maps to a
-    # specific range of scene episode numbers.  A candidate AW page is only
-    # valid for this season if its first listed episode number falls at or
-    # before the scene start for this season.  This prevents continuation pages
-    # (pages that open mid-series at a high episode number) from competing with
-    # the root page for early seasons, and vice versa — ensuring each season is
-    # matched against the page that actually covers its episode range.
-    # For shows with no scene data this query returns None and the filter is a
-    # complete no-op, so existing behaviour is fully preserved.
-    scene_range = get_scene_episode_range_for_season(show["id"], season["season_number"])
-    scene_start = scene_range["first"] if scene_range else None
+    # Scene-range filter: only active for shows where is_single_sequence_show()
+    # returned True (hoisted to show level before the per-season loop so this
+    # branch is never entered for the overwhelming majority of shows).
+    # When active, each internal season maps to a known range of scene episode
+    # numbers.  A candidate page is valid only if it actually covers the
+    # season's first scene episode — filtering out both continuation pages that
+    # open after this season and unrelated shows whose episode count falls short
+    # of reaching it.
+    scene_start: int | None = None
+    if is_sequence_show:
+        scene_range = get_scene_episode_range_for_season(show["id"], season["season_number"])
+        scene_start = scene_range["first"] if scene_range else None
 
     scored: list[dict] = []
     for candidate in filtered:
@@ -291,6 +290,7 @@ def _propagate_single_link(
     mapped_seasons: list[int],
     handled: set[int],
     reserved_links: set[str],
+    is_sequence_show: bool = False,
 ) -> None:
     available = int(best.get("aw_episode_count") or 0)
     is_ongoing = (best.get("aw_status") or "").lower() != "finito"
@@ -318,7 +318,7 @@ def _propagate_single_link(
         # continuation page that actually contains their episodes.
         if not is_ongoing and consumed + season_count > available:
             break
-        if is_ongoing and available > 0:
+        if is_ongoing and is_sequence_show and available > 0:
             scene_range = get_scene_episode_range_for_season(show_id, sn)
             if scene_range and scene_range["first"] > available:
                 break
@@ -472,12 +472,18 @@ def automap_show(show_id: int, season_number: int | None = None, force: bool = F
 
     reserved_links = _existing_links_by_show(show)
 
+    # One show-level check: is this a long-runner with a single continuous
+    # scene season spanning multiple internal seasons?  Result is passed to
+    # every _build_scored_candidates call so the per-season range query is
+    # only issued for the handful of shows that actually qualify.
+    sequence_show = is_single_sequence_show(show_id)
+
     for index, season in enumerate(eligible_seasons):
         sn = season["season_number"]
         if sn in handled:
             continue
 
-        season_scores = _build_scored_candidates(show, season, candidates, want_dubbed, reserved_links)
+        season_scores = _build_scored_candidates(show, season, candidates, want_dubbed, reserved_links, is_sequence_show=sequence_show)
         if season_scores:
             scored_candidates.extend(
                 [{**candidate, "season_number": sn} for candidate in season_scores[:3]]
@@ -563,6 +569,7 @@ def automap_show(show_id: int, season_number: int | None = None, force: bool = F
                     mapped_seasons=mapped_seasons,
                     handled=handled,
                     reserved_links=reserved_links,
+                    is_sequence_show=sequence_show,
                 )
                 if sn in handled:
                     continue

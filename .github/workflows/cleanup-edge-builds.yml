@@ -12,7 +12,7 @@ on:
 
 permissions:
   contents: read
-  packages: delete
+  packages: write
 
 jobs:
   cleanup:
@@ -30,6 +30,13 @@ jobs:
               context.payload.workflow_run?.repository?.owner?.type ||
               'User';
             const edgeShaTag = /^edge-[0-9a-f]{7}(?:-(?:amd64|arm64))?$/;
+
+            // Short SHA of the run that just completed — keep its images alive.
+            const currentSha = (
+              context.payload.workflow_run?.head_sha ||
+              context.sha ||
+              ''
+            ).slice(0, 7);
 
             async function listVersions() {
               const params = {
@@ -70,7 +77,13 @@ jobs:
             const versions = await listVersions();
             const candidates = versions.filter((version) => {
               const tags = version.metadata?.container?.tags || [];
-              return tags.length > 0 && tags.every((tag) => edgeShaTag.test(tag));
+              // Only delete versions whose tags are all edge-SHA patterns
+              // and none of them belong to the current run's SHA.
+              return (
+                tags.length > 0 &&
+                tags.every((tag) => edgeShaTag.test(tag)) &&
+                tags.every((tag) => !tag.includes(currentSha))
+              );
             });
 
             if (!candidates.length) {

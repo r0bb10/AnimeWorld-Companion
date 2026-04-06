@@ -4,9 +4,18 @@ from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
+import re
+
 from ..integrations.animeworld_client import AnimeWorldClient
-from .query_helper import build_query_variants
+from .query_helper import build_query_variants, sanitize_search_title
 from .automap_scoring import parse_italian_date
+
+# Season/part suffixes that produce only noise when used as standalone
+# mid-window queries (e.g. "Season 2", "3rd Season", "Part 2").
+_SEASON_NOISE = re.compile(
+    r"^(?:season|part|cour|cours)\s*\d+$|^\d+(?:st|nd|rd|th)\s+(?:season|part|cour)$",
+    re.IGNORECASE,
+)
 
 
 def _collect_titles(primary_title: str, alternate_titles: list[dict]) -> list[str]:
@@ -83,15 +92,48 @@ def _enrich_result(client: AnimeWorldClient, item: dict) -> dict:
     }
 
 
-def discover_candidates_for_titles(primary_title: str, alternate_titles: list[dict], limit: int | None = None) -> list[dict]:
-    client = AnimeWorldClient()
-    raw_results: list[dict] = []
-    for query in _collect_titles(primary_title, alternate_titles):
-        raw_results.extend(client.search(query, limit=None))
+def _mid_window_queries(primary_title: str, alternate_titles: list[dict]) -> list[str]:
+    """Sliding 3-word windows across all titles, starting from position 1.
+
+    Only emits windows that are long enough to be distinctive (≥8 chars) and
+    are not pure season/part suffix noise (e.g. 'Season 2', '3rd Season').
+    Used as try2 last-resort when both primary and unnormalized passes return
+    zero results — covers titles where the distinctive words sit mid-string
+    and front-anchored truncation never reaches them (e.g. long Japanese
+    romanizations like 'Re Zero kara Hajimeru Isekai Seikatsu').
+    """
+    seen: set[str] = set()
+    result: list[str] = []
+    raw_values = [primary_title, *[str(item.get("title") or "") for item in alternate_titles]]
+    for value in raw_values:
+        words = sanitize_search_title(value).split()
+        for i in range(1, len(words)):
+            window = " ".join(words[i:i + 3]).strip()
+            key = window.casefold()
+            if len(window) < 8 or key in seen or _SEASON_NOISE.match(window):
+                continue
+            seen.add(key)
+            result.append(window)
+    return result
+
+
+def _raw_titles(primary_title: str, alternate_titles: list[dict]) -> list[str]:
+    """Return the raw pre-sanitization title strings, deduped and non-empty."""
+    seen: set[str] = set()
+    result: list[str] = []
+    for value in [primary_title, *[str(item.get("title") or "") for item in alternate_titles]]:
+        query = " ".join(str(value or "").split()).strip()
+        key = query.casefold()
+        if query and key not in seen:
+            seen.add(key)
+            result.append(query)
+    return result
+
+
+def _enrich_unique(client: AnimeWorldClient, raw_results: list[dict], limit: int | None) -> list[dict]:
     unique = _dedupe_by_slug(client, raw_results)
     if limit is not None:
         unique = unique[:limit]
-
     enriched: list[dict] = []
     with ThreadPoolExecutor(max_workers=min(len(unique), 6) or 1) as pool:
         futures = {pool.submit(_enrich_result, client, item): item for item in unique}
@@ -100,6 +142,29 @@ def discover_candidates_for_titles(primary_title: str, alternate_titles: list[di
                 enriched.append(future.result())
             except Exception:
                 continue
-
     enriched.sort(key=lambda item: item.get("aw_title") or item.get("title") or "")
     return enriched
+
+
+def discover_candidates_for_titles(primary_title: str, alternate_titles: list[dict], limit: int | None = None) -> list[dict]:
+    client = AnimeWorldClient()
+    raw_results: list[dict] = []
+    for query in _collect_titles(primary_title, alternate_titles):
+        raw_results.extend(client.search(query, limit=None))
+
+    # Try 1: raw pre-sanitization titles.  Sanitization strips chars like / - :
+    # that are semantically part of some titles (e.g. "Fate/stay night") and
+    # can produce zero results when removed.
+    if not raw_results:
+        for query in _raw_titles(primary_title, alternate_titles):
+            raw_results.extend(client.search(query, limit=None))
+
+    # Try 2: sliding 3-word mid-title windows.  Covers titles where the
+    # distinctive searchable words sit past the front of the string and
+    # front-anchored truncation never reaches them (e.g. long Japanese
+    # romanizations).  Only fires when both primary and try1 returned nothing.
+    if not raw_results:
+        for query in _mid_window_queries(primary_title, alternate_titles):
+            raw_results.extend(client.search(query, limit=None))
+
+    return _enrich_unique(client, raw_results, limit)

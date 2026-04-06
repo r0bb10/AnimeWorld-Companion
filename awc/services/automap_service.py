@@ -281,6 +281,82 @@ def _detect_segment_chain(show: dict, season: dict, season_scores: list[dict], w
     return best_chain
 
 
+def _tiebreak_candidates(season: dict, tied: list[dict], alt_titles: list[str] | None = None) -> dict | None:
+    """Secondary scoring pass used when the main gap rule fails.
+
+    Activates only when the best candidate is above the confidence threshold
+    but the margin over the second candidate is too small for the gap rule to
+    commit.  Applies strict, exact comparisons on already-fetched metadata to
+    pick a clear winner among the tied candidates.
+
+    Signals evaluated (all data already present on enriched candidates):
+    - Exact episode count match against the manager season count.  Worth more
+      points when the AW page is finished (count is final) than when ongoing.
+    - Exact release date match (date-level, no tolerance).
+    - Status consistency between the manager season and the AW page.
+    - AW title exact match against any known alternate title of the show
+      (case-insensitive, stripped).  Indicates the AW page was specifically
+      named after this show's alternate-title variant.
+
+    Additional signals can be added here later without touching main scoring.
+
+    Returns the winning candidate dict, or None if the tiebreaker cannot
+    separate the candidates (falls through to ambiguous as before).
+
+    Note: once this tiebreaker is proven reliable across a wide library the
+    gap rule in the caller can be removed — the tiebreaker handles both the
+    commit and the ambiguous outcome more precisely.
+    """
+    mgr_ep = int(season.get("episode_count") or 0)
+    mgr_date = str(season.get("air_date_start") or "")[:10]
+    mgr_status = (season.get("status") or "").lower()
+
+    # Normalised alternate title set for fast lookup
+    alt_set = {t.lower().strip() for t in (alt_titles or [])} if alt_titles else set()
+
+    STATUS_COMPAT = {
+        ("ended", "finito"),
+        ("continuing", "in corso"),
+        ("released", "finito"),
+    }
+
+    def score(candidate: dict) -> int:
+        pts = 0
+        aw_ep = int(candidate.get("aw_episode_count") or 0)
+        aw_date = str(candidate.get("aw_release_datetime") or "")[:10]
+        aw_status = (candidate.get("aw_status") or "").lower()
+        is_finito = aw_status == "finito"
+
+        if mgr_ep and aw_ep:
+            if mgr_ep == aw_ep:
+                # Finished pages have a final count; weight higher than ongoing
+                pts += 3 if is_finito else 1
+            else:
+                pts -= 1
+
+        if mgr_date and aw_date:
+            if mgr_date == aw_date:
+                pts += 3
+            else:
+                pts -= 1
+
+        if (mgr_status, aw_status) in STATUS_COMPAT:
+            pts += 1
+
+        # AW page title matches one of the show's known alternate titles exactly
+        if alt_set:
+            aw_title = (candidate.get("aw_title") or "").lower().strip()
+            if aw_title and aw_title in alt_set:
+                pts += 2
+
+        return pts
+
+    scored = sorted(tied, key=score, reverse=True)
+    if len(scored) >= 2 and score(scored[0]) > score(scored[1]):
+        return scored[0]
+    return None
+
+
 def _propagate_single_link(
     *,
     show_id: int,
@@ -559,45 +635,62 @@ def automap_show(show_id: int, season_number: int | None = None, force: bool = F
 
         if best and best["confidence_score"] >= settings.automap_confidence_threshold and (
             not second or (best["confidence_score"] - second["confidence_score"]) >= 0.05
+            # NOTE: the gap rule (>= 0.05) can eventually be removed if the tiebreaker
+            # layer below proves reliable across a wide library
         ):
-            if int(best.get("aw_episode_count") or 0) >= target_count > 0:
-                _propagate_single_link(
-                    show_id=show_id,
-                    eligible_seasons=eligible_seasons,
-                    start_index=index,
-                    best=best,
-                    mapped_seasons=mapped_seasons,
-                    handled=handled,
-                    reserved_links=reserved_links,
-                    is_sequence_show=sequence_show,
-                )
-                if sn in handled:
-                    continue
-
-            replace_show_mappings_auto(
-                show_id=show_id,
-                season_number=sn,
-                items=[
-                    {
-                        "part": 1,
-                        "aw_link": best["aw_link"],
-                        "aw_title": best["aw_title"],
-                        "aw_episode_count": best["aw_episode_count"],
-                        "aw_total_episodes": best["aw_total_episodes"],
-                        "aw_status": best.get("aw_status", ""),
-                        "aw_category": best.get("aw_category", ""),
-                        "confidence_score": best["confidence_score"],
-                        "confidence_factors": json.dumps(best["confidence_factors"]),
-                        "linked_with_season": None,
-                    }
-                ],
-            )
-            mapped_seasons.append(sn)
-            handled.add(sn)
-            reserved_links.add(best["aw_link"])
+            commit_winner = best
+        elif best and best["confidence_score"] >= settings.automap_confidence_threshold:
+            # Gap rule failed — two or more candidates score too close together.
+            # Run the tiebreaker layer: compare episode count, release date, and
+            # status among the tied candidates to find a clear winner without
+            # requiring a manual review.
+            tied = [c for c in season_scores if best["confidence_score"] - c["confidence_score"] < 0.05]
+            show_alt_titles = [row["title"] for row in show.get("alternate_titles", [])]
+            tb_winner = _tiebreak_candidates(season, tied, alt_titles=show_alt_titles)
+            if tb_winner:
+                commit_winner = tb_winner
+            else:
+                ambiguous.append({"season": sn, "candidates": season_scores[:5]})
+                continue
+        else:
+            ambiguous.append({"season": sn, "candidates": season_scores[:5]})
             continue
 
-        ambiguous.append({"season": sn, "candidates": season_scores[:5]})
+        if int(commit_winner.get("aw_episode_count") or 0) >= target_count > 0:
+            _propagate_single_link(
+                show_id=show_id,
+                eligible_seasons=eligible_seasons,
+                start_index=index,
+                best=commit_winner,
+                mapped_seasons=mapped_seasons,
+                handled=handled,
+                reserved_links=reserved_links,
+                is_sequence_show=sequence_show,
+            )
+            if sn in handled:
+                continue
+
+        replace_show_mappings_auto(
+            show_id=show_id,
+            season_number=sn,
+            items=[
+                {
+                    "part": 1,
+                    "aw_link": commit_winner["aw_link"],
+                    "aw_title": commit_winner["aw_title"],
+                    "aw_episode_count": commit_winner["aw_episode_count"],
+                    "aw_total_episodes": commit_winner["aw_total_episodes"],
+                    "aw_status": commit_winner.get("aw_status", ""),
+                    "aw_category": commit_winner.get("aw_category", ""),
+                    "confidence_score": commit_winner["confidence_score"],
+                    "confidence_factors": json.dumps(commit_winner["confidence_factors"]),
+                    "linked_with_season": None,
+                }
+            ],
+        )
+        mapped_seasons.append(sn)
+        handled.add(sn)
+        reserved_links.add(commit_winner["aw_link"])
 
     status = "success" if mapped_seasons else "not_found"
     if ambiguous and mapped_seasons:

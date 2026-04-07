@@ -105,6 +105,51 @@ def _webhook_log_level(status: str) -> int:
     return logging.INFO if status in {"success", "already_mapped"} else logging.WARNING
 
 
+def _webhook_receipt_label(event_type: str, event_family: str) -> str:
+    normalized = (event_type or "").strip().lower()
+    if "file" in normalized and "import" in normalized:
+        return "file import"
+    if event_family in {"add", "delete", "test", "import", "file", "grab"}:
+        return event_family
+    return event_type or "unknown"
+
+
+def _log_webhook_received(normalized: dict) -> None:
+    manager = str(normalized.get("manager") or "")
+    event_type = str(normalized.get("event_type") or "")
+    event_family = str(normalized.get("event_family") or "unknown")
+    entity = normalized.get("entity") or {}
+    entity_title = str(entity.get("title") or event_type or manager or "webhook")
+    label = _webhook_receipt_label(event_type, event_family)
+
+    lines = [f"event={event_type or 'unknown'}"]
+    local_match = normalized.get("local_match") or {}
+    if local_match.get("id") is not None:
+        lines.append(
+            f"matched={local_match.get('title') or local_match.get('id')} ({local_match.get('matched_by') or 'unknown'})"
+        )
+
+    details = {
+        "manager": manager,
+        "event_type": event_type,
+        "event_family": event_family,
+    }
+    manager_entity_id = normalized.get("manager_entity_id")
+    if manager_entity_id is not None:
+        details["manager_id"] = manager_entity_id
+
+    log_info(
+        logger,
+        f"webhook.{manager or 'manager'}.{event_family}.received",
+        f"Webhook {manager.capitalize() if manager else 'Manager'} {label} received: {entity_title}",
+        lines=lines,
+        details=details,
+        entity_kind=manager or None,
+        entity_id=manager_entity_id,
+        entity_title=entity_title,
+    )
+
+
 def _log_webhook_show_result(title: str, show_id: int, result: dict) -> None:
     status = str(result.get("status") or "")
     if status in {"success", "partial", "ambiguous"}:
@@ -734,19 +779,11 @@ def manager_webhook(
     normalized = normalize_webhook(payload)
     if not normalized["accepted"]:
         raise HTTPException(status_code=400, detail="Unsupported webhook payload")
+    _log_webhook_received(normalized)
     if normalized["event_family"] == "add" and normalized.get("manager_entity_id"):
         manager = str(normalized.get("manager") or "")
         manager_entity_id = int(normalized["manager_entity_id"])
         entity_title = str((normalized.get("entity") or {}).get("title") or manager_entity_id)
-        log_info(
-            logger,
-            f"webhook.{manager}.add.received",
-            f"Webhook {manager.capitalize()} add received: {entity_title}",
-            details={"manager": manager, "manager_id": manager_entity_id},
-            entity_kind=manager or None,
-            entity_id=manager_entity_id,
-            entity_title=entity_title,
-        )
 
         def _run() -> None:
             try:

@@ -1,4 +1,4 @@
-"""Background runtime loops for sync, RSS, and import polling."""
+"""Background runtime loops for sync, RSS, and lightweight reconciliation."""
 
 from __future__ import annotations
 
@@ -19,7 +19,7 @@ from ..core.logging import get_logger
 from ..integrations.animeworld_client import AnimeWorldClient
 from ..repositories.db import get_db
 from ..repositories.rss_cache import cleanup_rss_items, has_movie_rss_item, has_rss_item, save_movie_rss_item, save_rss_item
-from .download_service import restore_on_startup
+from .download_service import reconcile_vanished_downloads, restore_on_startup
 from .eligible_service import run_eligible_once
 from .sanitizer_service import sanitize_links_once, sanitizer_status
 from .search_service import build_movie_search_items, build_show_search_items
@@ -35,11 +35,14 @@ _state = {
     "rss": {"enabled": False, "running": False, "last_run_at": None, "last_error": "", "last_cached": 0},
     "links": {"enabled": False, "running": False, "last_run_at": None, "last_error": "", "last_result": None},
     "eligible": {"enabled": False, "running": False, "last_run_at": None, "last_error": "", "last_result": None},
+    "scanner": {"enabled": True, "running": False, "last_run_at": None, "last_error": "", "last_result": None},
     "startup": {"restored": 0, "fixed": 0},
 }
 
 
 def _minutes_label(seconds: int) -> str:
+    if int(seconds) < 60:
+        return f"{int(seconds)}s"
     return f"{max(1, int(seconds) // 60)}m"
 
 
@@ -469,15 +472,64 @@ def _run_eligible_loop() -> None:
             break
 
 
+def _run_scanner_loop() -> None:
+    first_run = 30
+    interval = 30
+    grace_seconds = 60
+
+    _set_state("scanner", enabled=True, running=False, last_error="")
+    log_info(
+        logger,
+        "runtime.scanner.scheduled",
+        "Vanished scanner scheduled",
+        lines=[
+            f"first_run={_minutes_label(first_run)}",
+            f"interval={_minutes_label(interval)}",
+            f"grace={_minutes_label(grace_seconds)}",
+        ],
+        details={
+            "first_run_seconds": first_run,
+            "interval_seconds": interval,
+            "grace_seconds": grace_seconds,
+        },
+    )
+    if _stop_event.wait(first_run):
+        return
+    while not _stop_event.is_set():
+        try:
+            _set_state("scanner", running=True)
+            result = reconcile_vanished_downloads()
+            _set_state(
+                "scanner",
+                running=False,
+                last_run_at=datetime.now(UTC).isoformat(),
+                last_error="",
+                last_result=result,
+            )
+        except Exception as exc:
+            log_exception(logger, "runtime.scanner.failed", "Vanished scanner failed", details={"error": str(exc)})
+            _set_state(
+                "scanner",
+                running=False,
+                last_run_at=datetime.now(UTC).isoformat(),
+                last_error=str(exc),
+                last_result=runtime_state().get("scanner", {}).get("last_result"),
+            )
+        if _stop_event.wait(interval):
+            break
+
+
 def start_background_workers() -> dict:
     _stop_event.clear()
     startup = restore_on_startup()
     _set_state("startup", **startup)
     _set_state("links", enabled=settings.sanitizer_enabled, running=False, last_error="")
     _set_state("eligible", enabled=settings.eligible_enabled, running=False, last_error="")
+    _set_state("scanner", enabled=True, running=False, last_error="")
 
     workers = {
         "sync": _run_sync_loop,
+        "scanner": _run_scanner_loop,
     }
     if settings.sanitizer_enabled:
         workers["links"] = _run_link_loop

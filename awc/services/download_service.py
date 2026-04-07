@@ -689,6 +689,54 @@ def mark_imported(download_id: str, *, emit_log: bool = True) -> dict | None:
     return updated
 
 
+def mark_vanished(download_id: str, *, emit_log: bool = True) -> dict | None:
+    entry = get_download(download_id)
+    if not entry or entry.get("status") != "completed":
+        return None
+    updated = update_download_progress(download_id, status="vanished")
+    if updated and emit_log:
+        log_info(
+            logger,
+            "download.vanished",
+            "Download vanished",
+            entity_kind="download",
+            entity_id=download_id,
+            entity_title=updated.get("filename"),
+            details={"filename": updated.get("filename")},
+        )
+    return updated
+
+
+def reconcile_vanished_downloads() -> dict:
+    grace_seconds = 60
+    now = datetime.now(UTC).timestamp()
+    checked = 0
+    vanished = 0
+
+    for entry in list_completed_downloads():
+        checked += 1
+        filename = str(entry.get("filename") or "").strip()
+        if not filename:
+            continue
+        finished_at = float(entry.get("finished_at") or 0)
+        if not finished_at or (now - finished_at) < grace_seconds:
+            continue
+
+        final_path = _final_path(filename)
+        if final_path and os.path.exists(final_path):
+            continue
+
+        updated = mark_vanished(str(entry.get("id") or ""))
+        if updated:
+            vanished += 1
+
+    return {
+        "checked": checked,
+        "vanished": vanished,
+        "grace_seconds": grace_seconds,
+    }
+
+
 def restore_on_startup() -> dict:
     restored = 0
     fixed = 0
@@ -721,7 +769,7 @@ def restore_on_startup() -> dict:
 def build_download_snapshot(limit: int = 100) -> dict:
     downloads = list_downloads(limit=limit)
     active_statuses = {"queued", "downloading", "resuming", "importing"}
-    finished_statuses = {"completed", "imported", "failed", "cancelled", "removed"}
+    finished_statuses = {"completed", "imported", "failed", "cancelled", "removed", "vanished"}
     now = datetime.now(UTC).timestamp()
     enriched = []
     for item in downloads:

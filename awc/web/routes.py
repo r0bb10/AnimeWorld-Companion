@@ -609,7 +609,7 @@ def download_handoff(
         "Content-Disposition": f'attachment; filename="{torrent_name}"',
         "X-AWC-Download-Id": str(download.get("id", "")),
     }
-    return Response(content=torrent_bytes, media_type="application/x-bittorrent", headers=headers)
+    return Response(status_code=204, headers=headers)
 
 
 @api_router.get("/api/downloads", tags=["Download"], summary="List downloads", description="Return tracked AWC download jobs with progress, status, and summary counts.")

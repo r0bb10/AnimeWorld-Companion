@@ -647,6 +647,13 @@ def _sonarr_episode_keys(payload: dict) -> set[tuple[int, int]]:
     return keys
 
 
+def _unique_match(entries: list[dict], predicate) -> dict | None:
+    matches = [entry for entry in entries if predicate(entry)]
+    if len(matches) == 1:
+        return matches[0]
+    return None
+
+
 def find_completed_download_for_import_webhook(manager: str, manager_entity_id: int, payload: dict) -> dict | None:
     candidates = _completed_download_candidates(manager, manager_entity_id)
     if not candidates:
@@ -654,19 +661,16 @@ def find_completed_download_for_import_webhook(manager: str, manager_entity_id: 
 
     source_names = _import_source_names(manager, payload)
     if source_names:
-        for entry in candidates:
-            if _download_basename(entry.get("filename") or "") in source_names:
-                return entry
+        match = _unique_match(candidates, lambda entry: _download_basename(entry.get("filename") or "") in source_names)
+        if match:
+            return match
 
     if manager == "sonarr":
         episode_keys = _sonarr_episode_keys(payload)
         if episode_keys:
-            for entry in candidates:
-                if _sonarr_episode_key(str(entry.get("filename") or "")) in episode_keys:
-                    return entry
-
-    if len(candidates) == 1:
-        return candidates[0]
+            match = _unique_match(candidates, lambda entry: _sonarr_episode_key(str(entry.get("filename") or "")) in episode_keys)
+            if match:
+                return match
 
     return None
 

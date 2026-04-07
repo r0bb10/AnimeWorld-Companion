@@ -43,6 +43,8 @@ from ..services.download_service import (
     cancel_download,
     clear_download_history,
     create_fake_torrent,
+    find_completed_download_for_import_webhook,
+    mark_imported,
     remove_download,
     resolve_legacy_download_request,
     resume_download,
@@ -72,6 +74,8 @@ from ..services.rss_service import build_rss_snapshot, clear_rss_cache
 from ..services.torznab_service import build_caps_xml, build_search_xml
 from ..services.webhook_service import normalize_webhook
 from ..services.sync_runner_service import sync_all, sync_now_radarr, sync_now_sonarr, sync_single_movie, sync_single_show, sync_status
+from ..integrations.radarr_client import RadarrClient
+from ..integrations.sonarr_client import SonarrClient
 from .auth import require_api_key
 
 api_router = APIRouter()
@@ -147,6 +151,88 @@ def _log_webhook_received(normalized: dict) -> None:
         entity_kind=manager or None,
         entity_id=manager_entity_id,
         entity_title=entity_title,
+    )
+
+
+def _sonarr_webhook_episode_ids(payload: dict) -> list[int]:
+    episode_ids: list[int] = []
+    for episode in payload.get("episodes") or []:
+        try:
+            episode_ids.append(int(episode.get("id")))
+        except (TypeError, ValueError):
+            continue
+    return episode_ids
+
+
+def _handle_import_webhook(normalized: dict, payload: dict) -> None:
+    manager = str(normalized.get("manager") or "")
+    manager_entity_id = normalized.get("manager_entity_id")
+    if manager not in {"sonarr", "radarr"} or manager_entity_id is None:
+        return
+
+    manager_entity_id = int(manager_entity_id)
+    entity_title = str((normalized.get("entity") or {}).get("title") or manager_entity_id)
+    matched = find_completed_download_for_import_webhook(manager, manager_entity_id, payload)
+    if not matched:
+        log_block(
+            logger,
+            logging.INFO,
+            f"Webhook {manager.capitalize()} import: {entity_title}",
+            ["no completed download match"],
+            event_type=f"webhook.{manager}.import",
+            entity_kind=manager,
+            entity_id=manager_entity_id,
+            entity_title=entity_title,
+            details={"status": "no_match"},
+        )
+        return
+
+    updated = mark_imported(str(matched.get("id") or ""))
+    if not updated:
+        log_block(
+            logger,
+            logging.INFO,
+            f"Webhook {manager.capitalize()} import: {entity_title}",
+            [f"download={matched.get('filename') or matched.get('id')}", "already settled"],
+            event_type=f"webhook.{manager}.import",
+            entity_kind=manager,
+            entity_id=manager_entity_id,
+            entity_title=entity_title,
+            details={"status": "already_settled", "download_id": matched.get("id")},
+        )
+        return
+
+    lines = [f"download={updated.get('filename') or updated.get('id')}", "status=imported"]
+    details = {"status": "imported", "download_id": updated.get("id")}
+
+    if settings.unmonitor_imported:
+        if manager == "sonarr":
+            sonarr_client = SonarrClient()
+            episode_ids = _sonarr_webhook_episode_ids(payload)
+            unmonitored = 0
+            for episode_id in episode_ids:
+                if sonarr_client.unmonitor_episode(episode_id):
+                    unmonitored += 1
+            if episode_ids:
+                lines.append(f"unmonitored={unmonitored}/{len(episode_ids)}")
+                details["episode_ids"] = episode_ids
+                details["unmonitored"] = unmonitored
+        elif manager == "radarr":
+            radarr_client = RadarrClient()
+            success = radarr_client.unmonitor_movie(manager_entity_id)
+            lines.append(f"unmonitor={'ok' if success else 'failed'}")
+            details["unmonitored"] = success
+
+    log_block(
+        logger,
+        logging.INFO,
+        f"Webhook {manager.capitalize()} import: {entity_title}",
+        lines,
+        event_type=f"webhook.{manager}.import",
+        entity_kind=manager,
+        entity_id=manager_entity_id,
+        entity_title=entity_title,
+        details=details,
     )
 
 
@@ -780,6 +866,8 @@ def manager_webhook(
     if not normalized["accepted"]:
         raise HTTPException(status_code=400, detail="Unsupported webhook payload")
     _log_webhook_received(normalized)
+    if normalized["event_family"] == "import":
+        _handle_import_webhook(normalized, payload)
     if normalized["event_family"] == "add" and normalized.get("manager_entity_id"):
         manager = str(normalized.get("manager") or "")
         manager_entity_id = int(normalized["manager_entity_id"])

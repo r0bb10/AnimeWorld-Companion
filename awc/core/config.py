@@ -112,7 +112,6 @@ class Settings:
     sync_interval_minutes: int
     max_concurrent_downloads: int
     download_history_days: int
-    import_poll_interval: int
     unmonitor_imported: bool
     ignore_tags: tuple[str, ...]
     rss_enabled: bool
@@ -150,7 +149,6 @@ def load_settings() -> Settings:
         sync_interval_minutes=_int("SYNC_INTERVAL", _int("SONARR_SYNC_INTERVAL", 30)),
         max_concurrent_downloads=_int("MAX_CONCURRENT_DOWNLOADS", 10),
         download_history_days=_int("DOWNLOAD_HISTORY_DAYS", 7),
-        import_poll_interval=_int("IMPORT_POLL_INTERVAL", 60),
         unmonitor_imported=_get("UNMONITOR_IMPORTED", "false").lower() == "true",
         ignore_tags=tuple(tag.lower() for tag in _csv("IGNORE_TAG")),
         rss_enabled=_get("RSS_ENABLED", "false").lower() == "true",

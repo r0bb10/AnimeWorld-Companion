@@ -7,7 +7,6 @@ from datetime import UTC, datetime
 import json
 import logging
 from pathlib import Path
-import re
 import threading
 import time
 import xml.etree.ElementTree as ET
@@ -18,11 +17,9 @@ from ..core.config import settings
 from ..core.log_events import log_block, log_debug, log_exception, log_info, log_warning
 from ..core.logging import get_logger
 from ..integrations.animeworld_client import AnimeWorldClient
-from ..integrations.radarr_client import RadarrClient
-from ..integrations.sonarr_client import SonarrClient
 from ..repositories.db import get_db
 from ..repositories.rss_cache import cleanup_rss_items, has_movie_rss_item, has_rss_item, save_movie_rss_item, save_rss_item
-from .download_service import completed_downloads, mark_imported, restore_on_startup
+from .download_service import restore_on_startup
 from .eligible_service import run_eligible_once
 from .sanitizer_service import sanitize_links_once, sanitizer_status
 from .search_service import build_movie_search_items, build_show_search_items
@@ -36,7 +33,6 @@ _state_lock = threading.Lock()
 _state = {
     "sync": {"running": False, "last_run_at": None, "last_error": ""},
     "rss": {"enabled": False, "running": False, "last_run_at": None, "last_error": "", "last_cached": 0},
-    "imports": {"running": False, "last_run_at": None, "last_error": "", "last_marked": 0},
     "links": {"enabled": False, "running": False, "last_run_at": None, "last_error": "", "last_result": None},
     "eligible": {"enabled": False, "running": False, "last_run_at": None, "last_error": "", "last_result": None},
     "startup": {"restored": 0, "fixed": 0},
@@ -386,76 +382,6 @@ def _run_sync_loop() -> None:
             break
 
 
-def _run_import_loop() -> None:
-    _set_state("imports", running=True)
-    interval = max(30, settings.import_poll_interval)
-    log_info(
-        logger,
-        "runtime.imports.loop_started",
-        "Import poller started",
-        details={"interval_seconds": interval},
-        lines=[f"interval={_minutes_label(interval)}"],
-    )
-    sonarr_client = SonarrClient()
-    radarr_client = RadarrClient()
-    while not _stop_event.is_set():
-        marked = 0
-        try:
-            log_debug(logger, "runtime.imports.cycle.started", "Import poll cycle started")
-            for entry in completed_downloads():
-                sonarr_id = entry.get("sonarr_id")
-                radarr_id = entry.get("radarr_id")
-                if sonarr_id:
-                    match = re.search(r"[Ss](\d+)[Ee](\d+)", entry.get("filename", ""))
-                    if not match:
-                        continue
-                    season_number = int(match.group(1))
-                    episode_number = int(match.group(2))
-                    episodes = sonarr_client.fetch_season_episodes(int(sonarr_id), season_number)
-                    target = next((ep for ep in episodes if ep.get("episodeNumber") == episode_number), None)
-                    if not target or not target.get("hasFile"):
-                        continue
-                    if mark_imported(entry["id"]):
-                        marked += 1
-                        if settings.unmonitor_imported and target.get("id"):
-                            sonarr_client.unmonitor_episode(int(target["id"]))
-                            log_info(logger, "runtime.imports.sonarr.unmonitored", "Imported and unmonitored Sonarr episode", entity_kind="download", entity_id=entry.get("id"), entity_title=entry.get("filename"), details={"filename": entry.get("filename")})
-                        else:
-                            log_info(logger, "runtime.imports.sonarr.imported", "Imported Sonarr episode", entity_kind="download", entity_id=entry.get("id"), entity_title=entry.get("filename"), details={"filename": entry.get("filename")})
-                    continue
-
-                if radarr_id:
-                    movie = radarr_client.fetch_movie_detail(int(radarr_id))
-                    if not movie or not movie.get("hasFile"):
-                        continue
-                    if mark_imported(entry["id"]):
-                        marked += 1
-                        if settings.unmonitor_imported and movie.get("id"):
-                            radarr_client.unmonitor_movie(int(movie["id"]))
-                            log_info(logger, "runtime.imports.radarr.unmonitored", "Imported and unmonitored Radarr movie", entity_kind="download", entity_id=entry.get("id"), entity_title=entry.get("filename"), details={"filename": entry.get("filename")})
-                        else:
-                            log_info(logger, "runtime.imports.radarr.imported", "Imported Radarr movie", entity_kind="download", entity_id=entry.get("id"), entity_title=entry.get("filename"), details={"filename": entry.get("filename")})
-            _set_state(
-                "imports",
-                running=False,
-                last_run_at=datetime.now(UTC).isoformat(),
-                last_error="",
-                last_marked=marked,
-            )
-            log_debug(logger, "runtime.imports.cycle.finished", "Import poll cycle finished", details={"marked": marked})
-        except Exception as exc:
-            log_exception(logger, "runtime.imports.failed", "Import poller failed", details={"error": str(exc)})
-            _set_state(
-                "imports",
-                running=False,
-                last_run_at=datetime.now(UTC).isoformat(),
-                last_error=str(exc),
-                last_marked=marked,
-            )
-        if _stop_event.wait(interval):
-            break
-
-
 def _run_link_loop() -> None:
     _set_state("links", enabled=settings.sanitizer_enabled, running=False, last_error="")
     if not settings.sanitizer_enabled:
@@ -552,7 +478,6 @@ def start_background_workers() -> dict:
 
     workers = {
         "sync": _run_sync_loop,
-        "imports": _run_import_loop,
     }
     if settings.sanitizer_enabled:
         workers["links"] = _run_link_loop

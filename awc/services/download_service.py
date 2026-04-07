@@ -6,6 +6,7 @@ from hashlib import sha1
 import logging
 from pathlib import Path
 import os
+import re
 import threading
 from urllib.parse import urlencode
 
@@ -582,6 +583,92 @@ def queue_download(download_id: str) -> dict | None:
 
 def completed_downloads() -> list[dict]:
     return list_completed_downloads()
+
+
+def _download_basename(value: str) -> str:
+    return Path(str(value or "")).name.casefold()
+
+
+def _sonarr_episode_key(filename: str) -> tuple[int, int] | None:
+    match = re.search(r"[Ss](\d+)[Ee](\d+)", filename or "")
+    if not match:
+        return None
+    return int(match.group(1)), int(match.group(2))
+
+
+def _completed_download_candidates(manager: str, manager_entity_id: int) -> list[dict]:
+    entries = list_completed_downloads()
+    if manager == "sonarr":
+        return [entry for entry in entries if int(entry.get("sonarr_id") or 0) == manager_entity_id]
+    if manager == "radarr":
+        return [entry for entry in entries if int(entry.get("radarr_id") or 0) == manager_entity_id]
+    return []
+
+
+def _import_source_names(manager: str, payload: dict) -> set[str]:
+    names: set[str] = set()
+
+    def _collect(path: str) -> None:
+        name = _download_basename(path)
+        if name:
+            names.add(name)
+
+    _collect(str(payload.get("sourcePath") or ""))
+
+    if manager == "sonarr":
+        episode_file = payload.get("episodeFile") or {}
+        _collect(str(episode_file.get("sourcePath") or ""))
+        _collect(str(episode_file.get("path") or ""))
+        for item in payload.get("episodeFiles") or []:
+            file_payload = item or {}
+            _collect(str(file_payload.get("sourcePath") or ""))
+            _collect(str(file_payload.get("path") or ""))
+    elif manager == "radarr":
+        movie_file = payload.get("movieFile") or {}
+        _collect(str(movie_file.get("sourcePath") or ""))
+        _collect(str(movie_file.get("path") or ""))
+        for item in payload.get("movieFiles") or []:
+            file_payload = item or {}
+            _collect(str(file_payload.get("sourcePath") or ""))
+            _collect(str(file_payload.get("path") or ""))
+
+    return names
+
+
+def _sonarr_episode_keys(payload: dict) -> set[tuple[int, int]]:
+    keys: set[tuple[int, int]] = set()
+    for episode in payload.get("episodes") or []:
+        try:
+            season_number = int(episode.get("seasonNumber"))
+            episode_number = int(episode.get("episodeNumber"))
+        except (TypeError, ValueError):
+            continue
+        keys.add((season_number, episode_number))
+    return keys
+
+
+def find_completed_download_for_import_webhook(manager: str, manager_entity_id: int, payload: dict) -> dict | None:
+    candidates = _completed_download_candidates(manager, manager_entity_id)
+    if not candidates:
+        return None
+
+    source_names = _import_source_names(manager, payload)
+    if source_names:
+        for entry in candidates:
+            if _download_basename(entry.get("filename") or "") in source_names:
+                return entry
+
+    if manager == "sonarr":
+        episode_keys = _sonarr_episode_keys(payload)
+        if episode_keys:
+            for entry in candidates:
+                if _sonarr_episode_key(str(entry.get("filename") or "")) in episode_keys:
+                    return entry
+
+    if len(candidates) == 1:
+        return candidates[0]
+
+    return None
 
 
 def mark_imported(download_id: str) -> dict | None:

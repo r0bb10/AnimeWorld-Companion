@@ -109,44 +109,90 @@ def _webhook_log_level(status: str) -> int:
     return logging.INFO if status in {"success", "already_mapped"} else logging.WARNING
 
 
-def _webhook_receipt_label(event_type: str, event_family: str) -> str:
-    normalized = (event_type or "").strip().lower()
-    if "file" in normalized and "import" in normalized:
-        return "file import"
-    if event_family in {"add", "delete", "test", "import", "file", "grab"}:
+def _webhook_event_label(normalized: dict) -> str:
+    event_family = str(normalized.get("event_family") or "unknown").strip().lower()
+    if event_family and event_family != "unknown":
         return event_family
+    event_type = str(normalized.get("event_type") or "").strip().lower()
     return event_type or "unknown"
 
 
-def _log_webhook_received(normalized: dict) -> None:
+def _sonarr_episode_span(payload: dict) -> str:
+    episodes = payload.get("episodes") or []
+    parsed: list[tuple[int, int]] = []
+    for episode in episodes:
+        try:
+            parsed.append((int(episode.get("seasonNumber")), int(episode.get("episodeNumber"))))
+        except (TypeError, ValueError):
+            continue
+    if not parsed:
+        return ""
+    parsed = sorted(set(parsed))
+    seasons = {season for season, _ in parsed}
+    if len(parsed) == 1:
+        season_number, episode_number = parsed[0]
+        return f"S{season_number:02d}E{episode_number:02d}"
+    if len(seasons) == 1:
+        season_number = parsed[0][0]
+        episode_numbers = [episode for _, episode in parsed]
+        contiguous = episode_numbers == list(range(episode_numbers[0], episode_numbers[-1] + 1))
+        if contiguous:
+            return f"S{season_number:02d}E{episode_numbers[0]:02d}-E{episode_numbers[-1]:02d}"
+        return f"S{season_number:02d} {len(parsed)} episodes"
+    return f"{len(parsed)} episodes"
+
+
+def _webhook_item_label(normalized: dict, payload: dict) -> str:
     manager = str(normalized.get("manager") or "")
-    event_type = str(normalized.get("event_type") or "")
-    event_family = str(normalized.get("event_family") or "unknown")
     entity = normalized.get("entity") or {}
-    entity_title = str(entity.get("title") or event_type or manager or "webhook")
-    label = _webhook_receipt_label(event_type, event_family)
+    title = str(entity.get("title") or "").strip()
+    if manager == "sonarr":
+        span = _sonarr_episode_span(payload)
+        if title and span and _webhook_event_label(normalized) == "import":
+            return f"{title} {span}"
+        return title
+    if manager == "radarr":
+        year = entity.get("year")
+        if title and year:
+            return f"{title} ({year})"
+        return title
+    return title
 
-    lines = [f"event={event_type or 'unknown'}"]
-    local_match = normalized.get("local_match") or {}
-    if local_match.get("id") is not None:
-        lines.append(
-            f"matched={local_match.get('title') or local_match.get('id')} ({local_match.get('matched_by') or 'unknown'})"
-        )
 
+def _webhook_details(normalized: dict) -> dict:
     details = {
-        "manager": manager,
-        "event_type": event_type,
-        "event_family": event_family,
+        "manager": str(normalized.get("manager") or ""),
+        "event_type": str(normalized.get("event_type") or ""),
+        "event_family": str(normalized.get("event_family") or "unknown"),
     }
     manager_entity_id = normalized.get("manager_entity_id")
     if manager_entity_id is not None:
         details["manager_id"] = manager_entity_id
+    local_match = normalized.get("local_match") or {}
+    if local_match.get("id") is not None:
+        details["local_match_id"] = local_match.get("id")
+        details["matched_by"] = local_match.get("matched_by")
+    return details
 
-    log_info(
+
+def _log_webhook_received(normalized: dict, payload: dict, *, lines: list[str] | None = None, level: int = logging.INFO, event_type: str | None = None) -> None:
+    manager = str(normalized.get("manager") or "")
+    entity_title = _webhook_item_label(normalized, payload) or str(normalized.get("event_type") or manager or "webhook")
+    receipt_lines = [f"event={_webhook_event_label(normalized)}"]
+    if entity_title:
+        receipt_lines.append(f"item={entity_title}")
+    if lines:
+        receipt_lines.extend(lines)
+
+    details = _webhook_details(normalized)
+    manager_entity_id = normalized.get("manager_entity_id")
+
+    log_block(
         logger,
-        f"webhook.{manager or 'manager'}.{event_family}.received",
-        f"Webhook {manager.capitalize() if manager else 'Manager'} {label} received: {entity_title}",
-        lines=lines,
+        level,
+        f"Webhook from {manager.capitalize() if manager else 'Manager'} received",
+        receipt_lines,
+        event_type=event_type or f"webhook.{manager or 'manager'}.{_webhook_event_label(normalized)}.received",
         details=details,
         entity_kind=manager or None,
         entity_id=manager_entity_id,
@@ -171,39 +217,30 @@ def _handle_import_webhook(normalized: dict, payload: dict) -> None:
         return
 
     manager_entity_id = int(manager_entity_id)
-    entity_title = str((normalized.get("entity") or {}).get("title") or manager_entity_id)
     matched = find_completed_download_for_import_webhook(manager, manager_entity_id, payload)
     if not matched:
-        log_block(
-            logger,
-            logging.INFO,
-            f"Webhook {manager.capitalize()} import: {entity_title}",
-            ["no completed download match"],
+        _log_webhook_received(
+            normalized,
+            payload,
+            lines=["result=no completed download match"],
             event_type=f"webhook.{manager}.import",
-            entity_kind=manager,
-            entity_id=manager_entity_id,
-            entity_title=entity_title,
-            details={"status": "no_match"},
         )
         return
 
-    updated = mark_imported(str(matched.get("id") or ""))
+    updated = mark_imported(str(matched.get("id") or ""), emit_log=False)
     if not updated:
-        log_block(
-            logger,
-            logging.INFO,
-            f"Webhook {manager.capitalize()} import: {entity_title}",
-            [f"download={matched.get('filename') or matched.get('id')}", "already settled"],
+        _log_webhook_received(
+            normalized,
+            payload,
+            lines=[
+                f"download={matched.get('filename') or matched.get('id')}",
+                "result=already settled",
+            ],
             event_type=f"webhook.{manager}.import",
-            entity_kind=manager,
-            entity_id=manager_entity_id,
-            entity_title=entity_title,
-            details={"status": "already_settled", "download_id": matched.get("id")},
         )
         return
 
-    lines = [f"download={updated.get('filename') or updated.get('id')}", "status=imported"]
-    details = {"status": "imported", "download_id": updated.get("id")}
+    lines = [f"download={updated.get('filename') or updated.get('id')}", "result=imported"]
 
     if settings.unmonitor_imported:
         if manager == "sonarr":
@@ -215,24 +252,16 @@ def _handle_import_webhook(normalized: dict, payload: dict) -> None:
                     unmonitored += 1
             if episode_ids:
                 lines.append(f"unmonitored={unmonitored}/{len(episode_ids)}")
-                details["episode_ids"] = episode_ids
-                details["unmonitored"] = unmonitored
         elif manager == "radarr":
             radarr_client = RadarrClient()
             success = radarr_client.unmonitor_movie(manager_entity_id)
             lines.append(f"unmonitor={'ok' if success else 'failed'}")
-            details["unmonitored"] = success
 
-    log_block(
-        logger,
-        logging.INFO,
-        f"Webhook {manager.capitalize()} import: {entity_title}",
-        lines,
+    _log_webhook_received(
+        normalized,
+        payload,
+        lines=lines,
         event_type=f"webhook.{manager}.import",
-        entity_kind=manager,
-        entity_id=manager_entity_id,
-        entity_title=entity_title,
-        details=details,
     )
 
 
@@ -865,9 +894,10 @@ def manager_webhook(
     normalized = normalize_webhook(payload)
     if not normalized["accepted"]:
         raise HTTPException(status_code=400, detail="Unsupported webhook payload")
-    _log_webhook_received(normalized)
     if normalized["event_family"] == "import":
         _handle_import_webhook(normalized, payload)
+        return normalized
+    _log_webhook_received(normalized, payload)
     if normalized["event_family"] == "add" and normalized.get("manager_entity_id"):
         manager = str(normalized.get("manager") or "")
         manager_entity_id = int(normalized["manager_entity_id"])

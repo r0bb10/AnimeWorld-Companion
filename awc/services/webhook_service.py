@@ -41,6 +41,12 @@ def _classify_event(event_type: str) -> str:
     normalized = event_type.lower()
     if "test" in normalized:
         return "test"
+    if "health" in normalized:
+        return "health"
+    if "manual" in normalized:
+        return "manual"
+    if "application" in normalized or "update" in normalized:
+        return "application"
     if "delete" in normalized:
         return "delete"
     if "import" in normalized or "download" in normalized:

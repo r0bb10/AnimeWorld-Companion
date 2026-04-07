@@ -671,7 +671,7 @@ def find_completed_download_for_import_webhook(manager: str, manager_entity_id: 
     return None
 
 
-def mark_imported(download_id: str) -> dict | None:
+def mark_imported(download_id: str, *, emit_log: bool = True) -> dict | None:
     entry = get_download(download_id)
     if not entry or entry.get("status") != "completed":
         return None
@@ -680,7 +680,7 @@ def mark_imported(download_id: str) -> dict | None:
         status="imported",
         finished_at=datetime.now(UTC).timestamp(),
     )
-    if updated:
+    if updated and emit_log:
         log_info(logger, "download.imported", "Download imported", entity_kind="download", entity_id=download_id, entity_title=updated.get("filename"), details={"filename": updated.get("filename")})
     return updated
 

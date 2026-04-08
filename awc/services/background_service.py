@@ -48,38 +48,84 @@ def _set_state(section: str, **updates) -> None:
         _state.setdefault(section, {}).update(updates)
 
 
-def _run_rss_loop() -> None:
-    _set_state("rss", enabled=settings.rss_enabled, running=True)
-    interval = max(30, settings.rss_poll_interval)
+def _run_scheduled_worker(
+    *,
+    section: str,
+    enabled: bool,
+    first_run: int,
+    interval: int,
+    scheduled_event_type: str,
+    scheduled_message: str,
+    scheduled_lines: list[str],
+    scheduled_details: dict,
+    run_once,
+    failure_event_type: str,
+    failure_message: str,
+    disabled_event_type: str | None = None,
+    disabled_message: str | None = None,
+    result_updates=None,
+    error_updates=None,
+) -> None:
+    _set_state(section, enabled=enabled, running=False, last_error="")
+    if not enabled:
+        if disabled_event_type and disabled_message:
+            log_info(logger, disabled_event_type, disabled_message)
+        return
+
     log_info(
         logger,
-        "runtime.rss.loop_started",
-        "RSS poller started",
-        details={"interval_seconds": interval},
-        lines=[f"interval={_minutes_label(interval)}"],
+        scheduled_event_type,
+        scheduled_message,
+        lines=scheduled_lines,
+        details=scheduled_details,
     )
+    if _stop_event.wait(first_run):
+        return
     while not _stop_event.is_set():
         try:
-            result = update_rss_cache(emit_cycle_logs=True)
-            _set_state(
-                "rss",
-                enabled=bool(result.get("enabled", settings.rss_enabled)),
-                running=False,
-                last_run_at=datetime.now(UTC).isoformat(),
-                last_error=str(result.get("error") or ""),
-                last_cached=int(result.get("cached", 0) or 0),
-            )
+            _set_state(section, running=True)
+            result = run_once()
+            updates = {
+                "running": False,
+                "last_run_at": datetime.now(UTC).isoformat(),
+                "last_error": "",
+            }
+            if result_updates:
+                updates.update(result_updates(result))
+            _set_state(section, **updates)
         except Exception as exc:
-            log_exception(logger, "runtime.rss.loop_failed", "RSS poller failed", details={"error": str(exc)})
-            _set_state(
-                "rss",
-                enabled=settings.rss_enabled,
-                running=False,
-                last_run_at=datetime.now(UTC).isoformat(),
-                last_error=str(exc),
-            )
-        if _stop_event.wait(max(30, settings.rss_poll_interval)):
+            log_exception(logger, failure_event_type, failure_message, details={"error": str(exc)})
+            updates = {
+                "running": False,
+                "last_run_at": datetime.now(UTC).isoformat(),
+                "last_error": str(exc),
+            }
+            if error_updates:
+                updates.update(error_updates())
+            _set_state(section, **updates)
+        if _stop_event.wait(interval):
             break
+
+
+def _run_rss_loop() -> None:
+    interval = max(30, settings.rss_poll_interval)
+    _run_scheduled_worker(
+        section="rss",
+        enabled=settings.rss_enabled,
+        first_run=0,
+        interval=interval,
+        scheduled_event_type="runtime.rss.loop_started",
+        scheduled_message="RSS poller started",
+        scheduled_lines=[f"interval={_minutes_label(interval)}"],
+        scheduled_details={"interval_seconds": interval},
+        run_once=lambda: update_rss_cache(emit_cycle_logs=True),
+        failure_event_type="runtime.rss.loop_failed",
+        failure_message="RSS poller failed",
+        result_updates=lambda result: {
+            "enabled": bool(result.get("enabled", settings.rss_enabled)),
+            "last_cached": int(result.get("cached", 0) or 0),
+        },
+    )
 
 
 def _run_sync_loop() -> None:
@@ -125,90 +171,55 @@ def _run_sync_loop() -> None:
 
 
 def _run_link_loop() -> None:
-    _set_state("links", enabled=settings.sanitizer_enabled, running=False, last_error="")
-    if not settings.sanitizer_enabled:
-        log_info(logger, "runtime.links.disabled", "Sanitizer loop disabled by env")
-        return
     first_run = 60 * 10
     interval = 60 * 60 * 24
-    log_info(
-        logger,
-        "runtime.links.scheduled",
-        "Sanitizer loop scheduled",
-        lines=[f"first_run={_minutes_label(first_run)}", f"interval={_minutes_label(interval)}"],
-        details={"first_run_seconds": first_run, "interval_seconds": interval},
+    _run_scheduled_worker(
+        section="links",
+        enabled=settings.sanitizer_enabled,
+        first_run=first_run,
+        interval=interval,
+        scheduled_event_type="runtime.links.scheduled",
+        scheduled_message="Sanitizer loop scheduled",
+        scheduled_lines=[f"first_run={_minutes_label(first_run)}", f"interval={_minutes_label(interval)}"],
+        scheduled_details={"first_run_seconds": first_run, "interval_seconds": interval},
+        run_once=sanitize_links_once,
+        failure_event_type="runtime.links.failed",
+        failure_message="Link sanitizer failed",
+        disabled_event_type="runtime.links.disabled",
+        disabled_message="Sanitizer loop disabled by env",
+        result_updates=lambda result: {"last_result": result},
+        error_updates=lambda: {"last_result": sanitizer_status().get("last_result")},
     )
-    if _stop_event.wait(first_run):
-        return
-    while not _stop_event.is_set():
-        try:
-            _set_state("links", running=True)
-            result = sanitize_links_once()
-            _set_state(
-                "links",
-                running=False,
-                last_run_at=datetime.now(UTC).isoformat(),
-                last_error="",
-                last_result=result,
-            )
-        except Exception as exc:
-            log_exception(logger, "runtime.links.failed", "Link sanitizer failed", details={"error": str(exc)})
-            _set_state(
-                "links",
-                running=False,
-                last_run_at=datetime.now(UTC).isoformat(),
-                last_error=str(exc),
-                last_result=sanitizer_status().get("last_result"),
-            )
-        if _stop_event.wait(interval):
-            break
 
 
 def _run_eligible_loop() -> None:
-    _set_state("eligible", enabled=settings.eligible_enabled, running=False, last_error="")
-    if not settings.eligible_enabled:
-        log_info(logger, "runtime.eligible.disabled", "Eligible loop disabled by env")
-        return
     interval = max(60 * 60, int(settings.eligible_interval or 0))
-    log_info(
-        logger,
-        "runtime.eligible.scheduled",
-        "Eligible loop scheduled",
-        lines=[
+    first_run = 300
+    _run_scheduled_worker(
+        section="eligible",
+        enabled=settings.eligible_enabled,
+        first_run=first_run,
+        interval=interval,
+        scheduled_event_type="runtime.eligible.scheduled",
+        scheduled_message="Eligible loop scheduled",
+        scheduled_lines=[
             f"first_run={_minutes_label(300)}",
             f"interval={_minutes_label(interval)}",
             f"lookback_days={max(0, int(settings.eligible_lookback_days or 0))}",
         ],
-        details={
-            "first_run_seconds": 300,
+        scheduled_details={
+            "first_run_seconds": first_run,
             "interval_seconds": interval,
             "lookback_days": max(0, int(settings.eligible_lookback_days or 0)),
         },
+        run_once=run_eligible_once,
+        failure_event_type="runtime.eligible.failed",
+        failure_message="Eligible loop failed",
+        disabled_event_type="runtime.eligible.disabled",
+        disabled_message="Eligible loop disabled by env",
+        result_updates=lambda result: {"last_result": result},
+        error_updates=lambda: {"last_result": runtime_state().get("eligible", {}).get("last_result")},
     )
-    if _stop_event.wait(300):
-        return
-    while not _stop_event.is_set():
-        try:
-            _set_state("eligible", running=True)
-            result = run_eligible_once()
-            _set_state(
-                "eligible",
-                running=False,
-                last_run_at=datetime.now(UTC).isoformat(),
-                last_error="",
-                last_result=result,
-            )
-        except Exception as exc:
-            log_exception(logger, "runtime.eligible.failed", "Eligible loop failed", details={"error": str(exc)})
-            _set_state(
-                "eligible",
-                running=False,
-                last_run_at=datetime.now(UTC).isoformat(),
-                last_error=str(exc),
-                last_result=runtime_state().get("eligible", {}).get("last_result"),
-            )
-        if _stop_event.wait(interval):
-            break
 
 
 def _run_scanner_loop() -> None:
@@ -216,46 +227,29 @@ def _run_scanner_loop() -> None:
     interval = 30
     grace_seconds = 60
 
-    _set_state("scanner", enabled=True, running=False, last_error="")
-    log_info(
-        logger,
-        "runtime.scanner.scheduled",
-        "Vanished scanner scheduled",
-        lines=[
+    _run_scheduled_worker(
+        section="scanner",
+        enabled=True,
+        first_run=first_run,
+        interval=interval,
+        scheduled_event_type="runtime.scanner.scheduled",
+        scheduled_message="Vanished scanner scheduled",
+        scheduled_lines=[
             f"first_run={_minutes_label(first_run)}",
             f"interval={_minutes_label(interval)}",
             f"grace={_minutes_label(grace_seconds)}",
         ],
-        details={
+        scheduled_details={
             "first_run_seconds": first_run,
             "interval_seconds": interval,
             "grace_seconds": grace_seconds,
         },
+        run_once=reconcile_vanished_downloads,
+        failure_event_type="runtime.scanner.failed",
+        failure_message="Vanished scanner failed",
+        result_updates=lambda result: {"last_result": result},
+        error_updates=lambda: {"last_result": runtime_state().get("scanner", {}).get("last_result")},
     )
-    if _stop_event.wait(first_run):
-        return
-    while not _stop_event.is_set():
-        try:
-            _set_state("scanner", running=True)
-            result = reconcile_vanished_downloads()
-            _set_state(
-                "scanner",
-                running=False,
-                last_run_at=datetime.now(UTC).isoformat(),
-                last_error="",
-                last_result=result,
-            )
-        except Exception as exc:
-            log_exception(logger, "runtime.scanner.failed", "Vanished scanner failed", details={"error": str(exc)})
-            _set_state(
-                "scanner",
-                running=False,
-                last_run_at=datetime.now(UTC).isoformat(),
-                last_error=str(exc),
-                last_result=runtime_state().get("scanner", {}).get("last_result"),
-            )
-        if _stop_event.wait(interval):
-            break
 
 
 def start_background_workers() -> dict:

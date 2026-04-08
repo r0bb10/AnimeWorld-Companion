@@ -357,6 +357,24 @@ def _tiebreak_candidates(season: dict, tied: list[dict], alt_titles: list[str] |
     return None
 
 
+def _select_show_winner(season: dict, season_scores: list[dict], alt_titles: list[str] | None = None) -> dict | None:
+    if not season_scores:
+        return None
+
+    best = season_scores[0]
+    if best["confidence_score"] < settings.automap_confidence_threshold:
+        return None
+
+    qualified = [
+        candidate for candidate in season_scores
+        if candidate["confidence_score"] >= settings.automap_confidence_threshold
+    ]
+    if len(qualified) == 1:
+        return best
+
+    return _tiebreak_candidates(season, qualified, alt_titles=alt_titles)
+
+
 def _propagate_single_link(
     *,
     show_id: int,
@@ -566,8 +584,6 @@ def automap_show(show_id: int, season_number: int | None = None, force: bool = F
             )
 
         target_count = int(season.get("episode_count") or 0)
-        best = season_scores[0] if season_scores else None
-        second = season_scores[1] if len(season_scores) > 1 else None
         season_has_aired = bool(season.get("has_aired", True))
 
         split_pair = _detect_segment_chain(show, season, season_scores, want_dubbed)
@@ -633,26 +649,9 @@ def automap_show(show_id: int, season_number: int | None = None, force: bool = F
             skipped_unaired.append(sn)
             continue
 
-        if best and best["confidence_score"] >= settings.automap_confidence_threshold and (
-            not second or (best["confidence_score"] - second["confidence_score"]) >= 0.05
-            # NOTE: the gap rule (>= 0.05) can eventually be removed if the tiebreaker
-            # layer below proves reliable across a wide library
-        ):
-            commit_winner = best
-        elif best and best["confidence_score"] >= settings.automap_confidence_threshold:
-            # Gap rule failed — two or more candidates score too close together.
-            # Run the tiebreaker layer: compare episode count, release date, and
-            # status among the tied candidates to find a clear winner without
-            # requiring a manual review.
-            tied = [c for c in season_scores if best["confidence_score"] - c["confidence_score"] < 0.05]
-            show_alt_titles = [row["title"] for row in show.get("alternate_titles", [])]
-            tb_winner = _tiebreak_candidates(season, tied, alt_titles=show_alt_titles)
-            if tb_winner:
-                commit_winner = tb_winner
-            else:
-                ambiguous.append({"season": sn, "candidates": season_scores[:5]})
-                continue
-        else:
+        show_alt_titles = [row["title"] for row in show.get("alternate_titles", [])]
+        commit_winner = _select_show_winner(season, season_scores, alt_titles=show_alt_titles)
+        if not commit_winner:
             ambiguous.append({"season": sn, "candidates": season_scores[:5]})
             continue
 

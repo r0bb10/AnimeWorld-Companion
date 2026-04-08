@@ -1,8 +1,12 @@
-"""Shared webhook normalization for Sonarr and Radarr parity."""
+"""Shared webhook normalization and handling for Sonarr and Radarr."""
 
+from ..core.config import settings
 from ..domain.media import MediaManager
+from ..integrations.radarr_client import RadarrClient
+from ..integrations.sonarr_client import SonarrClient
 from ..repositories.movies import find_movie_by_manager_identity
 from ..repositories.shows import find_show_by_manager_identity
+from .download_service import find_completed_download_for_import_webhook, mark_imported
 
 
 def _detect_manager(payload: dict) -> MediaManager | None:
@@ -122,4 +126,66 @@ def normalize_webhook(payload: dict) -> dict:
         "manager_entity_id": entity.get("id") if entity else None,
         "series": payload.get("series") if manager is MediaManager.SONARR else None,
         "movie": payload.get("movie") if manager is MediaManager.RADARR else None,
+    }
+
+
+def _sonarr_webhook_episode_ids(payload: dict) -> list[int]:
+    episode_ids: list[int] = []
+    for episode in payload.get("episodes") or []:
+        try:
+            episode_ids.append(int(episode.get("id")))
+        except (TypeError, ValueError):
+            continue
+    return episode_ids
+
+
+def handle_import_webhook(normalized: dict, payload: dict) -> dict:
+    manager = str(normalized.get("manager") or "")
+    manager_entity_id = normalized.get("manager_entity_id")
+    if manager not in {"sonarr", "radarr"} or manager_entity_id is None:
+        return {"handled": False, "result": "unsupported"}
+
+    manager_entity_id = int(manager_entity_id)
+    matched = find_completed_download_for_import_webhook(manager, manager_entity_id, payload)
+    if not matched:
+        return {
+            "handled": True,
+            "result": "no_match",
+            "lines": ["result=no completed download match"],
+        }
+
+    updated = mark_imported(str(matched.get("id") or ""), emit_log=False)
+    if not updated:
+        return {
+            "handled": True,
+            "result": "already_settled",
+            "lines": [
+                f"download={matched.get('filename') or matched.get('id')}",
+                "result=already settled",
+            ],
+        }
+
+    lines = [f"download={updated.get('filename') or updated.get('id')}", "result=imported"]
+
+    if settings.unmonitor_imported:
+        if manager == "sonarr":
+            sonarr_client = SonarrClient()
+            episode_ids = _sonarr_webhook_episode_ids(payload)
+            unmonitored = 0
+            for episode_id in episode_ids:
+                if sonarr_client.unmonitor_episode(episode_id):
+                    unmonitored += 1
+            if episode_ids:
+                lines.append(f"unmonitored={unmonitored}/{len(episode_ids)}")
+        elif manager == "radarr":
+            radarr_client = RadarrClient()
+            success = radarr_client.unmonitor_movie(manager_entity_id)
+            lines.append(f"unmonitor={'ok' if success else 'failed'}")
+
+    return {
+        "handled": True,
+        "result": "imported",
+        "download_id": updated.get("id"),
+        "download": updated.get("filename") or updated.get("id"),
+        "lines": lines,
     }

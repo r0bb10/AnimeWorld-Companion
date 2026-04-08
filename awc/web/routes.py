@@ -24,7 +24,7 @@ from ..services.catalog_service import (
     build_movie_snapshot,
     build_show_snapshot,
 )
-from ..services.background_service import runtime_state, update_rss_cache
+from ..services.background_service import runtime_state
 from ..services.automap_service import (
     automap_movie,
     automap_show,
@@ -68,7 +68,7 @@ from ..services.mutation_service import (
     unmap_movie,
     unmap_show_season,
 )
-from ..services.rss_service import build_rss_snapshot, clear_rss_cache
+from ..services.rss_service import build_rss_snapshot, clear_rss_cache, update_rss_cache
 from ..services.torznab_service import build_caps_xml, build_search_xml
 from ..services.webhook_service import handle_import_webhook, normalize_webhook
 from ..services.sync_runner_service import sync_all, sync_now_radarr, sync_now_sonarr, sync_single_movie, sync_single_show, sync_status

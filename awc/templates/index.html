@@ -268,7 +268,7 @@ a{color:#58a6ff;text-decoration:none}a:hover{text-decoration:underline}
   <div class="app-modal" role="dialog" aria-modal="true" aria-labelledby="app-modal-title">
     <div class="app-modal-head">
       <h3 class="app-modal-title" id="app-modal-title">Action</h3>
-      <button class="app-modal-close" type="button" aria-label="Chiudi" onclick="closeAppModal()">×</button>
+      <button class="app-modal-close" type="button" aria-label="Close" onclick="closeAppModal()">×</button>
     </div>
     <div class="app-modal-body" id="app-modal-body"></div>
     <div class="app-modal-actions" id="app-modal-actions"></div>
@@ -421,6 +421,16 @@ function openAppModal(title,bodyHtml,actions){
     actionsEl.appendChild(btn);
   }
   backdrop.style.display='flex';
+}
+
+function openConfirmModal(title,message,confirmLabel,onConfirm,confirmClass='btn-danger'){
+  openAppModal(
+    title,
+    '<p>'+message+'</p>',
+    [
+      {label:confirmLabel, className:confirmClass, onClick:onConfirm},
+    ]
+  );
 }
 
 document.addEventListener('keydown',function(e){
@@ -640,11 +650,17 @@ async function mapItem(evt,kind,id,seasonNum){
 }
 
 async function deleteItem(kind,id,title,btn){
-  if(!confirm('Delete '+title+'? '+(kind==='show'?'Sonarr':'Radarr')+' sync will re-add it.'))return;
-  await _runButtonAction(btn,kind==='show'?'Delete Show':'Delete Movie',async()=>{
-    await _fetchOk(_deleteEndpoint(kind,id),{method:'DELETE',headers:_kh()});
-    await _refreshDashboardFragment(kind,id,true);
-  });
+  const label=kind==='show'?'Delete Show':'Delete Movie';
+  const manager=kind==='show'?'Sonarr':'Radarr';
+  openConfirmModal(
+    label,
+    'Delete '+title+'? '+manager+' sync will re-add it.',
+    label,
+    async()=>{await _runButtonAction(btn,label,async()=>{
+      await _fetchOk(_deleteEndpoint(kind,id),{method:'DELETE',headers:_kh()});
+      await _refreshDashboardFragment(kind,id,true);
+    });}
+  );
 }
 
 async function discoverItem(kind,id,btn){
@@ -1032,9 +1048,17 @@ document.addEventListener('click',function(e){
   }
   if(e.target.classList.contains('hard-cancel-dl-btn')){
     const id=e.target.dataset.dlid;
-    if(!confirm('Permanently cancel this download and delete the partial file?')) return;
-    e.target.disabled=true;
-    fetch('/api/downloads/'+id+'/remove'+_kp(),{method:'POST',headers:_kh()}).then(()=>pollDownloads());
+    const btn=e.target;
+    openConfirmModal(
+      'Cancel Download',
+      'Permanently cancel this download and delete the partial file?',
+      'Cancel Download',
+      async()=>{
+        btn.disabled=true;
+        await fetch('/api/downloads/'+id+'/remove'+_kp(),{method:'POST',headers:_kh()});
+        await pollDownloads();
+      }
+    );
   }
   if(e.target.classList.contains('resume-dl-btn')){
     const id=e.target.dataset.dlid;

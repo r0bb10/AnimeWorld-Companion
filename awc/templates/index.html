@@ -13,6 +13,8 @@ a{color:#58a6ff;text-decoration:none}a:hover{text-decoration:underline}
 .header{display:flex;justify-content:space-between;align-items:center;margin-bottom:16px;padding-bottom:12px;border-bottom:1px solid #21262d}
 .header h1{font-size:20px;color:#f0f6fc}
 .header-actions{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+.header-title-row{display:flex;align-items:center;gap:8px}
+.btn-mobile-actions{display:none}
 
 .heartbeat{display:flex;gap:12px;font-size:12px;margin-bottom:12px;padding:8px 12px;background:#161b22;border:1px solid #21262d;border-radius:6px}
 .hb-item{display:flex;align-items:center;gap:4px}
@@ -152,46 +154,63 @@ a{color:#58a6ff;text-decoration:none}a:hover{text-decoration:underline}
   .app{padding:10px}
 
   /* Header */
-  .header{flex-direction:column;align-items:flex-start;gap:8px}
+  .header{flex-direction:row;align-items:center;justify-content:space-between;gap:10px}
+  .header-title-row{flex:1;min-width:0}
   .header h1{font-size:17px}
-  .header-actions{width:100%;flex-wrap:wrap}
+  .header-actions{width:auto;flex-wrap:nowrap;flex-shrink:0}
+  #sync-sonarr-btn,#sync-radarr-btn,#restart-btn,#automap-all-btn{display:none}
+  .btn-mobile-actions{display:inline-flex}
+  .btn-mobile-actions{padding:5px 10px}
 
-  /* Heartbeat: 2-column grid */
-  .heartbeat{display:grid;grid-template-columns:1fr 1fr;gap:6px;font-size:11px}
+  /* Heartbeat: compact 3-column grid, max 2 rows for 5 items */
+  .heartbeat{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:6px 8px;font-size:10px;padding:8px 10px}
+  .hb-item{min-width:0;gap:5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 
   /* Stats */
-  .stats{font-size:12px}
+  .stats{font-size:12px;line-height:1.5}
 
   /* Card header: allow title+meta to wrap */
-  .card-header{flex-wrap:wrap;gap:4px}
+  .card-header{flex-wrap:wrap;gap:6px;align-items:flex-start}
   .card-title{font-size:14px}
-  .card-meta{flex-wrap:wrap;justify-content:flex-start;max-width:100%}
+  .card-meta{flex-wrap:wrap;justify-content:flex-start;max-width:100%;width:100%}
+  .alt-titles{display:none}
 
   /* Season rows: stack label/status on top, link full-width below */
-  .season-row{flex-wrap:wrap;row-gap:6px}
+  .season-row{flex-wrap:wrap;row-gap:8px;padding:10px 0}
   .season-label{flex-shrink:0}
   .season-status{flex-shrink:0}
   .season-link{order:3;flex:0 0 100%;white-space:normal;overflow:visible;text-overflow:clip}
   .season-actions{order:4;flex-shrink:0}
   .map-form{flex-direction:column;width:100%}
   .map-form input{width:100%}
+  .season-actions .btn{min-width:88px}
 
   /* Card footer */
-  .card-footer{flex-wrap:wrap;gap:6px}
+  .card-footer{flex-wrap:wrap;gap:8px}
+  .card-footer>div{display:grid;grid-template-columns:1fr 1fr;gap:8px;width:100%}
+  .card-footer>button{width:100%}
 
   /* Downloads box */
   .dl-header{flex-wrap:wrap;gap:6px}
   .dl-header>div{flex-wrap:wrap}
-  /* Hide only the least important download columns on small screens */
-  .dl-col-size,.dl-col-completed{display:none}
+  .dl-table,.dl-table tbody,.dl-table tr,.dl-table td{display:block;width:100%}
+  .dl-table thead{display:none}
+  .dl-table tr{padding:10px;border-bottom:1px solid #21262d;background:#11161d}
+  .dl-table tr+tr{margin-top:8px}
+  .dl-table td{padding:6px 0;border:none}
+  .dl-table td::before{content:attr(data-label);display:block;color:#8b949e;font-size:10px;font-weight:600;text-transform:uppercase;letter-spacing:.04em;margin-bottom:4px}
+  .dl-table .dl-name{max-width:none;white-space:normal;overflow:visible;text-overflow:clip}
+  .dl-col-actions{display:flex !important;gap:8px;justify-content:flex-start;flex-wrap:wrap}
+  .dl-col-actions .btn{flex:1}
+  .dl-col-progress .dl-bar-wrap{margin-top:4px}
 }
 
 @media(max-width:480px){
   /* Extra-small: tighten up more */
   .btn{font-size:11px;padding:4px 8px}
-  .heartbeat{font-size:10px}
-  .dl-table{font-size:11px}
-  .dl-table th,.dl-table td{padding:5px 6px}
+  .heartbeat{font-size:9px;gap:5px 6px}
+  .app-modal-actions{flex-direction:column}
+  .app-modal-actions .btn{width:100%}
 }
 </style>
 </head>
@@ -200,16 +219,19 @@ a{color:#58a6ff;text-decoration:none}a:hover{text-decoration:underline}
 <div class="app">
   <div class="topbar">
     <div class="header">
-  <h1>AnimeWorld Companion</h1>
-  <div class="header-actions">
-    <button class="btn btn-sonarr" id="sync-sonarr-btn" onclick="syncManager(this,'sonarr')">Sync Sonarr</button>
-    <button class="btn btn-radarr" id="sync-radarr-btn" onclick="syncManager(this,'radarr')">Sync Radarr</button>
-    <button class="btn btn-primary" id="automap-all-btn" onclick="openAutomapModal()" {% if automap_running %}disabled{% endif %}>
-      {{ "Auto-mapping..." if automap_running else "Automap" }}
-    </button>
-    <button class="btn btn-danger" id="restart-btn" onclick="openRestartModal()">Restart</button>
-  </div>
-</div>
+      <div class="header-title-row">
+        <h1>AnimeWorld Companion</h1>
+      </div>
+      <div class="header-actions">
+        <button class="btn btn-sonarr" id="sync-sonarr-btn" onclick="syncManager(this,'sonarr')">Sync Sonarr</button>
+        <button class="btn btn-radarr" id="sync-radarr-btn" onclick="syncManager(this,'radarr')">Sync Radarr</button>
+        <button class="btn btn-primary" id="automap-all-btn" onclick="openAutomapModal()" {% if automap_running %}disabled{% endif %}>
+          {{ "Auto-mapping..." if automap_running else "Automap" }}
+        </button>
+        <button class="btn btn-mobile-actions" id="mobile-actions-btn" onclick="openMobileActionsModal()">Actions</button>
+        <button class="btn btn-danger" id="restart-btn" onclick="openRestartModal()">Restart</button>
+      </div>
+    </div>
 
 <div class="heartbeat" id="heartbeat">
   <div class="hb-item">Companion: <span class="hb-dot hb-wait" id="hb-companion"></span> <span id="hb-companion-txt">{% if app_version and app_version.lower() not in ('local','unspecified') %}{{ app_version }}{% else %}local{% endif %}</span></div>
@@ -486,6 +508,19 @@ async function syncManager(btn,manager){
     return;
   }
   btn.textContent=label;btn.disabled=false;
+}
+
+function openMobileActionsModal(){
+  openAppModal(
+    'Actions',
+    '<p>Choose a system action for the mobile dashboard.</p>',
+    [
+      {label:'Sync Sonarr', className:'btn-sonarr', onClick:()=>syncManager(document.getElementById('sync-sonarr-btn'),'sonarr')},
+      {label:'Sync Radarr', className:'btn-radarr', onClick:()=>syncManager(document.getElementById('sync-radarr-btn'),'radarr')},
+      {label:document.getElementById('automap-all-btn')?.disabled?'Auto-mapping...':'Automap', className:'btn-primary', onClick:()=>openAutomapModal()},
+      {label:'Restart', className:'btn-danger', onClick:()=>openRestartModal()},
+    ]
+  );
 }
 
 let _automapLaunched=false;
@@ -991,15 +1026,15 @@ function renderDownloads(dls){
     const sizeText=d.total_bytes>0?fmtBytes(d.downloaded_bytes)+' / '+fmtBytes(d.total_bytes):d.downloaded_bytes>0?fmtBytes(d.downloaded_bytes):'--';
 
     html+='<tr>';
-    html+='<td class="dl-name" title="'+d.filename+'">'+d.filename+'</td>';
-    html+='<td><div class="dl-bar-wrap"><div class="dl-bar" style="width:'+d.percent+'%"></div></div></td>';
-    html+='<td class="dl-pct">'+Number(d.percent).toFixed(1)+'%</td>';
-    html+='<td class="dl-col-speed" style="color:#8b949e;text-align:center">'+(d.speed>0?fmtSpeed(d.speed):'--')+'</td>';
-    html+='<td class="dl-col-size" style="color:#8b949e;text-align:center">'+sizeText+'</td>';
-    html+='<td style="text-align:center"><span class="'+statusCls+'">'+d.status+'</span></td>';
+    html+='<td class="dl-name" data-label="File" title="'+d.filename+'">'+d.filename+'</td>';
+    html+='<td class="dl-col-progress" data-label="Progress"><div class="dl-bar-wrap"><div class="dl-bar" style="width:'+d.percent+'%"></div></div></td>';
+    html+='<td class="dl-pct" data-label="Percent">'+Number(d.percent).toFixed(1)+'%</td>';
+    html+='<td class="dl-col-speed" data-label="Speed" style="color:#8b949e;text-align:center">'+(d.speed>0?fmtSpeed(d.speed):'--')+'</td>';
+    html+='<td class="dl-col-size" data-label="Size" style="color:#8b949e;text-align:center">'+sizeText+'</td>';
+    html+='<td data-label="Status" style="text-align:center"><span class="'+statusCls+'">'+d.status+'</span></td>';
     const completedAt=(d.status==='completed'||d.status==='imported')?fmtDate(d.finished_at):'--';
-    html+='<td class="dl-col-completed" style="color:#8b949e;text-align:center">'+completedAt+'</td>';
-    html+='<td class="dl-col-actions" style="text-align:center;white-space:nowrap">';
+    html+='<td class="dl-col-completed" data-label="Completed" style="color:#8b949e;text-align:center">'+completedAt+'</td>';
+    html+='<td class="dl-col-actions" data-label="Actions" style="text-align:center;white-space:nowrap">';
     if(isActive){
       html+='<button class="btn btn-warning pause-dl-btn" data-dlid="'+d.id+'" style="padding:2px 8px;font-size:11px;margin-right:6px">Pause</button>';
       html+='<button class="btn btn-danger hard-cancel-dl-btn" data-dlid="'+d.id+'" style="padding:2px 8px;font-size:11px">Cancel</button>';

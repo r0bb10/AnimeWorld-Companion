@@ -170,39 +170,50 @@ a{color:#58a6ff;text-decoration:none}a:hover{text-decoration:underline}
   .stats{font-size:12px;line-height:1.5}
 
   /* Card header: allow title+meta to wrap */
-  .card-header{flex-wrap:wrap;gap:6px;align-items:flex-start}
+  .card-header{flex-wrap:nowrap;gap:8px;align-items:center}
+  .card-header>div:first-child{flex:1;min-width:0}
   .card-title{font-size:14px}
-  .card-meta{flex-wrap:wrap;justify-content:flex-start;max-width:100%;width:100%}
+  .card-meta{flex-wrap:nowrap;justify-content:flex-end;max-width:none;width:auto;flex-shrink:0}
+  .card-meta-label{display:none}
+  .card-arrow{margin-left:2px}
   .alt-titles{display:none}
 
-  /* Season rows: stack label/status on top, link full-width below */
-  .season-row{flex-wrap:wrap;row-gap:8px;padding:10px 0}
-  .season-label{flex-shrink:0}
-  .season-status{flex-shrink:0}
-  .season-link{order:3;flex:0 0 100%;white-space:normal;overflow:visible;text-overflow:clip}
-  .season-actions{order:4;flex-shrink:0}
-  .map-form{flex-direction:column;width:100%}
-  .map-form input{width:100%}
-  .season-actions .btn{min-width:88px}
+  /* Season rows hidden on mobile: use the card as a lightweight action panel */
+  .season-row{display:none}
+  .season-status,.season-link,.season-actions{display:none}
 
   /* Card footer */
-  .card-footer{flex-wrap:wrap;gap:8px}
-  .card-footer>div{display:grid;grid-template-columns:1fr 1fr;gap:8px;width:100%}
-  .card-footer>button{width:100%}
+  .card-footer{display:block}
+  .card-footer>div{display:block;width:100%}
+  .card-footer>div .btn:first-child,
+  .card-footer>button{display:none}
+  .card-footer>div .btn:last-child{display:block;width:100%}
 
   /* Downloads box */
   .dl-header{flex-wrap:wrap;gap:6px}
   .dl-header>div{flex-wrap:wrap}
-  .dl-table,.dl-table tbody,.dl-table tr,.dl-table td{display:block;width:100%}
-  .dl-table thead{display:none}
-  .dl-table tr{padding:10px;border-bottom:1px solid #21262d;background:#11161d}
-  .dl-table tr+tr{margin-top:8px}
-  .dl-table td{padding:6px 0;border:none}
-  .dl-table td::before{content:attr(data-label);display:block;color:#8b949e;font-size:10px;font-weight:600;text-transform:uppercase;letter-spacing:.04em;margin-bottom:4px}
-  .dl-table .dl-name{max-width:none;white-space:normal;overflow:visible;text-overflow:clip}
-  .dl-col-actions{display:flex !important;gap:8px;justify-content:flex-start;flex-wrap:wrap}
-  .dl-col-actions .btn{flex:1}
-  .dl-col-progress .dl-bar-wrap{margin-top:4px}
+  .dl-table{table-layout:fixed;font-size:11px}
+  .dl-table thead{display:table-header-group}
+  .dl-table tr{display:table-row}
+  .dl-table td,.dl-table th{display:table-cell;padding:6px 6px}
+  .dl-table td::before{content:none}
+  .dl-table .dl-name{max-width:none;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .dl-table th:nth-child(2),
+  .dl-table th:nth-child(3),
+  .dl-table th:nth-child(4),
+  .dl-table th:nth-child(5),
+  .dl-table th:nth-child(7),
+  .dl-table th:nth-child(8),
+  .dl-table td:nth-child(2),
+  .dl-table td:nth-child(3),
+  .dl-table td:nth-child(4),
+  .dl-table td:nth-child(5),
+  .dl-table td:nth-child(7),
+  .dl-table td:nth-child(8){display:none}
+  .dl-table th:nth-child(1),
+  .dl-table td:nth-child(1){width:72%}
+  .dl-table th:nth-child(6),
+  .dl-table td:nth-child(6){width:28%;white-space:nowrap;text-align:center}
 }
 
 @media(max-width:480px){
@@ -1026,12 +1037,12 @@ function renderDownloads(dls){
     const sizeText=d.total_bytes>0?fmtBytes(d.downloaded_bytes)+' / '+fmtBytes(d.total_bytes):d.downloaded_bytes>0?fmtBytes(d.downloaded_bytes):'--';
 
     html+='<tr>';
-    html+='<td class="dl-name" data-label="File" title="'+d.filename+'">'+d.filename+'</td>';
+    html+='<td class="dl-name dl-col-file" data-label="File" title="'+d.filename+'">'+d.filename+'</td>';
     html+='<td class="dl-col-progress" data-label="Progress"><div class="dl-bar-wrap"><div class="dl-bar" style="width:'+d.percent+'%"></div></div></td>';
     html+='<td class="dl-pct" data-label="Percent">'+Number(d.percent).toFixed(1)+'%</td>';
     html+='<td class="dl-col-speed" data-label="Speed" style="color:#8b949e;text-align:center">'+(d.speed>0?fmtSpeed(d.speed):'--')+'</td>';
     html+='<td class="dl-col-size" data-label="Size" style="color:#8b949e;text-align:center">'+sizeText+'</td>';
-    html+='<td data-label="Status" style="text-align:center"><span class="'+statusCls+'">'+d.status+'</span></td>';
+    html+='<td class="dl-col-status" data-label="Status" style="text-align:center"><span class="'+statusCls+'">'+d.status+'</span></td>';
     const completedAt=(d.status==='completed'||d.status==='imported')?fmtDate(d.finished_at):'--';
     html+='<td class="dl-col-completed" data-label="Completed" style="color:#8b949e;text-align:center">'+completedAt+'</td>';
     html+='<td class="dl-col-actions" data-label="Actions" style="text-align:center;white-space:nowrap">';

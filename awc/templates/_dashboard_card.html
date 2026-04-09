@@ -13,9 +13,9 @@
       {% endif %}
     </div>
     <div class="card-meta">
-      {% if card.meta_label %}<span>{{ card.meta_label }}</span>{% endif %}
+      {% if card.meta_label %}<span class="card-meta-label">{{ card.meta_label }}</span>{% endif %}
       <span class="badge badge-{{ card.status.key }} card-status-badge">{{ card.status.label }}</span>
-      <span class="arrow">&#9654;</span>
+      <span class="arrow card-arrow">&#9654;</span>
     </div>
   </div>
   <div class="card-body">

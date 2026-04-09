@@ -70,8 +70,15 @@ from ..services.mutation_service import (
 )
 from ..services.rss_service import build_rss_snapshot, clear_rss_cache, update_rss_cache
 from ..services.torznab_service import build_caps_xml, build_search_xml
-from ..services.webhook_service import handle_import_webhook, normalize_webhook
-from ..services.sync_runner_service import sync_all, sync_now_radarr, sync_now_sonarr, sync_single_movie, sync_single_show, sync_status
+from ..services.webhook_service import (
+    handle_add_webhook,
+    handle_delete_webhook,
+    handle_import_webhook,
+    is_add_webhook,
+    is_delete_webhook,
+    normalize_webhook,
+)
+from ..services.sync_runner_service import sync_all, sync_now_radarr, sync_now_sonarr, sync_status
 from .auth import require_api_key
 
 api_router = APIRouter()
@@ -207,6 +214,31 @@ def _handle_import_webhook(normalized: dict, payload: dict) -> None:
         payload,
         lines=list(result.get("lines") or []),
         event_type=f"webhook.{manager}.import",
+    )
+
+
+def _log_webhook_delete_result(normalized: dict, payload: dict, result: dict) -> None:
+    manager = str(normalized.get("manager") or "")
+    title = str(result.get("title") or _webhook_item_label(normalized, payload) or manager or "item")
+    kind = str(result.get("kind") or ("show" if manager == "sonarr" else "movie"))
+    item_id = result.get("item_id")
+    status = str(result.get("result") or "")
+    if status == "deleted":
+        lines = ["removed from local AWC library"]
+    elif status == "not_found":
+        lines = ["no local AWC item found"]
+    else:
+        lines = [status or "delete webhook handled"]
+    log_block(
+        logger,
+        logging.INFO,
+        f"Webhook {manager.capitalize() if manager else 'Manager'} delete: {title}",
+        lines,
+        event_type=f"webhook.{manager or 'manager'}.delete",
+        entity_kind=kind,
+        entity_id=item_id,
+        entity_title=title,
+        details={"status": status, "removed": int(result.get("removed") or 0)},
     )
 
 
@@ -843,47 +875,36 @@ def manager_webhook(
         _handle_import_webhook(normalized, payload)
         return normalized
     _log_webhook_received(normalized, payload)
-    if normalized["event_family"] == "add" and normalized.get("manager_entity_id"):
-        manager = str(normalized.get("manager") or "")
-        manager_entity_id = int(normalized["manager_entity_id"])
-        entity_title = str((normalized.get("entity") or {}).get("title") or manager_entity_id)
-
-        def _run() -> None:
+    manager = str(normalized.get("manager") or "")
+    manager_entity_id = normalized.get("manager_entity_id")
+    entity_title = str((normalized.get("entity") or {}).get("title") or manager_entity_id or manager or "item")
+    if is_add_webhook(normalized) and manager_entity_id is not None:
+        def _run_add() -> None:
             try:
-                if manager == "sonarr":
-                    show_id = sync_single_show(manager_entity_id, targeted=False)
-                    if show_id:
-                        result = automap_show(int(show_id), force=False, emit_logs=False)
-                        _log_webhook_show_result(entity_title, int(show_id), result)
-                    else:
-                        log_block(
-                            logger,
-                            logging.WARNING,
-                            f"Webhook Sonarr add: {entity_title}",
-                            ["sync failed"],
-                            event_type="webhook.sonarr.add",
-                            entity_kind="show",
-                            entity_id=manager_entity_id,
-                            entity_title=entity_title,
-                            details={"status": "sync_failed"},
-                        )
-                elif manager == "radarr":
-                    movie_id = sync_single_movie(manager_entity_id, targeted=False)
-                    if movie_id:
-                        result = automap_movie(int(movie_id), force=False, emit_logs=False)
-                        _log_webhook_movie_result(entity_title, int(movie_id), result)
-                    else:
-                        log_block(
-                            logger,
-                            logging.WARNING,
-                            f"Webhook Radarr add: {entity_title}",
-                            ["sync failed"],
-                            event_type="webhook.radarr.add",
-                            entity_kind="movie",
-                            entity_id=manager_entity_id,
-                            entity_title=entity_title,
-                            details={"status": "sync_failed"},
-                        )
+                result = handle_add_webhook(normalized)
+                if not result.get("handled"):
+                    return
+                kind = str(result.get("kind") or "")
+                item_id = result.get("item_id")
+                payload_result = result.get("result")
+                if kind == "show" and item_id is not None and isinstance(payload_result, dict):
+                    _log_webhook_show_result(entity_title, int(item_id), payload_result)
+                    _publish_library_change("show", int(item_id))
+                elif kind == "movie" and item_id is not None and isinstance(payload_result, dict):
+                    _log_webhook_movie_result(entity_title, int(item_id), payload_result)
+                    _publish_library_change("movie", int(item_id))
+                else:
+                    log_block(
+                        logger,
+                        logging.WARNING,
+                        f"Webhook {manager.capitalize() if manager else 'Manager'} add: {entity_title}",
+                        ["sync failed"],
+                        event_type=f"webhook.{manager or 'manager'}.add",
+                        entity_kind=kind or None,
+                        entity_id=item_id or manager_entity_id,
+                        entity_title=entity_title,
+                        details={"status": "sync_failed"},
+                    )
             except Exception:
                 log_exception(
                     logger,
@@ -895,7 +916,32 @@ def manager_webhook(
                     entity_title=entity_title,
                 )
 
-        threading.Thread(target=_run, name=f"awc-webhook-{manager or 'manager'}", daemon=True).start()
+        threading.Thread(target=_run_add, name=f"awc-webhook-{manager or 'manager'}-add", daemon=True).start()
+    elif is_delete_webhook(normalized) and manager_entity_id is not None:
+        def _run_delete() -> None:
+            try:
+                result = handle_delete_webhook(normalized)
+                if not result.get("handled"):
+                    return
+                _log_webhook_delete_result(normalized, payload, result)
+                if str(result.get("result") or "") == "deleted":
+                    kind = str(result.get("kind") or "")
+                    item_id = result.get("item_id")
+                    if kind and item_id is not None:
+                        publish_library_card_removed(kind, int(item_id))
+                    publish_library_stats_changed()
+            except Exception:
+                log_exception(
+                    logger,
+                    "webhook.delete.failed",
+                    "Webhook delete handler failed",
+                    details={"manager": manager, "manager_id": manager_entity_id},
+                    entity_kind=manager or None,
+                    entity_id=manager_entity_id,
+                    entity_title=entity_title,
+                )
+
+        threading.Thread(target=_run_delete, name=f"awc-webhook-{manager or 'manager'}-delete", daemon=True).start()
     return normalized
 
 

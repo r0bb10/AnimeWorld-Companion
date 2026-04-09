@@ -4,9 +4,12 @@ from ..core.config import settings
 from ..domain.media import MediaManager
 from ..integrations.radarr_client import RadarrClient
 from ..integrations.sonarr_client import SonarrClient
+from ..repositories.library_write import delete_movie_by_radarr_id, delete_show_by_sonarr_id
 from ..repositories.movies import find_movie_by_manager_identity
 from ..repositories.shows import find_show_by_manager_identity
+from .automap_service import automap_movie, automap_show
 from .download_service import find_completed_download_for_import_webhook, mark_imported
+from .sync_runner_service import sync_single_movie, sync_single_show
 
 
 def _detect_manager(payload: dict) -> MediaManager | None:
@@ -42,7 +45,7 @@ def _extract_entity(payload: dict, manager: MediaManager | None) -> dict | None:
 
 
 def _classify_event(event_type: str) -> str:
-    normalized = event_type.lower()
+    normalized = _event_key(event_type)
     if "test" in normalized:
         return "test"
     if "health" in normalized:
@@ -51,17 +54,41 @@ def _classify_event(event_type: str) -> str:
         return "manual"
     if "application" in normalized or "update" in normalized:
         return "application"
-    if "delete" in normalized:
-        return "delete"
     if "import" in normalized or "download" in normalized:
         return "import"
     if "grab" in normalized:
         return "grab"
     if "rename" in normalized or "file" in normalized:
         return "file"
+    if _is_delete_event_key(normalized):
+        return "delete"
     if "add" in normalized:
         return "add"
     return "unknown"
+
+
+def _event_key(event_type: str) -> str:
+    return "".join(ch for ch in str(event_type or "").strip().lower() if ch.isalnum())
+
+
+def _is_add_event_key(event_key: str) -> bool:
+    prefixes = ("series", "movie", "onseries", "onmovie")
+    return event_key.startswith(prefixes) and event_key.endswith(("add", "added"))
+
+
+def _is_delete_event_key(event_key: str) -> bool:
+    if "file" in event_key:
+        return False
+    prefixes = ("series", "movie", "onseries", "onmovie")
+    return event_key.startswith(prefixes) and event_key.endswith(("delete", "deleted"))
+
+
+def is_add_webhook(normalized: dict) -> bool:
+    return _is_add_event_key(_event_key(str(normalized.get("event_type") or "")))
+
+
+def is_delete_webhook(normalized: dict) -> bool:
+    return _is_delete_event_key(_event_key(str(normalized.get("event_type") or "")))
 
 
 def _resolve_local_match(manager: MediaManager | None, entity: dict | None) -> dict | None:
@@ -188,4 +215,87 @@ def handle_import_webhook(normalized: dict, payload: dict) -> dict:
         "download_id": updated.get("id"),
         "download": updated.get("filename") or updated.get("id"),
         "lines": lines,
+    }
+
+
+def handle_add_webhook(normalized: dict) -> dict:
+    manager = str(normalized.get("manager") or "")
+    manager_entity_id = normalized.get("manager_entity_id")
+    entity = normalized.get("entity") or {}
+    entity_title = str(entity.get("title") or manager_entity_id or manager or "item")
+    if manager not in {"sonarr", "radarr"} or manager_entity_id is None:
+        return {"handled": False, "result": "unsupported"}
+
+    manager_entity_id = int(manager_entity_id)
+    if manager == "sonarr":
+        show_id = sync_single_show(manager_entity_id, targeted=False)
+        if not show_id:
+            return {
+                "handled": True,
+                "manager": manager,
+                "kind": "show",
+                "result": "sync_failed",
+                "title": entity_title,
+            }
+        result = automap_show(int(show_id), force=False, emit_logs=False)
+        return {
+            "handled": True,
+            "manager": manager,
+            "kind": "show",
+            "item_id": int(show_id),
+            "title": entity_title,
+            "result": result,
+        }
+
+    movie_id = sync_single_movie(manager_entity_id, targeted=False)
+    if not movie_id:
+        return {
+            "handled": True,
+            "manager": manager,
+            "kind": "movie",
+            "result": "sync_failed",
+            "title": entity_title,
+        }
+    result = automap_movie(int(movie_id), force=False, emit_logs=False)
+    return {
+        "handled": True,
+        "manager": manager,
+        "kind": "movie",
+        "item_id": int(movie_id),
+        "title": entity_title,
+        "result": result,
+    }
+
+
+def handle_delete_webhook(normalized: dict) -> dict:
+    manager = str(normalized.get("manager") or "")
+    manager_entity_id = normalized.get("manager_entity_id")
+    entity = normalized.get("entity") or {}
+    local_match = normalized.get("local_match") or {}
+    entity_title = str(entity.get("title") or local_match.get("title") or manager_entity_id or manager or "item")
+    if manager not in {"sonarr", "radarr"} or manager_entity_id is None:
+        return {"handled": False, "result": "unsupported"}
+
+    manager_entity_id = int(manager_entity_id)
+    if manager == "sonarr":
+        removed = delete_show_by_sonarr_id(manager_entity_id)
+        return {
+            "handled": True,
+            "manager": manager,
+            "kind": "show",
+            "item_id": local_match.get("id"),
+            "title": entity_title,
+            "result": "deleted" if removed else "not_found",
+            "removed": int(removed),
+        }
+
+    removed = delete_movie_by_radarr_id(manager_entity_id)
+    return {
+        "handled": True,
+        "manager": manager,
+        "kind": "movie",
+        "item_id": local_match.get("id"),
+        "title": entity_title,
+        "result": "deleted" if removed else "not_found",
+        "removed": int(removed),
     }

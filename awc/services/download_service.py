@@ -34,6 +34,7 @@ from .naming_service import build_release_name
 _download_events: dict[str, threading.Event] = {}
 _download_threads: dict[str, threading.Thread] = {}
 _download_metrics: dict[str, dict[str, float]] = {}
+_download_progress: dict[str, dict[str, float | int]] = {}
 _download_lock = threading.Lock()
 _download_semaphore = threading.Semaphore(max(1, settings.max_concurrent_downloads))
 logger = get_logger("download")
@@ -481,7 +482,19 @@ def _download_worker(download_id: str) -> None:
                 details={"remote": remote_name or "", "resume": bool(existing_bytes > 0)},
             )
 
+            last_progress_update = datetime.now(UTC).timestamp()
+            last_progress_bytes = downloaded
+            progress_interval = 0.5
+            progress_bytes_threshold = 256 * 1024
+
             update_download_progress(download_id, total_bytes=total, downloaded_bytes=downloaded)
+            now_ts = datetime.now(UTC).timestamp()
+            with _download_lock:
+                _download_progress[download_id] = {
+                    "downloaded_bytes": downloaded,
+                    "last_checkpoint_at": now_ts,
+                    "last_checkpoint_bytes": downloaded,
+                }
             with open(part_path, mode) as handle:
                 for chunk in response.iter_content(chunk_size=65536):
                     if cancel_event.is_set():
@@ -491,6 +504,8 @@ def _download_worker(download_id: str) -> None:
                             downloaded_bytes=downloaded,
                             finished_at=None,
                         )
+                        with _download_lock:
+                            _download_progress.pop(download_id, None)
                         log_block(
                             logger,
                             logging.INFO,
@@ -519,7 +534,16 @@ def _download_worker(download_id: str) -> None:
                             metric["speed_bps"] = metric["window_bytes"] / elapsed_window
                             metric["window_started_at"] = now_ts
                             metric["window_bytes"] = 0.0
-                    update_download_progress(download_id, downloaded_bytes=downloaded)
+                    with _download_lock:
+                        progress_state = _download_progress.setdefault(download_id, {})
+                        progress_state["downloaded_bytes"] = downloaded
+                        if (
+                            downloaded - progress_state.get("last_checkpoint_bytes", 0) >= progress_bytes_threshold
+                            or now_ts - progress_state.get("last_checkpoint_at", 0) >= progress_interval
+                        ):
+                            update_download_progress(download_id, downloaded_bytes=downloaded)
+                            progress_state["last_checkpoint_at"] = now_ts
+                            progress_state["last_checkpoint_bytes"] = downloaded
             os.replace(part_path, final_path)
             update_download_progress(
                 download_id,
@@ -528,6 +552,8 @@ def _download_worker(download_id: str) -> None:
                 part_path="",
                 finished_at=datetime.now(UTC).timestamp(),
             )
+            with _download_lock:
+                _download_progress.pop(download_id, None)
             log_block(
                 logger,
                 logging.INFO,
@@ -549,6 +575,7 @@ def _download_worker(download_id: str) -> None:
             error=str(exc),
             finished_at=datetime.now(UTC).timestamp(),
         )
+        _download_progress.pop(download_id, None)
         log_exception(
             logger,
             "download.failed",
@@ -563,6 +590,8 @@ def _download_worker(download_id: str) -> None:
             _download_semaphore.release()
         with _download_lock:
             _download_threads.pop(download_id, None)
+            _download_events.pop(download_id, None)
+            _download_progress.pop(download_id, None)
             if not get_download(download_id) or get_download(download_id).get("status") not in {"paused", "queued", "resuming", "downloading"}:
                 _download_metrics.pop(download_id, None)
 
@@ -838,6 +867,12 @@ def build_download_snapshot(limit: int = 100) -> dict:
             entry["finished_at"] = None
         total = int(entry.get("total_bytes") or 0)
         downloaded = int(entry.get("downloaded_bytes") or 0)
+        if status in {"downloading", "resuming"}:
+            with _download_lock:
+                current_progress = _download_progress.get(entry["id"])
+            if current_progress is not None:
+                downloaded = int(current_progress.get("downloaded_bytes", downloaded) or downloaded)
+                entry["downloaded_bytes"] = downloaded
         started_at = entry.get("started_at") or entry.get("created_at") or now
         finished_at = entry.get("finished_at")
         end_time = finished_at or now

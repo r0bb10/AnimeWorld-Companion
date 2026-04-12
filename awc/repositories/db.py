@@ -29,6 +29,9 @@ def get_db(write: bool = False):
             try:
                 conn = sqlite3.connect(db_path, timeout=30, isolation_level=None)
                 conn.execute("PRAGMA foreign_keys=ON")
+                if write:
+                    conn.execute("PRAGMA journal_mode=WAL")
+                    conn.execute("PRAGMA synchronous=NORMAL")
                 conn.execute("PRAGMA busy_timeout = 30000")
                 conn.row_factory = sqlite3.Row
                 if write:

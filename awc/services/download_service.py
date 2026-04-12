@@ -810,15 +810,19 @@ def restore_on_startup() -> dict:
         fixed += 1
 
     resumed = 0
+    retried = 0
     for entry in list_all_downloads():
-        if entry.get("status") != "paused" or entry.get("pause_reason") != "system":
-            continue
-        part_path = _localize_data_path(entry.get("part_path", ""))
-        if part_path and os.path.exists(part_path):
+        status = entry.get("status")
+        if status == "paused" and entry.get("pause_reason") == "system":
+            part_path = _localize_data_path(entry.get("part_path", ""))
+            if part_path and os.path.exists(part_path):
+                if resume_download(entry["id"]):
+                    resumed += 1
+        elif status == "failed":
             if resume_download(entry["id"]):
-                resumed += 1
+                retried += 1
 
-    return {"restored": restored, "fixed": fixed, "resumed": resumed}
+    return {"restored": restored, "fixed": fixed, "resumed": resumed, "retried": retried}
 
 
 def build_download_snapshot(limit: int = 100) -> dict:
@@ -876,19 +880,41 @@ def resume_download(download_id: str) -> dict | None:
     entry = get_download(download_id)
     if not entry:
         return None
+    status = entry.get("status")
     part_path = _localize_data_path(entry.get("part_path") or "")
-    if not part_path or not os.path.exists(part_path):
-        return None
-    update_download_progress(
-        download_id,
-        status="queued",
-        pause_reason="none",
-        error="",
-        downloaded_bytes=os.path.getsize(part_path),
-        finished_at=None,
-    )
-    log_info(logger, "download.resumed", "Download resumed", entity_kind="download", entity_id=download_id, entity_title=entry.get("filename"), details={"filename": entry.get("filename")})
-    return queue_download(download_id)
+
+    if status == "paused":
+        if not part_path or not os.path.exists(part_path):
+            return None
+        update_download_progress(
+            download_id,
+            status="queued",
+            pause_reason="none",
+            error="",
+            downloaded_bytes=os.path.getsize(part_path),
+            finished_at=None,
+        )
+        log_info(logger, "download.resumed", "Download resumed", entity_kind="download", entity_id=download_id, entity_title=entry.get("filename"), details={"filename": entry.get("filename")})
+        return queue_download(download_id)
+
+    if status == "failed":
+        if part_path and os.path.exists(part_path):
+            try:
+                os.remove(part_path)
+            except OSError:
+                pass
+        update_download_progress(
+            download_id,
+            status="queued",
+            pause_reason="none",
+            error="",
+            downloaded_bytes=0,
+            finished_at=None,
+        )
+        log_info(logger, "download.resumed", "Download resumed", entity_kind="download", entity_id=download_id, entity_title=entry.get("filename"), details={"filename": entry.get("filename")})
+        return queue_download(download_id)
+
+    return None
 
 
 def remove_download(download_id: str) -> bool:

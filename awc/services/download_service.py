@@ -4,6 +4,7 @@ from base64 import urlsafe_b64decode, urlsafe_b64encode
 from datetime import UTC, datetime
 from hashlib import sha1
 import logging
+import time
 from pathlib import Path
 import os
 import re
@@ -581,6 +582,49 @@ def queue_download(download_id: str) -> dict | None:
     return get_download(download_id)
 
 
+def pause_download(download_id: str, *, reason: str = "user") -> dict | None:
+    entry = get_download(download_id)
+    if not entry or entry.get("status") != "downloading":
+        return entry
+
+    event = _download_events.get(download_id)
+    if event:
+        event.set()
+
+    updated = update_download_progress(
+        download_id,
+        status="paused",
+        pause_reason=reason,
+        finished_at=None,
+    )
+    if updated:
+        log_info(
+            logger,
+            "download.pause_requested",
+            "Download pause requested",
+            entity_kind="download",
+            entity_id=download_id,
+            entity_title=updated.get("filename"),
+            lines=[f"reason={reason}"],
+            details={"filename": updated.get("filename"), "reason": reason},
+        )
+    return updated
+
+
+def pause_active_downloads(reason: str = "system", timeout_seconds: int = 30) -> int:
+    active = [entry for entry in list_all_downloads() if entry.get("status") == "downloading"]
+    requested = {entry["id"] for entry in active if pause_download(entry["id"], reason=reason)}
+    deadline = time.monotonic() + timeout_seconds
+    while requested and time.monotonic() < deadline:
+        time.sleep(0.1)
+        requested = {
+            download_id
+            for download_id in requested
+            if get_download(download_id).get("status") == "downloading"
+        }
+    return len(active)
+
+
 def completed_downloads() -> list[dict]:
     return list_completed_downloads()
 
@@ -751,9 +795,10 @@ def restore_on_startup() -> dict:
             update_download_progress(
                 entry["id"],
                 status="paused",
+                pause_reason="system",
                 downloaded_bytes=os.path.getsize(part_path),
                 finished_at=None,
-                part_path=_localize_data_path(entry.get("part_path", "")),
+                part_path=part_path,
             )
         else:
             update_download_progress(
@@ -763,7 +808,17 @@ def restore_on_startup() -> dict:
                 finished_at=datetime.now(UTC).timestamp(),
             )
         fixed += 1
-    return {"restored": restored, "fixed": fixed}
+
+    resumed = 0
+    for entry in list_all_downloads():
+        if entry.get("status") != "paused" or entry.get("pause_reason") != "system":
+            continue
+        part_path = _localize_data_path(entry.get("part_path", ""))
+        if part_path and os.path.exists(part_path):
+            if resume_download(entry["id"]):
+                resumed += 1
+
+    return {"restored": restored, "fixed": fixed, "resumed": resumed}
 
 
 def build_download_snapshot(limit: int = 100) -> dict:
@@ -805,7 +860,6 @@ def cancel_download(download_id: str) -> dict | None:
     entry = get_download(download_id)
     if not entry:
         return None
-    event = _download_events.get(download_id)
     if entry.get("status") == "queued":
         updated = update_download_progress(
             download_id,
@@ -815,17 +869,7 @@ def cancel_download(download_id: str) -> dict | None:
         if updated:
             log_info(logger, "download.cancelled", "Download cancelled", entity_kind="download", entity_id=download_id, entity_title=updated.get("filename"), details={"filename": updated.get("filename")})
         return updated
-    if event and entry.get("status") == "downloading":
-        event.set()
-        updated = update_download_progress(
-            download_id,
-            status="paused",
-            finished_at=None,
-        )
-        if updated:
-            log_info(logger, "download.pause_requested", "Download pause requested", entity_kind="download", entity_id=download_id, entity_title=updated.get("filename"), details={"filename": updated.get("filename")})
-        return updated
-    return entry
+    return pause_download(download_id, reason="user")
 
 
 def resume_download(download_id: str) -> dict | None:
@@ -838,6 +882,7 @@ def resume_download(download_id: str) -> dict | None:
     update_download_progress(
         download_id,
         status="queued",
+        pause_reason="none",
         error="",
         downloaded_bytes=os.path.getsize(part_path),
         finished_at=None,

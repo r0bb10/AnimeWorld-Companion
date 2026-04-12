@@ -16,6 +16,7 @@ def list_downloads(limit: int = 100) -> list[dict]:
                 filename,
                 release_source,
                 status,
+                pause_reason,
                 total_bytes,
                 downloaded_bytes,
                 part_path,
@@ -44,6 +45,7 @@ def list_all_downloads() -> list[dict]:
                 filename,
                 release_source,
                 status,
+                pause_reason,
                 total_bytes,
                 downloaded_bytes,
                 part_path,
@@ -70,6 +72,7 @@ def get_download(download_id: str) -> dict | None:
                 filename,
                 release_source,
                 status,
+                pause_reason,
                 total_bytes,
                 downloaded_bytes,
                 part_path,
@@ -109,6 +112,7 @@ def create_download(
                 filename,
                 release_source,
                 status,
+                pause_reason,
                 total_bytes,
                 downloaded_bytes,
                 part_path,
@@ -119,7 +123,7 @@ def create_download(
                 sonarr_id,
                 radarr_id
             )
-            VALUES (?, ?, ?, ?, ?, 0, 0, ?, NULL, NULL, NULL, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, 0, 0, ?, NULL, NULL, NULL, ?, ?, ?)
             """,
             (
                 url,
@@ -127,6 +131,7 @@ def create_download(
                 filename,
                 release_source,
                 status,
+                'none',
                 part_path,
                 created_at,
                 sonarr_id,
@@ -136,15 +141,23 @@ def create_download(
     return get_download(download_id) or {}
 
 
-def update_download_status(download_id: str, status: str, error: str | None = None) -> dict | None:
+def update_download_status(download_id: str, status: str, error: str | None = None, pause_reason: str | None = None) -> dict | None:
+    current = get_download(download_id)
+    if not current:
+        return None
     with get_db(write=True) as conn:
         conn.execute(
             """
             UPDATE downloads
-            SET status = ?, error = ?
+            SET status = ?, error = ?, pause_reason = ?
             WHERE id = ?
             """,
-            (status, error, download_id),
+            (
+                status,
+                error if error is not None else current["error"],
+                pause_reason if pause_reason is not None else current["pause_reason"],
+                download_id,
+            ),
         )
     return get_download(download_id)
 
@@ -153,6 +166,7 @@ def update_download_progress(
     download_id: str,
     *,
     status: str | None = None,
+    pause_reason: str | None = None,
     total_bytes: int | None = None,
     downloaded_bytes: int | None = None,
     part_path: str | None = None,
@@ -169,6 +183,7 @@ def update_download_progress(
             UPDATE downloads
             SET
                 status = ?,
+                pause_reason = ?,
                 total_bytes = ?,
                 downloaded_bytes = ?,
                 part_path = ?,
@@ -179,6 +194,7 @@ def update_download_progress(
             """,
             (
                 status if status is not None else current["status"],
+                pause_reason if pause_reason is not None else current["pause_reason"],
                 total_bytes if total_bytes is not None else current["total_bytes"],
                 downloaded_bytes if downloaded_bytes is not None else current["downloaded_bytes"],
                 part_path if part_path is not None else current["part_path"],
@@ -218,6 +234,7 @@ def list_completed_downloads() -> list[dict]:
                 filename,
                 release_source,
                 status,
+                pause_reason,
                 total_bytes,
                 downloaded_bytes,
                 part_path,

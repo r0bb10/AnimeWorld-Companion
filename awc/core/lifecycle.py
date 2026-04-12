@@ -8,6 +8,7 @@ from .logging import get_logger, shutdown_logging
 from ..repositories.schema import init_db
 from ..services.events_service import start_sse_streams, stop_sse_streams
 from ..services.background_service import start_background_workers, stop_background_workers
+from ..services.download_service import pause_active_downloads
 
 logger = get_logger("lifecycle")
 
@@ -40,6 +41,7 @@ async def lifespan(app):
     start_background_workers()
     yield
     stop_sse_streams()
+    pause_active_downloads(reason="system")
     stop_background_workers()
     log_info(logger, "lifecycle.stop", "AWC rebuild foundation stopping")
     shutdown_logging()

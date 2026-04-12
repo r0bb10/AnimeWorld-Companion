@@ -23,6 +23,7 @@ def list_rss_items(limit: int = 100) -> list[dict]:
                     size,
                     pub_date,
                     aw_episode_link,
+                    source,
                     NULL AS year,
                     show_rss_cache.created_at AS created_at,
                     '5070' AS category_id
@@ -39,6 +40,7 @@ def list_rss_items(limit: int = 100) -> list[dict]:
                     movie_rss_cache.size AS size,
                     movie_rss_cache.pub_date AS pub_date,
                     movie_rss_cache.aw_episode_link AS aw_episode_link,
+                    movie_rss_cache.source AS source,
                     m.year AS year,
                     movie_rss_cache.created_at AS created_at,
                     '2000' AS category_id
@@ -98,6 +100,7 @@ def save_rss_item(
     size: int,
     pub_date: str,
     aw_episode_link: str,
+    source: str = "animeworld",
 ) -> bool:
     created_at = datetime.now(UTC).isoformat()
     with get_db(write=True) as conn:
@@ -112,11 +115,12 @@ def save_rss_item(
                 size,
                 pub_date,
                 aw_episode_link,
+                source,
                 created_at
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
-            (show_id, season_number, episode_number, title, guid, size, pub_date, aw_episode_link, created_at),
+            (show_id, season_number, episode_number, title, guid, size, pub_date, aw_episode_link, source, created_at),
         )
     return bool(cursor.rowcount)
 
@@ -129,6 +133,7 @@ def save_movie_rss_item(
     size: int,
     pub_date: str,
     aw_episode_link: str,
+    source: str = "animeworld",
 ) -> bool:
     created_at = datetime.now(UTC).isoformat()
     with get_db(write=True) as conn:
@@ -141,11 +146,12 @@ def save_movie_rss_item(
                 size,
                 pub_date,
                 aw_episode_link,
+                source,
                 created_at
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
             """,
-            (movie_id, title, guid, size, pub_date, aw_episode_link, created_at),
+            (movie_id, title, guid, size, pub_date, aw_episode_link, source, created_at),
         )
     return bool(cursor.rowcount)
 

@@ -11,7 +11,10 @@ from ..core.config import settings
 from ..core.log_events import log_debug, log_exception, log_info, log_warning
 from ..core.logging import get_logger
 from ..integrations.animeworld_client import AnimeWorldClient
+from ..integrations.radarr_client import RadarrClient
+from ..integrations.sonarr_client import SonarrClient
 from ..repositories.db import get_db
+from ..repositories.movies import find_movie_by_manager_identity
 from ..repositories.rss_cache import (
     cleanup_rss_items,
     clear_rss_items,
@@ -21,6 +24,7 @@ from ..repositories.rss_cache import (
     save_movie_rss_item,
     save_rss_item,
 )
+from ..repositories.shows import find_show_by_manager_identity
 from .search_service import build_movie_search_items, build_show_search_items
 
 logger = get_logger("rss")
@@ -117,6 +121,113 @@ def _resolve_movie_rss_mapping(anime_slug: str) -> dict | None:
     return dict(row) if row else None
 
 
+def _parse_int(value: object | None) -> int | None:
+    try:
+        if value is None:
+            return None
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _cache_sonarr_wanted_items() -> int:
+    sonarr = SonarrClient()
+    if not sonarr.is_configured():
+        return 0
+
+    cached = 0
+    for item in sonarr.fetch_wanted_missing():
+        show = find_show_by_manager_identity(
+            sonarr_id=_parse_int(item.get("seriesId")),
+            tvdb_id=_parse_int(item.get("tvdbId")),
+            title=str(item.get("seriesTitle") or item.get("title") or ""),
+        )
+        if not show:
+            continue
+
+        season_number = _parse_int(item.get("seasonNumber"))
+        episode_number = _parse_int(item.get("episodeNumber"))
+        if not season_number or not episode_number:
+            continue
+
+        if has_rss_item(show["id"], season_number, episode_number):
+            continue
+
+        items = build_show_search_items(
+            show["title"],
+            season_number,
+            episode_number,
+            tvdb_id=show.get("tvdb_id"),
+        )
+        if not items:
+            continue
+
+        item_payload = items[0]
+        if save_rss_item(
+            show_id=show["id"],
+            season_number=season_number,
+            episode_number=episode_number,
+            title=item_payload["title"],
+            guid=item_payload["guid"],
+            size=int(item_payload.get("size", 0) or 0),
+            pub_date=item_payload.get("pubDate", ""),
+            aw_episode_link=item_payload.get("aw_link", ""),
+            source="internal",
+        ):
+            cached += 1
+
+    return cached
+
+
+def _cache_radarr_wanted_items() -> int:
+    radarr = RadarrClient()
+    if not radarr.is_configured():
+        return 0
+
+    cached = 0
+    for item in radarr.fetch_wanted_missing():
+        movie = find_movie_by_manager_identity(
+            radarr_id=_parse_int(item.get("movieId")),
+            tmdb_id=_parse_int(item.get("tmdbId")),
+            imdb_id=str(item.get("imdbId") or ""),
+            title=str(item.get("movieTitle") or item.get("title") or ""),
+        )
+        if not movie:
+            continue
+
+        items = build_movie_search_items(
+            movie["title"],
+            tmdb_id=movie.get("tmdb_id"),
+            imdb_id=movie.get("imdb_id") or "",
+        )
+        if not items:
+            continue
+
+        for item_payload in items:
+            guid = str(item_payload.get("guid", "") or "")
+            if not guid or has_movie_rss_item(movie["id"], guid):
+                continue
+            if save_movie_rss_item(
+                movie_id=movie["id"],
+                title=item_payload["title"],
+                guid=guid,
+                size=int(item_payload.get("size", 0) or 0),
+                pub_date=item_payload.get("pubDate", ""),
+                aw_episode_link=item_payload.get("aw_link", ""),
+                source="internal",
+            ):
+                cached += 1
+
+    return cached
+
+
+def _cache_manager_wanted_items() -> int:
+    cached = 0
+    cached += _cache_sonarr_wanted_items()
+    cached += _cache_radarr_wanted_items()
+    return cached
+
+
 def _resolve_rss_episode(show_id: int, anime_slug: str, episode_number: int) -> tuple[int, int] | None:
     with get_db() as conn:
         linked = conn.execute(
@@ -200,6 +311,7 @@ def _process_rss_item(fields: dict, client: AnimeWorldClient) -> int:
             size=int(item_payload.get("size", 0) or 0),
             pub_date=fields["pub_date"],
             aw_episode_link=item_payload.get("aw_link", anime_slug),
+            source="animeworld",
         ):
             cached += 1
         return cached
@@ -223,6 +335,7 @@ def _process_rss_item(fields: dict, client: AnimeWorldClient) -> int:
             size=int(item_payload.get("size", 0) or 0),
             pub_date=fields["pub_date"],
             aw_episode_link=item_payload.get("aw_link", anime_slug),
+            source="animeworld",
         ):
             cached += 1
     return cached
@@ -282,9 +395,27 @@ def update_rss_cache(*, emit_cycle_logs: bool = False) -> dict:
             except Exception:
                 log_exception(logger, "runtime.rss.item_processing_failed", "RSS item processing failed")
 
+    internal_cached = _cache_manager_wanted_items()
+    total_cached = cached + internal_cached
     cleanup_rss_items(settings.rss_cache_retention_days)
+    sources: list[str] = []
     if cached:
-        log_info(logger, "runtime.rss.cached", "RSS cached items", details={"cached": cached}, lines=[f"cached={cached}"])
+        sources.append("animeworld")
+    if internal_cached:
+        sources.append("internal")
+    if total_cached:
+        log_info(
+            logger,
+            "runtime.rss.cached",
+            "RSS cached items",
+            details={"cached": total_cached, "source": sources},
+            lines=[f"cached={total_cached}", f"source={','.join(sources)}"],
+        )
     if emit_cycle_logs:
-        log_debug(logger, "runtime.rss.cycle.finished", "RSS poll cycle finished", details={"cached": cached})
-    return {"enabled": True, "cached": cached}
+        log_debug(
+            logger,
+            "runtime.rss.cycle.finished",
+            "RSS poll cycle finished",
+            details={"cached": total_cached, "source": sources},
+        )
+    return {"enabled": True, "cached": total_cached}

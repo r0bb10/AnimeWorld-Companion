@@ -125,6 +125,7 @@ CREATE TABLE IF NOT EXISTS show_rss_cache (
     size           TEXT DEFAULT '0',
     pub_date       TEXT,
     aw_episode_link TEXT,
+    source         TEXT DEFAULT 'animeworld',
     created_at     TEXT DEFAULT (datetime('now')),
     UNIQUE(show_id, season_number, episode_number)
 );
@@ -140,6 +141,7 @@ CREATE TABLE IF NOT EXISTS movie_rss_cache (
     size            TEXT DEFAULT '0',
     pub_date        TEXT,
     aw_episode_link TEXT,
+    source          TEXT DEFAULT 'animeworld',
     created_at      TEXT DEFAULT (datetime('now')),
     UNIQUE(movie_id, guid)
 );
@@ -253,3 +255,15 @@ def init_db() -> None:
         }
         if "ignored" not in movie_columns:
             conn.execute("ALTER TABLE movies ADD COLUMN ignored BOOLEAN DEFAULT 0")
+        rss_show_columns = {
+            row["name"]
+            for row in conn.execute("PRAGMA table_info(show_rss_cache)").fetchall()
+        }
+        if "source" not in rss_show_columns:
+            conn.execute("ALTER TABLE show_rss_cache ADD COLUMN source TEXT DEFAULT 'animeworld'")
+        rss_movie_columns = {
+            row["name"]
+            for row in conn.execute("PRAGMA table_info(movie_rss_cache)").fetchall()
+        }
+        if "source" not in rss_movie_columns:
+            conn.execute("ALTER TABLE movie_rss_cache ADD COLUMN source TEXT DEFAULT 'animeworld'")

@@ -66,3 +66,15 @@ class MediaManagerClient:
             for item in payload
             if "id" in item and "label" in item
         }
+
+    def fetch_wanted_missing(self) -> list[dict]:
+        if not self.is_configured():
+            return []
+        payload = self.api.get("wanted/missing")
+        if isinstance(payload, list):
+            return payload
+        if isinstance(payload, dict):
+            records = payload.get("records")
+            if isinstance(records, list):
+                return records
+        return []

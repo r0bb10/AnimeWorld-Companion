@@ -350,6 +350,8 @@ def update_rss_cache(*, emit_cycle_logs: bool = False) -> dict:
         return {"enabled": True, "cached": 0, "error": "missing_aw_base_url"}
 
     client = AnimeWorldClient()
+    cached = 0
+    error: str | None = None
 
     if emit_cycle_logs:
         log_debug(logger, "runtime.rss.cycle.started", "RSS poll cycle started")
@@ -360,40 +362,34 @@ def update_rss_cache(*, emit_cycle_logs: bool = False) -> dict:
         root = ET.fromstring(response.content)
     except requests.ConnectionError:
         log_warning(logger, "runtime.rss.skipped", "RSS poll skipped: AnimeWorld unreachable")
-        result = {"enabled": True, "cached": 0, "error": "unreachable"}
-        if emit_cycle_logs:
-            log_debug(logger, "runtime.rss.cycle.finished", "RSS poll cycle finished", details={"cached": 0, "error": "unreachable"})
-        return result
+        root = None
+        error = "unreachable"
     except requests.Timeout:
         log_warning(logger, "runtime.rss.skipped", "RSS poll skipped: request timed out")
-        result = {"enabled": True, "cached": 0, "error": "timeout"}
-        if emit_cycle_logs:
-            log_debug(logger, "runtime.rss.cycle.finished", "RSS poll cycle finished", details={"cached": 0, "error": "timeout"})
-        return result
+        root = None
+        error = "timeout"
     except Exception as exc:
         log_exception(logger, "runtime.rss.failed", "RSS fetch failed", details={"error": str(exc)})
-        result = {"enabled": True, "cached": 0, "error": str(exc)}
-        if emit_cycle_logs:
-            log_debug(logger, "runtime.rss.cycle.finished", "RSS poll cycle finished", details={"cached": 0, "error": str(exc)})
-        return result
+        root = None
+        error = str(exc)
 
-    fields_list = []
-    for item in root.findall(".//item"):
-        try:
-            fields = _extract_rss_fields(item)
-            if fields:
-                fields_list.append(fields)
-        except Exception:
-            log_exception(logger, "runtime.rss.item_parse_failed", "RSS item parse failed")
-
-    cached = 0
-    with ThreadPoolExecutor(max_workers=5) as pool:
-        futures = {pool.submit(_process_rss_item, fields, client): fields for fields in fields_list}
-        for future in as_completed(futures):
+    if root is not None:
+        fields_list = []
+        for item in root.findall(".//item"):
             try:
-                cached += future.result()
+                fields = _extract_rss_fields(item)
+                if fields:
+                    fields_list.append(fields)
             except Exception:
-                log_exception(logger, "runtime.rss.item_processing_failed", "RSS item processing failed")
+                log_exception(logger, "runtime.rss.item_parse_failed", "RSS item parse failed")
+
+        with ThreadPoolExecutor(max_workers=5) as pool:
+            futures = {pool.submit(_process_rss_item, fields, client): fields for fields in fields_list}
+            for future in as_completed(futures):
+                try:
+                    cached += future.result()
+                except Exception:
+                    log_exception(logger, "runtime.rss.item_processing_failed", "RSS item processing failed")
 
     internal_cached = _cache_manager_wanted_items()
     total_cached = cached + internal_cached
@@ -412,10 +408,16 @@ def update_rss_cache(*, emit_cycle_logs: bool = False) -> dict:
             lines=[f"cached={total_cached}", f"source={','.join(sources)}"],
         )
     if emit_cycle_logs:
+        details = {"cached": total_cached, "source": sources}
+        if error:
+            details["error"] = error
         log_debug(
             logger,
             "runtime.rss.cycle.finished",
             "RSS poll cycle finished",
-            details={"cached": total_cached, "source": sources},
+            details=details,
         )
-    return {"enabled": True, "cached": total_cached}
+    result = {"enabled": True, "cached": total_cached}
+    if error:
+        result["error"] = error
+    return result

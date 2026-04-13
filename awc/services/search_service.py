@@ -12,7 +12,7 @@ from ..integrations.animeworld_client import AnimeWorldClient
 from ..repositories.movies import get_movie_detail
 from ..repositories.shows import get_show_detail
 from .download_service import build_download_url
-from .mapping_service import resolve_scene_episode
+from .mapping_service import resolve_absolute_episode
 from .naming_service import build_release_name
 from .query_service import parse_query
 
@@ -92,17 +92,12 @@ def _series_items(show: dict, season_number: int, episode_number: int) -> list[d
         else:
             linked_with = mapping.get("linked_with_season")
             if linked_with is not None:
-                offset = 0
-                for season in sorted(show.get("seasons", []), key=lambda item: item["season_number"]):
-                    current = season["season_number"]
-                    if current < linked_with:
-                        continue
-                    if current >= season_number:
-                        break
-                    season_mappings = season.get("mappings", [])
-                    if season_mappings and season_mappings[0].get("aw_link") == mapping["aw_link"]:
-                        offset += season.get("episode_count", 0)
-                matched_episode = _match_episode(episodes, offset + episode_number)
+                resolved = resolve_absolute_episode(show["id"], season_number, episode_number)
+                if resolved.get("matched") and resolved.get("resolved"):
+                    target = resolved["resolved"]["absolute_episode"]
+                else:
+                    target = episode_number
+                matched_episode = _match_episode(episodes, target)
             else:
                 matched_episode = _match_episode(episodes, episode_number)
 
@@ -170,11 +165,6 @@ def build_show_search_items(query: str, season_number: int | None, episode_numbe
     if not show:
         log_debug(logger, "search.show.miss", "Show search miss", details={"query": query, "parsed": parsed_title, "tvdb_id": tvdb_id})
         return []
-
-    resolved = resolve_scene_episode(show["id"], season_number, episode_number)
-    if resolved.get("matched") and resolved.get("resolved"):
-        season_number = resolved["resolved"]["season_number"]
-        episode_number = resolved["resolved"]["episode_number"]
 
     detail = get_show_detail(show["id"])
     if not detail:

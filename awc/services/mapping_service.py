@@ -1,8 +1,8 @@
 """Mapping-domain read logic for the clean rebuild."""
 
 from ..repositories.mappings import (
+    get_absolute_episode,
     get_episode_by_absolute,
-    get_internal_episode,
     get_mapping_scenario,
     list_show_mappings,
 )
@@ -46,9 +46,9 @@ def build_show_mapping_snapshot(show_id: int) -> dict | None:
     }
 
 
-def resolve_scene_episode(show_id: int, season_number: int, episode_number: int) -> dict:
-    resolved = get_internal_episode(show_id, season_number, episode_number)
-    if not resolved:
+def resolve_absolute_episode(show_id: int, season_number: int, episode_number: int) -> dict:
+    absolute = get_absolute_episode(show_id, season_number, episode_number)
+    if absolute is None:
         return {
             "input": {"season_number": season_number, "episode_number": episode_number},
             "resolved": None,
@@ -58,14 +58,13 @@ def resolve_scene_episode(show_id: int, season_number: int, episode_number: int)
     return {
         "input": {"season_number": season_number, "episode_number": episode_number},
         "resolved": {
-            "season_number": resolved[0],
-            "episode_number": resolved[1],
+            "absolute_episode": absolute,
         },
         "matched": True,
     }
 
 
-def resolve_absolute_episode(show_id: int, absolute_episode: int) -> dict:
+def resolve_episode_by_absolute(show_id: int, absolute_episode: int) -> dict:
     resolved = get_episode_by_absolute(show_id, absolute_episode)
     if not resolved:
         return {

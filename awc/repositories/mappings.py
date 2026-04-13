@@ -92,19 +92,19 @@ def get_mapping_scenario(show_id: int, aw_link: str) -> str:
     return "single_link" if season_count > 1 else "normal_or_split"
 
 
-def get_internal_episode(show_id: int, scene_season: int, scene_episode: int) -> tuple[int, int] | None:
+def get_absolute_episode(show_id: int, internal_season: int, internal_episode: int) -> int | None:
     with get_db() as conn:
         row = conn.execute(
             """
-            SELECT internal_season, internal_episode
-            FROM show_scene_episodes
-            WHERE show_id = ? AND scene_season = ? AND scene_episode = ?
+            SELECT absolute_episode
+            FROM show_episode_numbers
+            WHERE show_id = ? AND internal_season = ? AND internal_episode = ?
             """,
-            (show_id, scene_season, scene_episode),
+            (show_id, internal_season, internal_episode),
         ).fetchone()
     if not row:
         return None
-    return row["internal_season"], row["internal_episode"]
+    return row["absolute_episode"]
 
 
 def get_episode_by_absolute(show_id: int, absolute_episode: int) -> tuple[int, int] | None:
@@ -112,8 +112,8 @@ def get_episode_by_absolute(show_id: int, absolute_episode: int) -> tuple[int, i
         row = conn.execute(
             """
             SELECT internal_season, internal_episode
-            FROM show_scene_episodes
-            WHERE show_id = ? AND absolute_episode = ?
+            FROM show_episode_numbers
+            WHERE show_id = ? AND absolute_episode = ? AND internal_season > 0
             """,
             (show_id, absolute_episode),
         ).fetchone()

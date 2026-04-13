@@ -17,8 +17,8 @@ from ..repositories.library_write import (
     prune_missing_movies,
     prune_missing_shows,
     replace_movie_alternate_titles,
-    replace_scene_episode_map,
     replace_show_alternate_titles,
+    replace_show_episode_numbers,
     replace_show_seasons,
     set_sync_meta,
     upsert_movie,
@@ -203,26 +203,21 @@ def _build_show_alt_titles(series: dict) -> list[dict]:
                 "source": "sonarr",
                 "title_type": title.get("titleType"),
                 "language": _language_name(title.get("language")),
-                "scene_season_number": title.get("seasonNumber"),
                 "title_year": title.get("year"),
             }
         )
     return items
 
 
-def _build_scene_episode_map(episodes: list[dict]) -> list[dict]:
+def _build_episode_numbers(episodes: list[dict]) -> list[dict]:
     items = []
     for episode in episodes:
-        scene_season = episode.get("sceneSeasonNumber")
-        scene_episode = episode.get("sceneEpisodeNumber")
         internal_season = episode.get("seasonNumber")
         internal_episode = episode.get("episodeNumber")
-        if None in (scene_season, scene_episode, internal_season, internal_episode):
+        if None in (internal_season, internal_episode):
             continue
         items.append(
             {
-                "scene_season": scene_season,
-                "scene_episode": scene_episode,
                 "internal_season": internal_season,
                 "internal_episode": internal_episode,
                 "absolute_episode": episode.get("absoluteEpisodeNumber"),
@@ -246,7 +241,7 @@ def _sync_show_payload(detail: dict, episodes: list[dict], *, targeted: bool, ta
     seasons = _build_show_seasons(detail, episodes)
     replace_show_seasons(show_id, seasons)
     replace_show_alternate_titles(show_id, _build_show_alt_titles(detail))
-    replace_scene_episode_map(show_id, _build_scene_episode_map(episodes))
+    replace_show_episode_numbers(show_id, _build_episode_numbers(episodes))
     log_block(
         logger,
         _sync_log_level(targeted),

@@ -64,7 +64,7 @@ def get_show_detail(show_id: int) -> dict | None:
 
         alt_rows = conn.execute(
             """
-            SELECT title, source, title_type, language, scene_season_number, title_year
+            SELECT title, source, title_type, language, title_year
             FROM show_alternate_titles
             WHERE show_id = ?
             ORDER BY title COLLATE NOCASE
@@ -227,50 +227,6 @@ def find_show_by_tvdb_id(tvdb_id: int | None) -> dict | None:
         ).fetchone()
     return dict(row) if row else None
 
-
-def is_single_sequence_show(show_id: int) -> bool:
-    """Return True if this show uses one continuous scene season across multiple
-    internal seasons — the signature of a long-runner numbered absolutely by
-    scene groups across what the manager splits into separate seasons.
-
-    This is the show-level gate for the scene episode range filter.  Call it
-    once per show before the per-season loop; it is False for the vast majority
-    of shows so the per-season range query is never issued for them.
-    """
-    with get_db() as conn:
-        meta = conn.execute(
-            """
-            SELECT COUNT(DISTINCT scene_season)  AS distinct_scene_seasons,
-                   COUNT(DISTINCT internal_season) AS distinct_internal_seasons
-            FROM show_scene_episodes
-            WHERE show_id = ?
-            """,
-            (show_id,),
-        ).fetchone()
-    if not meta:
-        return False
-    return meta["distinct_scene_seasons"] == 1 and meta["distinct_internal_seasons"] > 1
-
-
-def get_scene_episode_range_for_season(show_id: int, season_number: int) -> dict | None:
-    """Return the scene episode range for one internal season.
-
-    Only call this after ``is_single_sequence_show`` returned True for the show.
-    Returns a dict with ``first`` and ``last`` scene episode numbers, or None
-    if no rows exist for this season.
-    """
-    with get_db() as conn:
-        row = conn.execute(
-            """
-            SELECT MIN(scene_episode) AS first, MAX(scene_episode) AS last
-            FROM show_scene_episodes
-            WHERE show_id = ? AND internal_season = ?
-            """,
-            (show_id, season_number),
-        ).fetchone()
-    if not row or row["first"] is None:
-        return None
-    return {"first": int(row["first"]), "last": int(row["last"])}
 
 
 def set_season_ignored(show_id: int, season_number: int, ignored: bool) -> bool:

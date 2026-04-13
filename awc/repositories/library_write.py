@@ -124,9 +124,9 @@ def replace_show_alternate_titles(show_id: int, titles: list[dict]) -> None:
                 """
                 INSERT INTO show_alternate_titles (
                     show_id, title, title_normalized, source,
-                    title_type, language, scene_season_number, title_year
+                    title_type, language, title_year
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     show_id,
@@ -135,28 +135,24 @@ def replace_show_alternate_titles(show_id: int, titles: list[dict]) -> None:
                     item.get("source", "sonarr"),
                     item.get("title_type"),
                     item.get("language"),
-                    item.get("scene_season_number"),
                     item.get("title_year"),
                 ),
             )
 
 
-def replace_scene_episode_map(show_id: int, items: list[dict]) -> None:
+def replace_show_episode_numbers(show_id: int, items: list[dict]) -> None:
     with get_db(write=True) as conn:
-        conn.execute("DELETE FROM show_scene_episodes WHERE show_id = ?", (show_id,))
+        conn.execute("DELETE FROM show_episode_numbers WHERE show_id = ?", (show_id,))
         for item in items:
             conn.execute(
                 """
-                INSERT INTO show_scene_episodes (
-                    show_id, scene_season, scene_episode,
-                    internal_season, internal_episode, absolute_episode, updated_at
+                INSERT INTO show_episode_numbers (
+                    show_id, internal_season, internal_episode, absolute_episode, updated_at
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?)
                 """,
                 (
                     show_id,
-                    item.get("scene_season"),
-                    item.get("scene_episode"),
                     item.get("internal_season"),
                     item.get("internal_episode"),
                     item.get("absolute_episode"),

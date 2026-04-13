@@ -12,7 +12,7 @@ from ..core.log_events import format_movie_automap_lines, format_show_automap_li
 from ..core.logging import get_logger
 from ..domain.release_window import has_started
 from ..repositories.db import get_db
-from ..repositories.shows import get_scene_episode_range_for_season, is_single_sequence_show
+from ..repositories.shows import get_show_detail
 from ..repositories.mappings import (
     list_show_mappings,
     remove_movie_mapping,
@@ -20,7 +20,6 @@ from ..repositories.mappings import (
     replace_show_mappings_auto,
 )
 from ..repositories.movies import get_movie_detail
-from ..repositories.shows import get_show_detail
 from .automap_candidates import discover_candidates_for_titles
 from .automap_language import resolve_movie_language_preference, resolve_show_language_preference
 from .automap_scoring import calculate_movie_confidence, calculate_show_confidence
@@ -116,7 +115,7 @@ def _filter_language_candidates(candidates: list[dict], want_dubbed: bool) -> li
     return candidates
 
 
-def _build_scored_candidates(show: dict, season: dict, candidates: list[dict], want_dubbed: bool, reserved_links: set[str], *, is_sequence_show: bool = False) -> list[dict]:
+def _build_scored_candidates(show: dict, season: dict, candidates: list[dict], want_dubbed: bool, reserved_links: set[str]) -> list[dict]:
     own_links = {
         (mapping.get("aw_link") or "").strip()
         for mapping in season.get("mappings", [])
@@ -125,41 +124,10 @@ def _build_scored_candidates(show: dict, season: dict, candidates: list[dict], w
     blocked_links = reserved_links - own_links
     filtered = _filter_language_candidates(candidates, want_dubbed)
 
-    # Scene-range filter: only active for shows where is_single_sequence_show()
-    # returned True (hoisted to show level before the per-season loop so this
-    # branch is never entered for the overwhelming majority of shows).
-    # When active, each internal season maps to a known range of scene episode
-    # numbers.  A candidate page is valid only if it actually covers the
-    # season's first scene episode — filtering out both continuation pages that
-    # open after this season and unrelated shows whose episode count falls short
-    # of reaching it.
-    scene_start: int | None = None
-    if is_sequence_show:
-        scene_range = get_scene_episode_range_for_season(show["id"], season["season_number"])
-        scene_start = scene_range["first"] if scene_range else None
-
     scored: list[dict] = []
     for candidate in filtered:
         if candidate.get("aw_link", "") in blocked_links:
             continue
-        if scene_start is not None:
-            first_ep = candidate.get("aw_first_episode")
-            ep_count = int(candidate.get("aw_episode_count") or 0)
-            if first_ep is not None:
-                # A candidate is only valid for this season if its page both
-                # starts at or before the season's first scene episode AND
-                # reaches at least that episode (i.e. the page covers the
-                # season's opening episode).
-                # - first_ep > scene_start: page opens after this season starts
-                #   → cannot contain the season's first episode.
-                # - first_ep + ep_count - 1 < scene_start: page ends before
-                #   this season starts → also cannot cover it.
-                # Both checks are needed: the first blocks continuation pages
-                # from early seasons; the second blocks pages that are too
-                # short to reach this season from unrelated shows.
-                page_last = first_ep + ep_count - 1 if ep_count > 0 else first_ep
-                if first_ep > scene_start or page_last < scene_start:
-                    continue
         score, factors = calculate_show_confidence(show, season, candidate, want_dubbed=want_dubbed)
         scored.append({**candidate, "confidence_score": score, "confidence_factors": factors})
     scored.sort(key=lambda item: item["confidence_score"], reverse=True)
@@ -384,7 +352,6 @@ def _propagate_single_link(
     mapped_seasons: list[int],
     handled: set[int],
     reserved_links: set[str],
-    is_sequence_show: bool = False,
 ) -> None:
     available = int(best.get("aw_episode_count") or 0)
     is_ongoing = (best.get("aw_status") or "").lower() != "finito"
@@ -405,17 +372,8 @@ def _propagate_single_link(
         # For ongoing AW entries the episode count will keep growing, so the
         # current count may lag behind Sonarr's arc breakdown.  Only apply
         # the episode-count cap for finished shows.
-        # Exception: when scene data is available and the season's scene start
-        # already exceeds the page's current episode count, the page does not
-        # yet cover this season even though it is ongoing.  Stop the chain so
-        # those seasons fall through to per-season scoring and can match a
-        # continuation page that actually contains their episodes.
         if not is_ongoing and consumed + season_count > available:
             break
-        if is_ongoing and is_sequence_show and available > 0:
-            scene_range = get_scene_episode_range_for_season(show_id, sn)
-            if scene_range and scene_range["first"] > available:
-                break
         consumed += season_count
         chain.append(season)
 
@@ -566,18 +524,12 @@ def automap_show(show_id: int, season_number: int | None = None, force: bool = F
 
     reserved_links = _existing_links_by_show(show)
 
-    # One show-level check: is this a long-runner with a single continuous
-    # scene season spanning multiple internal seasons?  Result is passed to
-    # every _build_scored_candidates call so the per-season range query is
-    # only issued for the handful of shows that actually qualify.
-    sequence_show = is_single_sequence_show(show_id)
-
     for index, season in enumerate(eligible_seasons):
         sn = season["season_number"]
         if sn in handled:
             continue
 
-        season_scores = _build_scored_candidates(show, season, candidates, want_dubbed, reserved_links, is_sequence_show=sequence_show)
+        season_scores = _build_scored_candidates(show, season, candidates, want_dubbed, reserved_links)
         if season_scores:
             scored_candidates.extend(
                 [{**candidate, "season_number": sn} for candidate in season_scores[:3]]
@@ -664,7 +616,6 @@ def automap_show(show_id: int, season_number: int | None = None, force: bool = F
                 mapped_seasons=mapped_seasons,
                 handled=handled,
                 reserved_links=reserved_links,
-                is_sequence_show=sequence_show,
             )
             if sn in handled:
                 continue

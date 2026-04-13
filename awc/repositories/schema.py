@@ -32,7 +32,6 @@ CREATE TABLE IF NOT EXISTS show_alternate_titles (
     source              TEXT DEFAULT 'sonarr',
     title_type          TEXT,
     language            TEXT,
-    scene_season_number INTEGER,
     title_year          INTEGER,
     created_at          TEXT DEFAULT (datetime('now')),
     UNIQUE(show_id, title_normalized)
@@ -98,22 +97,20 @@ CREATE TABLE IF NOT EXISTS sync_metadata (
     updated_at TEXT DEFAULT (datetime('now'))
 );
 
-CREATE TABLE IF NOT EXISTS show_scene_episodes (
+CREATE TABLE IF NOT EXISTS show_episode_numbers (
     id               INTEGER PRIMARY KEY AUTOINCREMENT,
     show_id          INTEGER NOT NULL REFERENCES shows(id) ON DELETE CASCADE,
-    scene_season     INTEGER NOT NULL,
-    scene_episode    INTEGER NOT NULL,
     internal_season  INTEGER NOT NULL,
     internal_episode INTEGER NOT NULL,
     absolute_episode INTEGER,
     created_at       TEXT DEFAULT (datetime('now')),
     updated_at       TEXT DEFAULT (datetime('now')),
-    UNIQUE(show_id, scene_season, scene_episode)
+    UNIQUE(show_id, internal_season, internal_episode)
 );
 
-CREATE INDEX IF NOT EXISTS idx_scene_map_show     ON show_scene_episodes(show_id);
-CREATE INDEX IF NOT EXISTS idx_scene_map_lookup   ON show_scene_episodes(show_id, scene_season, scene_episode);
-CREATE INDEX IF NOT EXISTS idx_scene_map_absolute ON show_scene_episodes(show_id, absolute_episode);
+CREATE INDEX IF NOT EXISTS idx_episode_numbers_show     ON show_episode_numbers(show_id);
+CREATE INDEX IF NOT EXISTS idx_episode_numbers_lookup   ON show_episode_numbers(show_id, internal_season, internal_episode);
+CREATE INDEX IF NOT EXISTS idx_episode_numbers_absolute ON show_episode_numbers(show_id, absolute_episode);
 
 CREATE TABLE IF NOT EXISTS show_rss_cache (
     id             INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -236,6 +233,45 @@ def init_db() -> None:
     """Create all tables and indexes if they do not already exist."""
     with get_db(write=True) as conn:
         conn.executescript(_SCHEMA)
+        alt_columns = {
+            row["name"]
+            for row in conn.execute("PRAGMA table_info(show_alternate_titles)").fetchall()
+        }
+        if "scene_season_number" in alt_columns:
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS show_alternate_titles_new (
+                    id               INTEGER PRIMARY KEY AUTOINCREMENT,
+                    show_id          INTEGER NOT NULL REFERENCES shows(id) ON DELETE CASCADE,
+                    title            TEXT NOT NULL,
+                    title_normalized TEXT NOT NULL,
+                    source           TEXT DEFAULT 'sonarr',
+                    title_type       TEXT,
+                    language         TEXT,
+                    title_year       INTEGER,
+                    created_at       TEXT DEFAULT (datetime('now')),
+                    UNIQUE(show_id, title_normalized)
+                )
+                """
+            )
+            conn.execute(
+                """
+                INSERT OR IGNORE INTO show_alternate_titles_new (
+                    id, show_id, title, title_normalized, source, title_type, language, title_year, created_at
+                )
+                SELECT id, show_id, title, title_normalized, source, title_type, language, title_year, created_at
+                FROM show_alternate_titles
+                """
+            )
+            conn.execute("DROP TABLE show_alternate_titles")
+            conn.execute("ALTER TABLE show_alternate_titles_new RENAME TO show_alternate_titles")
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_alt_normalized ON show_alternate_titles(title_normalized)")
+
+        existing_scene = conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name='show_scene_episodes'"
+        ).fetchone()
+        if existing_scene:
+            conn.execute("DROP TABLE show_scene_episodes")
         columns = {
             row["name"]
             for row in conn.execute("PRAGMA table_info(downloads)").fetchall()

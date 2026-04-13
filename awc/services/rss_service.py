@@ -243,8 +243,8 @@ def _resolve_rss_episode(show_id: int, anime_slug: str, episode_number: int) -> 
             row = conn.execute(
                 """
                 SELECT internal_season, internal_episode
-                FROM show_scene_episodes
-                WHERE show_id = ? AND absolute_episode = ?
+                FROM show_episode_numbers
+                WHERE show_id = ? AND absolute_episode = ? AND internal_season > 0
                 LIMIT 1
                 """,
                 (show_id, episode_number),

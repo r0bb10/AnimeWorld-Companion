@@ -72,6 +72,7 @@ def _format_series_name(context: NamingContext) -> str:
     title = context.title.strip()
     season = context.season_number or 1
     episode = context.episode_number or 1
+    absolute = context.absolute_episode
 
     naming_config = _sonarr_naming_config()
     format_string = naming_config.get("animeEpisodeFormat", "{Series.Title}.S{season:00}E{episode:00}")
@@ -97,6 +98,13 @@ def _format_series_name(context: NamingContext) -> str:
         flags=re.IGNORECASE,
     )
     result = re.sub(r"\{episode\}", str(episode), result, flags=re.IGNORECASE)
+    result = re.sub(
+        r"\{absolute:(\d+)\}",
+        lambda match: f"{absolute:0{len(match.group(1))}d}" if absolute is not None else "",
+        result,
+        flags=re.IGNORECASE,
+    )
+    result = re.sub(r"\{absolute\}", str(absolute) if absolute is not None else "", result, flags=re.IGNORECASE)
 
     result = _cleanup_filename(result)
     if not result.endswith(".mp4"):

@@ -21,5 +21,6 @@ class NamingContext:
     title: str
     season_number: int | None = None
     episode_number: int | None = None
+    absolute_episode: int | None = None
     year: int | None = None
     imdb_id: str | None = None

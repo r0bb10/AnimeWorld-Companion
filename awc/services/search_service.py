@@ -12,7 +12,7 @@ from ..integrations.animeworld_client import AnimeWorldClient
 from ..repositories.movies import get_movie_detail
 from ..repositories.shows import get_show_detail
 from .download_service import build_download_url
-from .mapping_service import resolve_absolute_episode
+from .mapping_service import resolve_absolute_episode, resolve_episode_by_absolute
 from .naming_service import build_release_name
 from .query_service import parse_query
 
@@ -69,6 +69,15 @@ def _series_items(show: dict, season_number: int, episode_number: int) -> list[d
     if not mappings:
         return []
 
+    absolute_for_naming = None
+    resolved_absolute = resolve_absolute_episode(show["id"], season_number, episode_number)
+    if resolved_absolute.get("matched") and resolved_absolute.get("resolved"):
+        absolute_for_naming = resolved_absolute["resolved"]["absolute_episode"]
+    else:
+        resolved_standard = resolve_episode_by_absolute(show["id"], episode_number)
+        if resolved_standard.get("matched"):
+            absolute_for_naming = episode_number
+
     client = AnimeWorldClient()
     results: list[dict] = []
     for mapping in mappings:
@@ -113,6 +122,7 @@ def _series_items(show: dict, season_number: int, episode_number: int) -> list[d
                     title=show["title"],
                     season_number=season_number,
                     episode_number=episode_number,
+                    absolute_episode=absolute_for_naming,
                 )
             )
             source = file_info.get("url", "")

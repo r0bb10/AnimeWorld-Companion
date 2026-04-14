@@ -3,7 +3,6 @@
 !README.md
 data/
 config/
-app/
 AnimeWorld-Companion.wiki/
 *.db
 *.db-journal

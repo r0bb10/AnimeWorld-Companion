@@ -30,4 +30,4 @@ HEALTHCHECK --interval=30s --timeout=10s --start-period=40s --retries=3 \
   CMD python3 -c "import urllib.request; urllib.request.urlopen('http://127.0.0.1:7004/health')" || exit 1
 
 ENTRYPOINT ["/app/entrypoint.sh"]
-CMD ["sh", "-c", "exec uvicorn awc:app --host 0.0.0.0 --port ${AWC_PORT:-7004}"]
+CMD ["sh", "-c", "exec uvicorn app:app --host 0.0.0.0 --port ${AWC_PORT:-7004}"]

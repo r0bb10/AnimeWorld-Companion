@@ -29,8 +29,10 @@ _automap_lock = threading.Lock()
 logger = get_logger("automap")
 _automap_state = {
     "running": False,
+    "cancel_requested": False,
     "last_started_at": None,
     "last_finished_at": None,
+    "last_stop_requested_at": None,
     "last_error": "",
     "last_result": None,
 }
@@ -44,6 +46,24 @@ def automap_status() -> dict:
 def _set_state(**updates) -> None:
     with _automap_lock:
         _automap_state.update(updates)
+
+
+def _automap_stop_requested() -> bool:
+    with _automap_lock:
+        return bool(_automap_state.get("running")) and bool(_automap_state.get("cancel_requested"))
+
+
+def stop_automap_all() -> dict:
+    with _automap_lock:
+        if not _automap_state.get("running"):
+            return {"status": "not_running"}
+        if _automap_state.get("cancel_requested"):
+            return {"status": "already_stopping"}
+        requested_at = datetime.now(UTC).isoformat()
+        _automap_state.update(cancel_requested=True, last_stop_requested_at=requested_at)
+    log_info(logger, "automap.library.stop_requested", "Library automap stop requested")
+    publish_library_batch("automap", "stopping")
+    return {"status": "stop_requested", "requested_at": requested_at}
 
 
 def _publish_library_change(kind: str, item_id: int) -> None:
@@ -419,6 +439,8 @@ def _propagate_single_link(
 
 
 def automap_movie(movie_id: int, force: bool = False, *, emit_logs: bool = True) -> dict:
+    if _automap_stop_requested():
+        return {"status": "cancelled", "movie_id": movie_id}
     movie = get_movie_detail(movie_id)
     if not movie:
         log_warning(logger, "automap.movie.not_found", "Movie automap failed: movie not found", details={"movie_id": movie_id}, entity_kind="movie", entity_id=movie_id)
@@ -486,6 +508,15 @@ def automap_movie(movie_id: int, force: bool = False, *, emit_logs: bool = True)
 
 
 def automap_show(show_id: int, season_number: int | None = None, force: bool = False, *, emit_logs: bool = True) -> dict:
+    if _automap_stop_requested():
+        return {
+            "status": "cancelled",
+            "show_id": show_id,
+            "mapped_seasons": [],
+            "ambiguous": [],
+            "candidates": [],
+            "ignored_seasons": [],
+        }
     show = get_show_detail(show_id)
     if not show:
         log_warning(logger, "automap.show.not_found", "Show automap failed: show not found", details={"show_id": show_id}, entity_kind="show", entity_id=show_id)
@@ -533,6 +564,15 @@ def automap_show(show_id: int, season_number: int | None = None, force: bool = F
     reserved_links = _existing_links_by_show(show)
 
     for index, season in enumerate(eligible_seasons):
+        if _automap_stop_requested():
+            return {
+                "status": "cancelled",
+                "show_id": show_id,
+                "mapped_seasons": sorted(mapped_seasons),
+                "ambiguous": ambiguous,
+                "candidates": scored_candidates[:10],
+                "ignored_seasons": sorted(ignored_seasons),
+            }
         sn = season["season_number"]
         if sn in handled:
             continue
@@ -723,7 +763,9 @@ def _run_background(target, *args, **kwargs) -> dict:
             return {"status": "already_running"}
         _automap_state.update(
             running=True,
+            cancel_requested=False,
             last_started_at=datetime.now(UTC).isoformat(),
+            last_stop_requested_at=None,
             last_error="",
         )
 
@@ -733,24 +775,39 @@ def _run_background(target, *args, **kwargs) -> dict:
             _set_state(last_result=result)
             if target is automap_all:
                 summary = _summarize_automap_all(result)
-                log_info(
-                    logger,
-                    "automap.library.finished",
-                    "Library automap completed",
-                    lines=[
-                        f"shows={summary['shows']}",
-                        f"movies={summary['movies']}",
-                        f"mapped_show_seasons={summary['mapped_show_seasons']}",
-                        f"mapped_movies={summary['mapped_movies']}",
-                    ],
-                    details=summary,
-                )
-                publish_library_batch("automap", "finished", **summary)
+                if result.get("cancelled"):
+                    log_info(
+                        logger,
+                        "automap.library.cancelled",
+                        "Library automap stopped",
+                        lines=[
+                            f"shows={summary['shows']}",
+                            f"movies={summary['movies']}",
+                            f"mapped_show_seasons={summary['mapped_show_seasons']}",
+                            f"mapped_movies={summary['mapped_movies']}",
+                        ],
+                        details=summary,
+                    )
+                    publish_library_batch("automap", "cancelled", **summary)
+                else:
+                    log_info(
+                        logger,
+                        "automap.library.finished",
+                        "Library automap completed",
+                        lines=[
+                            f"shows={summary['shows']}",
+                            f"movies={summary['movies']}",
+                            f"mapped_show_seasons={summary['mapped_show_seasons']}",
+                            f"mapped_movies={summary['mapped_movies']}",
+                        ],
+                        details=summary,
+                    )
+                    publish_library_batch("automap", "finished", **summary)
         except Exception as exc:
             _set_state(last_error=str(exc))
             raise
         finally:
-            _set_state(running=False, last_finished_at=datetime.now(UTC).isoformat())
+            _set_state(running=False, cancel_requested=False, last_finished_at=datetime.now(UTC).isoformat())
 
     thread = threading.Thread(target=worker, name="awc-automap", daemon=True)
     thread.start()
@@ -805,10 +862,20 @@ def automap_all(force: bool = False) -> dict:
     show_results = []
     movie_results = []
     for kind, item_id, _ in combined:
+        if _automap_stop_requested():
+            return {"status": "cancelled", "cancelled": True, "shows": show_results, "movies": movie_results}
         if kind == "show":
-            show_results.append(automap_show(item_id, force=force))
+            result = automap_show(item_id, force=force)
+            if result.get("status") == "cancelled":
+                if result.get("mapped_seasons") or result.get("ambiguous"):
+                    show_results.append(result)
+                return {"status": "cancelled", "cancelled": True, "shows": show_results, "movies": movie_results}
+            show_results.append(result)
         else:
-            movie_results.append(automap_movie(item_id, force=force))
+            result = automap_movie(item_id, force=force)
+            if result.get("status") == "cancelled":
+                return {"status": "cancelled", "cancelled": True, "shows": show_results, "movies": movie_results}
+            movie_results.append(result)
     return {"shows": show_results, "movies": movie_results}
 
 

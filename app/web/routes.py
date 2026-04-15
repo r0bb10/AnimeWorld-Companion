@@ -30,6 +30,7 @@ from ..services.automap_service import (
     automap_show,
     automap_status,
     start_automap_all,
+    stop_automap_all,
 )
 from ..services.dashboard_service import (
     build_dashboard_card_html,
@@ -562,6 +563,16 @@ def api_automap(
             raise HTTPException(status_code=422, detail="Movies do not support season_number")
         return automap_movie(item_id, force=force)
     return automap_show(item_id, season_number=season_number, force=force)
+
+
+@api_router.post(
+    "/api/automap/stop",
+    tags=["Automap"],
+    summary="Stop library automap",
+    description="Request cancellation of the current background library automap run. The worker stops after the current in-flight item reaches a cancellation checkpoint.",
+)
+def api_stop_automap(_: str = Depends(require_api_key)) -> dict:
+    return stop_automap_all()
 
 
 @api_router.post(

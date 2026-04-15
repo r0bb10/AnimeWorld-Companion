@@ -12,28 +12,48 @@ def count_shows() -> int:
     return int(row["count"]) if row else 0
 
 
-def list_show_summaries(limit: int = 25) -> list[dict]:
+def list_show_summaries(limit: int | None = 25) -> list[dict]:
     with get_db() as conn:
-        rows = conn.execute(
-            """
-            SELECT
-                s.id,
-                s.sonarr_id,
-                s.title,
-                s.year,
-                s.status,
-                s.series_type,
-                COUNT(DISTINCT ss.id) AS season_count,
-                COUNT(DISTINCT asm.id) AS mapping_count
-            FROM shows s
-            LEFT JOIN show_seasons ss ON ss.show_id = s.id
-            LEFT JOIN aw_show_mappings asm ON asm.show_id = s.id
-            GROUP BY s.id
-            ORDER BY s.title COLLATE NOCASE
-            LIMIT ?
-            """,
-            (limit,),
-        ).fetchall()
+        if limit is None:
+            rows = conn.execute(
+                """
+                SELECT
+                    s.id,
+                    s.sonarr_id,
+                    s.title,
+                    s.year,
+                    s.status,
+                    s.series_type,
+                    COUNT(DISTINCT ss.id) AS season_count,
+                    COUNT(DISTINCT asm.id) AS mapping_count
+                FROM shows s
+                LEFT JOIN show_seasons ss ON ss.show_id = s.id
+                LEFT JOIN aw_show_mappings asm ON asm.show_id = s.id
+                GROUP BY s.id
+                ORDER BY s.title COLLATE NOCASE
+                """
+            ).fetchall()
+        else:
+            rows = conn.execute(
+                """
+                SELECT
+                    s.id,
+                    s.sonarr_id,
+                    s.title,
+                    s.year,
+                    s.status,
+                    s.series_type,
+                    COUNT(DISTINCT ss.id) AS season_count,
+                    COUNT(DISTINCT asm.id) AS mapping_count
+                FROM shows s
+                LEFT JOIN show_seasons ss ON ss.show_id = s.id
+                LEFT JOIN aw_show_mappings asm ON asm.show_id = s.id
+                GROUP BY s.id
+                ORDER BY s.title COLLATE NOCASE
+                LIMIT ?
+                """,
+                (limit,),
+            ).fetchall()
     return [dict(row) for row in rows]
 
 

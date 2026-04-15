@@ -9,7 +9,7 @@ from ..repositories.movies import count_movies, get_movie_detail, list_movie_sum
 from ..repositories.shows import count_shows, get_show_detail, list_show_summaries
 
 
-def build_catalog_snapshot(show_limit: int = 10, movie_limit: int = 10) -> dict:
+def build_catalog_snapshot(show_limit: int | None = 10, movie_limit: int | None = 10) -> dict:
     return {
         "counts": {
             "shows": count_shows(),

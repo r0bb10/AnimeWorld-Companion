@@ -378,7 +378,7 @@ def _build_dashboard_stats_context(catalog: dict | None = None) -> dict:
 
 
 def build_dashboard_context() -> dict:
-    catalog = build_catalog_snapshot(show_limit=250, movie_limit=250)
+    catalog = build_catalog_snapshot(show_limit=None, movie_limit=None)
     stats_context = _build_dashboard_stats_context(catalog)
     shows = [_show_payload(show["id"]) for show in catalog["shows"]]
     movies = [_movie_payload(movie["id"]) for movie in catalog["movies"]]

@@ -10,25 +10,42 @@ def count_movies() -> int:
     return int(row["count"]) if row else 0
 
 
-def list_movie_summaries(limit: int = 25) -> list[dict]:
+def list_movie_summaries(limit: int | None = 25) -> list[dict]:
     with get_db() as conn:
-        rows = conn.execute(
-            """
-            SELECT
-                m.id,
-                m.radarr_id,
-                m.title,
-                m.year,
-                m.status,
-                m.ignored,
-                CASE WHEN amm.id IS NULL THEN 0 ELSE 1 END AS mapped
-            FROM movies m
-            LEFT JOIN aw_movie_mappings amm ON amm.movie_id = m.id
-            ORDER BY m.title COLLATE NOCASE
-            LIMIT ?
-            """,
-            (limit,),
-        ).fetchall()
+        if limit is None:
+            rows = conn.execute(
+                """
+                SELECT
+                    m.id,
+                    m.radarr_id,
+                    m.title,
+                    m.year,
+                    m.status,
+                    m.ignored,
+                    CASE WHEN amm.id IS NULL THEN 0 ELSE 1 END AS mapped
+                FROM movies m
+                LEFT JOIN aw_movie_mappings amm ON amm.movie_id = m.id
+                ORDER BY m.title COLLATE NOCASE
+                """
+            ).fetchall()
+        else:
+            rows = conn.execute(
+                """
+                SELECT
+                    m.id,
+                    m.radarr_id,
+                    m.title,
+                    m.year,
+                    m.status,
+                    m.ignored,
+                    CASE WHEN amm.id IS NULL THEN 0 ELSE 1 END AS mapped
+                FROM movies m
+                LEFT JOIN aw_movie_mappings amm ON amm.movie_id = m.id
+                ORDER BY m.title COLLATE NOCASE
+                LIMIT ?
+                """,
+                (limit,),
+            ).fetchall()
     return [dict(row) for row in rows]
 
 

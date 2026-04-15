@@ -340,7 +340,15 @@ def _select_show_winner(season: dict, season_scores: list[dict], alt_titles: lis
     if len(qualified) == 1:
         return best
 
-    return _tiebreak_candidates(season, qualified, alt_titles=alt_titles)
+    second = season_scores[1] if len(season_scores) > 1 else None
+    if not second or (best["confidence_score"] - second["confidence_score"]) >= 0.05:
+        return best
+
+    tied = [
+        candidate for candidate in qualified
+        if (best["confidence_score"] - candidate["confidence_score"]) < 0.05
+    ]
+    return _tiebreak_candidates(season, tied, alt_titles=alt_titles)
 
 
 def _propagate_single_link(

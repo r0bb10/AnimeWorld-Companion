@@ -38,6 +38,49 @@ _download_progress: dict[str, dict[str, float | int]] = {}
 _download_lock = threading.Lock()
 _download_semaphore = threading.Semaphore(max(1, settings.max_concurrent_downloads))
 logger = get_logger("download")
+_RETRY_BACKOFF_SECONDS = (5, 15, 45, 120)
+
+
+def _retry_delay_for_attempt(attempt: int) -> int:
+    index = max(0, min(len(_RETRY_BACKOFF_SECONDS) - 1, int(attempt) - 1))
+    return int(_RETRY_BACKOFF_SECONDS[index])
+
+
+def _short_error_message(exc: Exception) -> str:
+    return " ".join(str(exc).split()).strip() or exc.__class__.__name__
+
+
+def _retry_error_kind(exc: Exception) -> str:
+    if isinstance(exc, requests.Timeout):
+        return "timeout"
+    if isinstance(exc, requests.ConnectionError):
+        message = _short_error_message(exc).casefold()
+        if "name resolution" in message or "nameresolutionerror" in message or "failed to resolve" in message:
+            return "dns"
+        return "connection"
+    if isinstance(exc, requests.ChunkedEncodingError):
+        return "incomplete_read"
+    if isinstance(exc, requests.HTTPError):
+        response = getattr(exc, "response", None)
+        status = int(getattr(response, "status_code", 0) or 0)
+        return f"http_{status or 'error'}"
+    if isinstance(exc, requests.RequestException):
+        return "request"
+    return "other"
+
+
+def _is_retryable_download_error(exc: Exception) -> bool:
+    if isinstance(exc, (requests.Timeout, requests.ConnectionError, requests.ChunkedEncodingError)):
+        return True
+    if isinstance(exc, requests.HTTPError):
+        response = getattr(exc, "response", None)
+        status = int(getattr(response, "status_code", 0) or 0)
+        if status in {408, 425, 429}:
+            return True
+        if status >= 500:
+            return True
+        return False
+    return False
 
 
 def _bencode(value) -> bytes:
@@ -418,156 +461,243 @@ def _download_worker(download_id: str) -> None:
         acquired_slot = True
 
         url = entry["url"]
+        max_attempts = len(_RETRY_BACKOFF_SECONDS) + 1
+        attempt = 0
         cancel_event = _download_events.setdefault(download_id, threading.Event())
         cancel_event.clear()
-        part_path = _localize_data_path(entry.get("part_path") or _part_path(entry["filename"]))
-        final_path = _final_path(entry["filename"])
-        existing_bytes = os.path.getsize(part_path) if part_path and os.path.exists(part_path) else 0
-        headers = {"Range": f"bytes={existing_bytes}-"} if existing_bytes > 0 else {}
+        while True:
+            attempt += 1
+            part_path = _localize_data_path(entry.get("part_path") or _part_path(entry["filename"]))
+            final_path = _final_path(entry["filename"])
+            existing_bytes = os.path.getsize(part_path) if part_path and os.path.exists(part_path) else 0
+            headers = {"Range": f"bytes={existing_bytes}-"} if existing_bytes > 0 else {}
 
-        update_download_progress(
-            download_id,
-            status="downloading",
-            started_at=datetime.now(UTC).timestamp(),
-            part_path=part_path,
-            error="",
-            downloaded_bytes=existing_bytes,
-            finished_at=None,
-        )
-        with _download_lock:
-            _download_metrics[download_id] = {
-                "window_started_at": datetime.now(UTC).timestamp(),
-                "window_bytes": 0.0,
-                "speed_bps": 0.0,
-            }
-
-        with requests.get(url, stream=True, timeout=60, headers=headers) as response:
-            if response.status_code == 416 and existing_bytes > 0:
-                os.replace(part_path, final_path)
-                update_download_progress(
-                    download_id,
-                    status="completed",
-                    downloaded_bytes=existing_bytes,
-                    part_path="",
-                    finished_at=datetime.now(UTC).timestamp(),
-                )
-                return
-
-            response.raise_for_status()
-            remote_name = extract_remote_filename(response.headers, url)
-
-            if response.status_code == 206 and existing_bytes > 0:
-                total_header = response.headers.get("Content-Range", "").split("/")[-1]
-                total = int(total_header) if total_header.isdigit() else 0
-                mode = "ab"
-                downloaded = existing_bytes
-            else:
-                total = int(response.headers.get("Content-Length", 0))
-                mode = "wb"
-                downloaded = 0
-                existing_bytes = 0
-
-            log_block(
-                logger,
-                logging.INFO,
-                f"Download started: {entry['filename']}",
-                [
-                    f"remote={remote_name or '(unknown)'}",
-                    f"resume={'yes' if existing_bytes > 0 else 'no'}",
-                ],
-                event_type="download.started",
-                entity_kind="download",
-                entity_id=download_id,
-                entity_title=entry["filename"],
-                details={"remote": remote_name or "", "resume": bool(existing_bytes > 0)},
-            )
-
-            last_progress_update = datetime.now(UTC).timestamp()
-            last_progress_bytes = downloaded
-            progress_interval = 0.5
-            progress_bytes_threshold = 256 * 1024
-
-            update_download_progress(download_id, total_bytes=total, downloaded_bytes=downloaded)
-            now_ts = datetime.now(UTC).timestamp()
-            with _download_lock:
-                _download_progress[download_id] = {
-                    "downloaded_bytes": downloaded,
-                    "last_checkpoint_at": now_ts,
-                    "last_checkpoint_bytes": downloaded,
-                }
-            with open(part_path, mode) as handle:
-                for chunk in response.iter_content(chunk_size=65536):
-                    if cancel_event.is_set():
-                        update_download_progress(
-                            download_id,
-                            status="paused",
-                            downloaded_bytes=downloaded,
-                            finished_at=None,
-                        )
-                        with _download_lock:
-                            _download_progress.pop(download_id, None)
-                        log_block(
-                            logger,
-                            logging.INFO,
-                            f"Download paused: {entry['filename']}",
-                            [f"downloaded={downloaded} bytes"],
-                            event_type="download.paused",
-                            entity_kind="download",
-                            entity_id=download_id,
-                            entity_title=entry["filename"],
-                            details={"downloaded_bytes": downloaded},
-                        )
-                        return
-                    if not chunk:
-                        continue
-                    handle.write(chunk)
-                    downloaded += len(chunk)
-                    now_ts = datetime.now(UTC).timestamp()
-                    with _download_lock:
-                        metric = _download_metrics.setdefault(
-                            download_id,
-                            {"window_started_at": now_ts, "window_bytes": 0.0, "speed_bps": 0.0},
-                        )
-                        metric["window_bytes"] += float(len(chunk))
-                        elapsed_window = now_ts - float(metric["window_started_at"])
-                        if elapsed_window >= 0.75:
-                            metric["speed_bps"] = metric["window_bytes"] / elapsed_window
-                            metric["window_started_at"] = now_ts
-                            metric["window_bytes"] = 0.0
-                    with _download_lock:
-                        progress_state = _download_progress.setdefault(download_id, {})
-                        progress_state["downloaded_bytes"] = downloaded
-                        if (
-                            downloaded - progress_state.get("last_checkpoint_bytes", 0) >= progress_bytes_threshold
-                            or now_ts - progress_state.get("last_checkpoint_at", 0) >= progress_interval
-                        ):
-                            update_download_progress(download_id, downloaded_bytes=downloaded)
-                            progress_state["last_checkpoint_at"] = now_ts
-                            progress_state["last_checkpoint_bytes"] = downloaded
-            os.replace(part_path, final_path)
+            status_value = "resuming" if attempt > 1 else "downloading"
             update_download_progress(
                 download_id,
-                status="completed",
-                downloaded_bytes=downloaded,
-                part_path="",
-                finished_at=datetime.now(UTC).timestamp(),
+                status=status_value,
+                started_at=datetime.now(UTC).timestamp(),
+                part_path=part_path,
+                error="",
+                downloaded_bytes=existing_bytes,
+                finished_at=None,
             )
             with _download_lock:
+                _download_metrics[download_id] = {
+                    "window_started_at": datetime.now(UTC).timestamp(),
+                    "window_bytes": 0.0,
+                    "speed_bps": 0.0,
+                }
+
+            try:
+                with requests.get(url, stream=True, timeout=60, headers=headers) as response:
+                    if response.status_code == 416 and existing_bytes > 0:
+                        os.replace(part_path, final_path)
+                        update_download_progress(
+                            download_id,
+                            status="completed",
+                            downloaded_bytes=existing_bytes,
+                            part_path="",
+                            finished_at=datetime.now(UTC).timestamp(),
+                        )
+                        return
+
+                    response.raise_for_status()
+                    remote_name = extract_remote_filename(response.headers, url)
+
+                    if response.status_code == 206 and existing_bytes > 0:
+                        total_header = response.headers.get("Content-Range", "").split("/")[-1]
+                        total = int(total_header) if total_header.isdigit() else 0
+                        mode = "ab"
+                        downloaded = existing_bytes
+                    else:
+                        total = int(response.headers.get("Content-Length", 0))
+                        mode = "wb"
+                        downloaded = 0
+                        existing_bytes = 0
+
+                    log_block(
+                        logger,
+                        logging.INFO,
+                        f"Download started: {entry['filename']}",
+                        [
+                            f"remote={remote_name or '(unknown)'}",
+                            f"resume={'yes' if existing_bytes > 0 else 'no'}",
+                        ],
+                        event_type="download.started",
+                        entity_kind="download",
+                        entity_id=download_id,
+                        entity_title=entry["filename"],
+                        details={"remote": remote_name or "", "resume": bool(existing_bytes > 0)},
+                    )
+
+                    progress_interval = 0.5
+                    progress_bytes_threshold = 256 * 1024
+
+                    update_download_progress(download_id, total_bytes=total, downloaded_bytes=downloaded)
+                    now_ts = datetime.now(UTC).timestamp()
+                    with _download_lock:
+                        _download_progress[download_id] = {
+                            "downloaded_bytes": downloaded,
+                            "last_checkpoint_at": now_ts,
+                            "last_checkpoint_bytes": downloaded,
+                        }
+                    with open(part_path, mode) as handle:
+                        for chunk in response.iter_content(chunk_size=65536):
+                            if cancel_event.is_set():
+                                update_download_progress(
+                                    download_id,
+                                    status="paused",
+                                    downloaded_bytes=downloaded,
+                                    finished_at=None,
+                                )
+                                with _download_lock:
+                                    _download_progress.pop(download_id, None)
+                                log_block(
+                                    logger,
+                                    logging.INFO,
+                                    f"Download paused: {entry['filename']}",
+                                    [f"downloaded={downloaded} bytes"],
+                                    event_type="download.paused",
+                                    entity_kind="download",
+                                    entity_id=download_id,
+                                    entity_title=entry["filename"],
+                                    details={"downloaded_bytes": downloaded},
+                                )
+                                return
+                            if not chunk:
+                                continue
+                            handle.write(chunk)
+                            downloaded += len(chunk)
+                            now_ts = datetime.now(UTC).timestamp()
+                            with _download_lock:
+                                metric = _download_metrics.setdefault(
+                                    download_id,
+                                    {"window_started_at": now_ts, "window_bytes": 0.0, "speed_bps": 0.0},
+                                )
+                                metric["window_bytes"] += float(len(chunk))
+                                elapsed_window = now_ts - float(metric["window_started_at"])
+                                if elapsed_window >= 0.75:
+                                    metric["speed_bps"] = metric["window_bytes"] / elapsed_window
+                                    metric["window_started_at"] = now_ts
+                                    metric["window_bytes"] = 0.0
+                            with _download_lock:
+                                progress_state = _download_progress.setdefault(download_id, {})
+                                progress_state["downloaded_bytes"] = downloaded
+                                if (
+                                    downloaded - progress_state.get("last_checkpoint_bytes", 0) >= progress_bytes_threshold
+                                    or now_ts - progress_state.get("last_checkpoint_at", 0) >= progress_interval
+                                ):
+                                    update_download_progress(download_id, downloaded_bytes=downloaded)
+                                    progress_state["last_checkpoint_at"] = now_ts
+                                    progress_state["last_checkpoint_bytes"] = downloaded
+                    os.replace(part_path, final_path)
+                    update_download_progress(
+                        download_id,
+                        status="completed",
+                        downloaded_bytes=downloaded,
+                        part_path="",
+                        finished_at=datetime.now(UTC).timestamp(),
+                    )
+                    with _download_lock:
+                        _download_progress.pop(download_id, None)
+                    log_block(
+                        logger,
+                        logging.INFO,
+                        f"Download completed: {entry['filename']}",
+                        [
+                            f"saved={final_path}",
+                            f"remote={remote_name or '(unknown)'}",
+                        ],
+                        event_type="download.completed",
+                        entity_kind="download",
+                        entity_id=download_id,
+                        entity_title=entry["filename"],
+                        details={"saved": final_path, "remote": remote_name or ""},
+                    )
+                    return
+            except Exception as exc:
+                retryable = _is_retryable_download_error(exc)
+                exhausted = attempt >= max_attempts
+                if retryable and not exhausted:
+                    delay = _retry_delay_for_attempt(attempt)
+                    kind = _retry_error_kind(exc)
+                    error_message = _short_error_message(exc)
+                    log_warning(
+                        logger,
+                        "download.retry.scheduled",
+                        "Download retry scheduled",
+                        lines=[
+                            f"attempt={attempt + 1}/{max_attempts}",
+                            f"delay={delay}s",
+                            f"kind={kind}",
+                            f"error={error_message}",
+                        ],
+                        details={
+                            "filename": entry["filename"],
+                            "download_id": download_id,
+                            "attempt": attempt + 1,
+                            "max_attempts": max_attempts,
+                            "delay_seconds": delay,
+                            "kind": kind,
+                            "error": str(exc),
+                        },
+                        entity_kind="download",
+                        entity_id=download_id,
+                        entity_title=entry["filename"],
+                    )
+                    update_download_progress(
+                        download_id,
+                        status="resuming",
+                        error=f"retrying in {delay}s ({kind})",
+                        finished_at=None,
+                    )
+                    if cancel_event.wait(delay):
+                        return
+                    continue
+
+                update_download_progress(
+                    download_id,
+                    status="failed",
+                    error=str(exc),
+                    finished_at=datetime.now(UTC).timestamp(),
+                )
                 _download_progress.pop(download_id, None)
-            log_block(
-                logger,
-                logging.INFO,
-                f"Download completed: {entry['filename']}",
-                [
-                    f"saved={final_path}",
-                    f"remote={remote_name or '(unknown)'}",
-                ],
-                event_type="download.completed",
-                entity_kind="download",
-                entity_id=download_id,
-                entity_title=entry["filename"],
-                details={"saved": final_path, "remote": remote_name or ""},
-            )
+
+                if retryable and exhausted:
+                    kind = _retry_error_kind(exc)
+                    log_warning(
+                        logger,
+                        "download.retry.exhausted",
+                        "Download failed after retries",
+                        lines=[
+                            f"attempts={attempt}/{max_attempts}",
+                            f"kind={kind}",
+                            f"error={_short_error_message(exc)}",
+                        ],
+                        details={
+                            "filename": entry["filename"],
+                            "download_id": download_id,
+                            "attempts": attempt,
+                            "max_attempts": max_attempts,
+                            "kind": kind,
+                            "error": str(exc),
+                        },
+                        entity_kind="download",
+                        entity_id=download_id,
+                        entity_title=entry["filename"],
+                    )
+                else:
+                    log_exception(
+                        logger,
+                        "download.failed",
+                        "Download failed",
+                        details={"filename": entry["filename"], "download_id": download_id, "error": str(exc)},
+                        entity_kind="download",
+                        entity_id=download_id,
+                        entity_title=entry["filename"],
+                    )
+                return
     except Exception as exc:
         update_download_progress(
             download_id,

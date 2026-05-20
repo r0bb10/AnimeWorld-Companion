@@ -51,6 +51,10 @@ _state = {
 _NETWORK_WORKERS = 6
 
 
+class _Soft404MappingError(RuntimeError):
+    """Raised when a mapped AnimeWorld slug resolves to a not-found page."""
+
+
 def sanitizer_status() -> dict:
     with _state_lock:
         return dict(_state)
@@ -61,9 +65,11 @@ def _set_state(**updates) -> None:
         _state.update(updates)
 
 
-def _verify_slug(client: AnimeWorldClient, slug: str) -> tuple[str, int]:
-    final_slug, status_code = client.verify_slug(slug)
-    return final_slug or slug, status_code
+def _verify_slug(client: AnimeWorldClient, slug: str) -> dict:
+    details = client.verify_slug_details(slug)
+    details["final_slug"] = str(details.get("final_slug") or slug)
+    details["status_code"] = int(details.get("status_code") or 0)
+    return details
 
 
 def _is_transient_aw_error(exc: Exception) -> bool:
@@ -284,7 +290,7 @@ def _refresh_movie_mapping_metadata(movie: dict, row: dict, slug_metadata: dict,
     return changed
 
 
-def _fetch_slug_verification(slug: str) -> tuple[str, int]:
+def _fetch_slug_verification(slug: str) -> dict:
     client = AnimeWorldClient()
     return _verify_slug(client, slug)
 
@@ -397,7 +403,7 @@ def sanitize_links_once() -> dict:
     show_details = {show_id: get_show_detail(show_id) for show_id in sorted(show_ids)}
     movie_details = {movie_id: get_movie_detail(movie_id) for movie_id in sorted(movie_ids)}
 
-    slug_results: dict[str, tuple[str, int] | Exception] = {}
+    slug_results: dict[str, dict | Exception] = {}
     all_slugs = sorted({str(row.get("aw_link") or "").strip() for row in show_rows + movie_rows if str(row.get("aw_link") or "").strip()})
     if all_slugs:
         with ThreadPoolExecutor(max_workers=min(_NETWORK_WORKERS, len(all_slugs))) as executor:
@@ -412,16 +418,16 @@ def sanitize_links_once() -> dict:
     metadata_needed_slugs: set[str] = set()
     for row in show_rows:
         verification = slug_results.get(str(row.get("aw_link") or "").strip())
-        if not isinstance(verification, tuple):
+        if not isinstance(verification, dict):
             continue
-        final_slug = str(verification[0] or "").strip()
+        final_slug = str(verification.get("final_slug") or "").strip()
         if final_slug and (final_slug != str(row.get("aw_link") or "").strip() or _row_is_preaired(row)):
             metadata_needed_slugs.add(final_slug)
     for row in movie_rows:
         verification = slug_results.get(str(row.get("aw_link") or "").strip())
-        if not isinstance(verification, tuple):
+        if not isinstance(verification, dict):
             continue
-        final_slug = str(verification[0] or "").strip()
+        final_slug = str(verification.get("final_slug") or "").strip()
         if final_slug and final_slug != str(row.get("aw_link") or "").strip():
             metadata_needed_slugs.add(final_slug)
 
@@ -439,13 +445,16 @@ def sanitize_links_once() -> dict:
 
     for row in show_rows:
         result["checked"] += 1
-        verification = slug_results.get(row["aw_link"])
+        aw_link = str(row.get("aw_link") or "").strip()
+        verification = slug_results.get(aw_link)
         try:
             if isinstance(verification, Exception):
                 raise verification
-            if not verification:
-                raise RuntimeError(f"Missing sanitizer verification result for {row['aw_link']}")
-            new_slug, _ = verification
+            if not isinstance(verification, dict):
+                raise RuntimeError(f"Missing sanitizer verification result for {aw_link}")
+            if bool(verification.get("is_soft_404")):
+                raise _Soft404MappingError(aw_link)
+            new_slug = str(verification.get("final_slug") or aw_link).strip()
             needs_refresh = new_slug != str(row.get("aw_link") or "").strip() or _row_is_preaired(row)
             if needs_refresh:
                 metadata = slug_metadata.get(new_slug)
@@ -462,6 +471,7 @@ def sanitize_links_once() -> dict:
             else:
                 _touch_show_mapping(int(row["id"]), now)
         except Exception as exc:
+            soft404 = isinstance(exc, _Soft404MappingError)
             if _is_transient_aw_error(exc):
                 result["skipped"] += 1
                 log_warning(
@@ -474,6 +484,7 @@ def sanitize_links_once() -> dict:
                 )
                 continue
             failures = int(row["link_check_failures"] or 0) + 1
+            reason_suffix = " [not-found page]" if soft404 else ""
             if failures >= 2:
                 with get_db(write=True) as conn:
                     conn.execute("DELETE FROM aw_show_mappings WHERE id = ?", (row["id"],))
@@ -483,7 +494,7 @@ def sanitize_links_once() -> dict:
                     logger,
                     "sanitizer.show.removed",
                     "Removed dead show mapping",
-                    lines=[display_aw_link(row["aw_link"])],
+                    lines=[f"{display_aw_link(row['aw_link'])}{reason_suffix}"],
                     entity_kind="show",
                     entity_id=row.get("show_id"),
                 )
@@ -498,7 +509,7 @@ def sanitize_links_once() -> dict:
                     logger,
                     "sanitizer.show.failed",
                     "Show mapping verification failed",
-                    lines=[f"{display_aw_link(row['aw_link'])} ({failures}/2)"],
+                    lines=[f"{display_aw_link(row['aw_link'])} ({failures}/2){reason_suffix}"],
                     entity_kind="show",
                     entity_id=row.get("show_id"),
                 )
@@ -506,13 +517,16 @@ def sanitize_links_once() -> dict:
 
     for row in movie_rows:
         result["checked"] += 1
-        verification = slug_results.get(row["aw_link"])
+        aw_link = str(row.get("aw_link") or "").strip()
+        verification = slug_results.get(aw_link)
         try:
             if isinstance(verification, Exception):
                 raise verification
-            if not verification:
-                raise RuntimeError(f"Missing sanitizer verification result for {row['aw_link']}")
-            new_slug, _ = verification
+            if not isinstance(verification, dict):
+                raise RuntimeError(f"Missing sanitizer verification result for {aw_link}")
+            if bool(verification.get("is_soft_404")):
+                raise _Soft404MappingError(aw_link)
+            new_slug = str(verification.get("final_slug") or aw_link).strip()
             needs_refresh = new_slug != str(row.get("aw_link") or "").strip()
             if needs_refresh:
                 metadata = slug_metadata.get(new_slug)
@@ -528,6 +542,7 @@ def sanitize_links_once() -> dict:
             else:
                 _touch_movie_mapping(int(row["id"]), now)
         except Exception as exc:
+            soft404 = isinstance(exc, _Soft404MappingError)
             if _is_transient_aw_error(exc):
                 result["skipped"] += 1
                 log_warning(
@@ -540,6 +555,7 @@ def sanitize_links_once() -> dict:
                 )
                 continue
             failures = int(row["link_check_failures"] or 0) + 1
+            reason_suffix = " [not-found page]" if soft404 else ""
             if failures >= 2:
                 with get_db(write=True) as conn:
                     conn.execute("DELETE FROM aw_movie_mappings WHERE id = ?", (row["id"],))
@@ -549,7 +565,7 @@ def sanitize_links_once() -> dict:
                     logger,
                     "sanitizer.movie.removed",
                     "Removed dead movie mapping",
-                    lines=[display_aw_link(row["aw_link"])],
+                    lines=[f"{display_aw_link(row['aw_link'])}{reason_suffix}"],
                     entity_kind="movie",
                     entity_id=row.get("movie_id"),
                 )
@@ -564,7 +580,7 @@ def sanitize_links_once() -> dict:
                     logger,
                     "sanitizer.movie.failed",
                     "Movie mapping verification failed",
-                    lines=[f"{display_aw_link(row['aw_link'])} ({failures}/2)"],
+                    lines=[f"{display_aw_link(row['aw_link'])} ({failures}/2){reason_suffix}"],
                     entity_kind="movie",
                     entity_id=row.get("movie_id"),
                 )

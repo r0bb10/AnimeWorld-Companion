@@ -26,11 +26,13 @@ _META_CACHE_TTL = 300
 _META_CACHE: dict[str, tuple[dict, list[dict], str, bool, float]] = {}
 _META_CACHE_LOCK = threading.Lock()
 _VERIFY_CACHE_TTL = 300
-_VERIFY_CACHE: dict[str, tuple[str, int, float]] = {}
+_VERIFY_CACHE: dict[str, tuple[dict[str, object], float]] = {}
 _VERIFY_CACHE_LOCK = threading.Lock()
 _SESSION_LOCK = threading.Lock()
 _SESSION: requests.Session | None = None
 _POOL_MAXSIZE = 64
+_SOFT_404_TITLE_MARKERS = ("pagina non trovata", "page not found")
+_SOFT_404_META_MARKERS = ("questa pagina non esiste", "this page does not exist")
 
 
 @dataclass(frozen=True)
@@ -295,19 +297,73 @@ class AnimeWorldClient:
             _META_CACHE[target] = (dict(info), [dict(item) for item in episodes], final_url, is_placeholder, now)
         return dict(info), [dict(item) for item in episodes], final_url, is_placeholder
 
-    def verify_slug(self, slug_or_url: str) -> tuple[str, int]:
+    def _verify_page_details(self, html: str, final_url: str, final_slug: str, status_code: int) -> dict[str, object]:
+        text = html or ""
+        title_match = re.search(r"<title[^>]*>(.*?)</title>", text, flags=re.IGNORECASE | re.DOTALL)
+        title = " ".join((title_match.group(1) if title_match else "").split()).strip()
+        meta_match = re.search(
+            r"""<meta[^>]+name=["']description["'][^>]+content=["'](.*?)["']""",
+            text,
+            flags=re.IGNORECASE | re.DOTALL,
+        )
+        meta_description = " ".join((meta_match.group(1) if meta_match else "").split()).strip()
+
+        has_episode_ids = bool(re.search(r"""data-episode-id=["']?\d+""", text, flags=re.IGNORECASE))
+        has_info_block = bool(
+            re.search(r"""class=["'][^"']*\binfo\b[^"']*["']""", text, flags=re.IGNORECASE)
+        )
+
+        title_lower = title.casefold()
+        meta_lower = meta_description.casefold()
+        has_not_found_marker = any(marker in title_lower for marker in _SOFT_404_TITLE_MARKERS) or any(
+            marker in meta_lower for marker in _SOFT_404_META_MARKERS
+        )
+        is_soft_404 = bool(status_code == 200 and has_not_found_marker and (not has_episode_ids or not has_info_block))
+
+        final_url_normalized = final_url.rstrip("/")
+        final_url_lower = final_url_normalized.casefold()
+        body_lower = text.casefold()
+        is_placeholder = final_url_lower.endswith("/tba") or (
+            not has_episode_ids and ("tba" in final_url_lower or "coming soon" in body_lower)
+        )
+
+        redirected_to_episode = bool(
+            re.search(rf"""/play/{re.escape(final_slug)}/[^/?#]+/?$""", final_url_normalized)
+            and not final_url_lower.endswith("/tba")
+        )
+
+        return {
+            "final_slug": final_slug,
+            "status_code": int(status_code),
+            "is_soft_404": is_soft_404,
+            "is_placeholder": is_placeholder,
+            "has_episode_ids": has_episode_ids,
+            "has_info_block": has_info_block,
+            "title": title,
+            "meta_description": meta_description,
+            "redirected_to_episode": redirected_to_episode,
+        }
+
+    def verify_slug_details(self, slug_or_url: str) -> dict[str, object]:
         target = slug_or_url if slug_or_url.startswith("http") else self.slug_to_url(slug_or_url)
         now = time.monotonic()
         with _VERIFY_CACHE_LOCK:
             cached = _VERIFY_CACHE.get(target)
-            if cached and now - cached[2] < _VERIFY_CACHE_TTL:
-                return cached[0], cached[1]
+            if cached and now - cached[1] < _VERIFY_CACHE_TTL:
+                return dict(cached[0])
+
         response = self._session().get(target, timeout=15, allow_redirects=True)
         response.raise_for_status()
-        final_slug = self.url_to_slug(str(response.url or target)) or self.url_to_slug(target)
+        final_url = str(response.url or target)
+        final_slug = self.url_to_slug(final_url) or self.url_to_slug(target)
+        details = self._verify_page_details(response.text, final_url, final_slug, int(response.status_code))
         with _VERIFY_CACHE_LOCK:
-            _VERIFY_CACHE[target] = (final_slug, int(response.status_code), now)
-        return final_slug, int(response.status_code)
+            _VERIFY_CACHE[target] = (dict(details), now)
+        return dict(details)
+
+    def verify_slug(self, slug_or_url: str) -> tuple[str, int]:
+        details = self.verify_slug_details(slug_or_url)
+        return str(details.get("final_slug") or ""), int(details.get("status_code") or 0)
 
     def get_file_info(self, episode_id: str) -> list[dict]:
         if not episode_id:

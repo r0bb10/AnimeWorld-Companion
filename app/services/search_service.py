@@ -113,7 +113,7 @@ def _series_items(show: dict, season_number: int, episode_number: int) -> list[d
         if not matched_episode:
             continue
 
-        file_infos = _get_file_info_cached(client, matched_episode.get("episode_id", ""))
+        file_infos = _get_file_info_cached(client, matched_episode.get("data_id", ""))
         for file_info in file_infos:
             title = build_release_name(
                 NamingContext(
@@ -236,7 +236,7 @@ def build_movie_search_items(query: str, tmdb_id: int | None = None, imdb_id: st
         return []
 
     episode = episodes[0]
-    file_infos = _get_file_info_cached(client, episode.get("episode_id", ""))
+    file_infos = _get_file_info_cached(client, episode.get("data_id", ""))
     results = []
     for file_info in file_infos:
         title = build_release_name(

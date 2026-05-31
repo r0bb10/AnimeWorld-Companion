@@ -130,7 +130,8 @@ class AnimeWorldClient:
                 {
                     "number": number,
                     "number_raw": raw_number,
-                    "episode_id": anchor.get("data-episode-id") or anchor.get("data-id") or "",
+                    "episode_id": anchor.get("data-episode-id") or "",
+                    "data_id": anchor.get("data-id") or "",
                     "href": anchor.get("href", ""),
                 }
             )
@@ -369,21 +370,24 @@ class AnimeWorldClient:
         if not episode_id:
             return []
         try:
-            response = self._post(f"/api/download/{episode_id}")
+            response = self._session().get(
+                f"{self.base_url}/api/episode/info",
+                params={"id": episode_id, "alt": 0},
+                timeout=15,
+            )
+            if response.status_code in {401, 403}:
+                session = _reset_shared_session(self.base_url)
+                response = session.get(
+                    f"{self.base_url}/api/episode/info",
+                    params={"id": episode_id, "alt": 0},
+                    timeout=15,
+                )
             response.raise_for_status()
             data = response.json()
         except Exception:
             return []
 
-        links = data.get("links", {}) if isinstance(data, dict) else {}
-        server9 = links.get("9", {}) if isinstance(links, dict) else {}
-        episode_data = {}
-        for value in server9.values():
-            if isinstance(value, dict) and ("alternativeLink" in value or "link" in value):
-                episode_data = value
-                break
-
-        cdn_url = episode_data.get("alternativeLink") or episode_data.get("link") or ""
+        cdn_url = data.get("grabber", "") if isinstance(data, dict) else ""
         if "download-file.php?id=" in cdn_url:
             cdn_url = cdn_url.replace("download-file.php?id=", "")
         if not cdn_url:

@@ -14,6 +14,7 @@ from ..repositories.shows import get_show_detail
 from .automap_service import automap_movie, automap_show
 
 logger = get_logger("eligible_service")
+_DATELESS_SHOW_LIMIT = 10
 
 
 def _lookback_sql() -> str:
@@ -42,6 +43,33 @@ def list_eligible_show_targets() -> list[dict]:
             ORDER BY date(ss.air_date_start), lower(s.title), ss.season_number
             """,
             (_lookback_sql(),),
+        ).fetchall()
+    return [dict(row) for row in rows]
+
+
+def list_eligible_dateless_show_targets(limit: int = _DATELESS_SHOW_LIMIT) -> list[dict]:
+    with get_db() as conn:
+        rows = conn.execute(
+            """
+            SELECT
+                s.id AS show_id,
+                s.title,
+                ss.season_number,
+                ss.air_date_start
+            FROM shows s
+            JOIN show_seasons ss ON ss.show_id = s.id
+            LEFT JOIN aw_show_mappings asm
+                ON asm.show_id = ss.show_id
+               AND asm.season_number = ss.season_number
+            WHERE ss.season_number > 0
+              AND COALESCE(ss.ignored, 0) = 0
+              AND asm.id IS NULL
+              AND COALESCE(ss.air_date_start, '') = ''
+              AND lower(COALESCE(s.status, '')) IN ('upcoming', 'continuing')
+            ORDER BY lower(s.title), ss.season_number
+            LIMIT ?
+            """,
+            (max(0, int(limit)),),
         ).fetchall()
     return [dict(row) for row in rows]
 
@@ -102,7 +130,9 @@ def _log_movie_mapping(movie_id: int) -> None:
 
 
 def run_eligible_once() -> dict:
-    show_targets = list_eligible_show_targets()
+    dated_show_targets = list_eligible_show_targets()
+    dateless_show_targets = list_eligible_dateless_show_targets()
+    show_targets = dated_show_targets + dateless_show_targets
     movie_targets = list_eligible_movie_targets()
     checked = 0
     mapped_show_seasons = 0
@@ -112,8 +142,18 @@ def run_eligible_once() -> dict:
         logger,
         "eligible.started",
         "Eligible cycle started",
-        lines=[f"shows={len(show_targets)}", f"movies={len(movie_targets)}"],
-        details={"show_targets": len(show_targets), "movie_targets": len(movie_targets)},
+        lines=[
+            f"shows={len(show_targets)}",
+            f"dated_shows={len(dated_show_targets)}",
+            f"dateless_shows={len(dateless_show_targets)}",
+            f"movies={len(movie_targets)}",
+        ],
+        details={
+            "show_targets": len(show_targets),
+            "dated_show_targets": len(dated_show_targets),
+            "dateless_show_targets": len(dateless_show_targets),
+            "movie_targets": len(movie_targets),
+        },
     )
 
     for target in show_targets:
@@ -139,6 +179,8 @@ def run_eligible_once() -> dict:
     result = {
         "checked": checked,
         "show_targets": len(show_targets),
+        "dated_show_targets": len(dated_show_targets),
+        "dateless_show_targets": len(dateless_show_targets),
         "movie_targets": len(movie_targets),
         "mapped_show_seasons": mapped_show_seasons,
         "mapped_movies": mapped_movies,
@@ -153,6 +195,12 @@ def run_eligible_once() -> dict:
             f"mapped_show_seasons={mapped_show_seasons}",
             f"mapped_movies={mapped_movies}",
         ],
-        details={"checked": checked, "mapped_show_seasons": mapped_show_seasons, "mapped_movies": mapped_movies},
+        details={
+            "checked": checked,
+            "dated_show_targets": len(dated_show_targets),
+            "dateless_show_targets": len(dateless_show_targets),
+            "mapped_show_seasons": mapped_show_seasons,
+            "mapped_movies": mapped_movies,
+        },
     )
     return result

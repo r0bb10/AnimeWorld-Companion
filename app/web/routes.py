@@ -610,13 +610,15 @@ def api_unmap_movie(movie_id: int, _: str = Depends(require_api_key)) -> dict:
 
 @api_router.get("/api/status", tags=["System"], summary="Runtime status", description="Return high-level runtime, sync, automap, and sanitizer status.")
 def api_status(_: str = Depends(require_api_key)) -> dict:
+    sanitizer = sanitizer_status()
     return {
         "sonarr_configured": bool(settings.sonarr_url and settings.sonarr_api_key),
         "radarr_configured": bool(settings.radarr_url and settings.radarr_api_key),
         "sync": sync_status(),
         "runtime": runtime_state(),
         "automap": automap_status(),
-        "links": sanitizer_status(),
+        "sanitizer": sanitizer,
+        "links": sanitizer,
     }
 
 

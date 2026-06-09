@@ -25,7 +25,7 @@ _state_lock = threading.Lock()
 _state = {
     "sync": {"running": False, "last_run_at": None, "last_error": ""},
     "rss": {"enabled": False, "running": False, "last_run_at": None, "last_error": "", "last_cached": 0},
-    "links": {"enabled": False, "running": False, "last_run_at": None, "last_error": "", "last_result": None},
+    "sanitizer": {"enabled": False, "running": False, "last_run_at": None, "last_error": "", "last_result": None},
     "eligible": {"enabled": False, "running": False, "last_run_at": None, "last_error": "", "last_result": None},
     "scanner": {"enabled": True, "running": False, "last_run_at": None, "last_error": "", "last_result": None},
     "startup": {"restored": 0, "fixed": 0},
@@ -170,22 +170,22 @@ def _run_sync_loop() -> None:
             break
 
 
-def _run_link_loop() -> None:
+def _run_sanitizer_loop() -> None:
     first_run = 60 * 10
     interval = 60 * 60 * 24
     _run_scheduled_worker(
-        section="links",
+        section="sanitizer",
         enabled=settings.sanitizer_enabled,
         first_run=first_run,
         interval=interval,
-        scheduled_event_type="runtime.links.scheduled",
+        scheduled_event_type="runtime.sanitizer.scheduled",
         scheduled_message="Sanitizer loop scheduled",
         scheduled_lines=[f"first_run={_minutes_label(first_run)}", f"interval={_minutes_label(interval)}"],
         scheduled_details={"first_run_seconds": first_run, "interval_seconds": interval},
         run_once=sanitize_links_once,
-        failure_event_type="runtime.links.failed",
+        failure_event_type="runtime.sanitizer.failed",
         failure_message="Link sanitizer failed",
-        disabled_event_type="runtime.links.disabled",
+        disabled_event_type="runtime.sanitizer.disabled",
         disabled_message="Sanitizer loop disabled by env",
         result_updates=lambda result: {"last_result": result},
         error_updates=lambda: {"last_result": sanitizer_status().get("last_result")},
@@ -256,7 +256,7 @@ def start_background_workers() -> dict:
     _stop_event.clear()
     startup = restore_on_startup()
     _set_state("startup", **startup)
-    _set_state("links", enabled=settings.sanitizer_enabled, running=False, last_error="")
+    _set_state("sanitizer", enabled=settings.sanitizer_enabled, running=False, last_error="")
     _set_state("eligible", enabled=settings.eligible_enabled, running=False, last_error="")
     _set_state("scanner", enabled=True, running=False, last_error="")
 
@@ -265,7 +265,7 @@ def start_background_workers() -> dict:
         "scanner": _run_scanner_loop,
     }
     if settings.sanitizer_enabled:
-        workers["links"] = _run_link_loop
+        workers["sanitizer"] = _run_sanitizer_loop
     if settings.eligible_enabled:
         workers["eligible"] = _run_eligible_loop
     if settings.rss_enabled:

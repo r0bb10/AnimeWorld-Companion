@@ -26,7 +26,9 @@ from ..services.catalog_service import (
 )
 from ..services.background_service import runtime_state
 from ..services.automap_service import (
+    automap_movie_preview,
     automap_movie,
+    automap_show_preview,
     automap_show,
     automap_status,
     start_automap_all,
@@ -48,7 +50,7 @@ from ..services.download_service import (
     resolve_legacy_download_request,
     resume_download,
 )
-from ..services.discovery_service import discover_movie, discover_show, search_animeworld
+from ..services.discovery_service import search_animeworld
 from ..services.events_service import (
     publish_library_card_changed,
     publish_library_card_removed,
@@ -550,18 +552,28 @@ def api_automap(
     kind: str | None = Query(default=None),
     item_id: int | None = Query(default=None),
     season_number: int | None = Query(default=None),
+    mode: str = Query(default="write"),
     force: bool = False,
     _: str = Depends(require_api_key),
 ) -> dict:
     normalized_kind = (kind or "").strip().lower()
+    normalized_mode = (mode or "write").strip().lower()
+    if normalized_mode not in {"read", "write"}:
+        raise HTTPException(status_code=422, detail="Use /automap with mode=read|write")
     if not normalized_kind and item_id is None and season_number is None:
+        if normalized_mode != "write":
+            raise HTTPException(status_code=422, detail="Library automap supports only mode=write")
         return start_automap_all(force=force)
     if normalized_kind not in {"show", "movie"} or item_id is None:
         raise HTTPException(status_code=422, detail="Use /automap with kind=show|movie and item_id=...")
     if normalized_kind == "movie":
         if season_number is not None:
             raise HTTPException(status_code=422, detail="Movies do not support season_number")
+        if normalized_mode == "read":
+            return automap_movie_preview(item_id)
         return automap_movie(item_id, force=force)
+    if normalized_mode == "read":
+        return automap_show_preview(item_id, season_number=season_number)
     return automap_show(item_id, season_number=season_number, force=force)
 
 
@@ -683,22 +695,6 @@ def api_movie_detail(movie_id: int, _: str = Depends(require_api_key)) -> dict:
 @api_router.get("/api/search/aw", tags=["Discovery"], summary="Search AnimeWorld", description="Run a raw AnimeWorld search and return merged API + scrape candidate links.")
 def api_search_aw(q: str, limit: int = 10, _: str = Depends(require_api_key)) -> dict:
     return search_animeworld(q, limit=limit)
-
-
-@api_router.get("/api/discover/{show_id}", tags=["Discovery"], summary="Discover show candidates", description="Discover raw AnimeWorld candidates and metadata for one synced show.")
-def api_discover_show(show_id: int, limit: int = 10, _: str = Depends(require_api_key)) -> dict:
-    result = discover_show(show_id, limit=limit)
-    if not result:
-        raise HTTPException(status_code=404, detail="Show not found")
-    return result
-
-
-@api_router.get("/api/discover/movie/{movie_id}", tags=["Discovery"], summary="Discover movie candidates", description="Discover raw AnimeWorld candidates and metadata for one synced movie.")
-def api_discover_movie(movie_id: int, limit: int = 10, _: str = Depends(require_api_key)) -> dict:
-    result = discover_movie(movie_id, limit=limit)
-    if not result:
-        raise HTTPException(status_code=404, detail="Movie not found")
-    return result
 
 
 @api_router.get("/api/rss/cache", tags=["System"], summary="RSS cache snapshot", description="Inspect the current cached RSS items that AWC may republish to Arr clients.")

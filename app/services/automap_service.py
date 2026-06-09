@@ -542,6 +542,32 @@ def automap_movie(movie_id: int, force: bool = False, *, emit_logs: bool = True)
     return {"status": "success", "movie_id": movie_id, "mapping": mapping, "candidates": candidates[:5]}
 
 
+def automap_movie_preview(movie_id: int) -> dict:
+    movie = get_movie_detail(movie_id)
+    if not movie:
+        return {"status": "error", "message": "movie_not_found", "movie_id": movie_id}
+
+    want_dubbed = resolve_movie_language_preference(movie)
+    candidates = []
+    for candidate in _filter_language_candidates(
+        _discovery_candidates(
+            movie["title"],
+            [item.get("title", "") for item in movie.get("alternate_titles", [])],
+        ),
+        want_dubbed,
+    ):
+        score, factors = calculate_movie_confidence(movie, candidate, want_dubbed=want_dubbed)
+        candidates.append({**candidate, "confidence_score": score, "confidence_factors": factors})
+    candidates.sort(key=lambda item: item["confidence_score"], reverse=True)
+    return {
+        "status": "preview",
+        "movie_id": movie_id,
+        "threshold": settings.automap_movie_confidence_threshold,
+        "mapping": candidates[0] if candidates else None,
+        "candidates": candidates[:10],
+    }
+
+
 def automap_show(show_id: int, season_number: int | None = None, force: bool = False, *, emit_logs: bool = True) -> dict:
     if _automap_stop_requested():
         return {
@@ -790,6 +816,60 @@ def automap_show(show_id: int, season_number: int | None = None, force: bool = F
         "ambiguous": ambiguous,
         "candidates": scored_candidates[:10],
         "skipped_unaired": sorted(skipped_unaired),
+        "ignored_seasons": sorted(ignored_seasons),
+    }
+
+
+def automap_show_preview(show_id: int, season_number: int | None = None) -> dict:
+    show = get_show_detail(show_id)
+    if not show:
+        return {
+            "status": "error",
+            "message": "show_not_found",
+            "show_id": show_id,
+            "candidates": [],
+            "ignored_seasons": [],
+        }
+
+    want_dubbed = resolve_show_language_preference(show)
+    scored_candidates: list[dict] = []
+    ignored_seasons: list[int] = []
+
+    target_seasons = []
+    for season in show.get("seasons", []):
+        season_number_value = int(season.get("season_number", 0) or 0)
+        if season_number_value <= 0:
+            continue
+        if season_number is not None and season_number_value != season_number:
+            continue
+        if bool(season.get("ignored")):
+            ignored_seasons.append(season_number_value)
+            continue
+        target_seasons.append({**season, "has_aired": has_started(season.get("air_date_start"))})
+
+    if not target_seasons:
+        return {
+            "status": "preview",
+            "show_id": show_id,
+            "candidates": [],
+            "ignored_seasons": sorted(ignored_seasons),
+        }
+
+    candidates = _discovery_candidates(show["title"], _show_alternate_titles(show))
+    reserved_links = _existing_links_by_show(show)
+
+    for season in target_seasons:
+        sn = season["season_number"]
+        season_scores = _build_scored_candidates(show, season, candidates, want_dubbed, reserved_links)
+        if season_scores:
+            scored_candidates.extend(
+                [{**candidate, "season_number": sn} for candidate in season_scores[:3]]
+            )
+
+    return {
+        "status": "preview",
+        "show_id": show_id,
+        "candidates": scored_candidates[:15],
         "ignored_seasons": sorted(ignored_seasons),
     }
 

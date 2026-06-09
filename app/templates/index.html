@@ -633,7 +633,8 @@ function _panelId(kind,id){
 }
 
 function _discoverEndpoint(kind,id){
-  return kind==='show' ? '/api/discover/'+id+_kp() : '/api/discover/movie/'+id+_kp();
+  const prefix = AWC_KEY ? '/api/automap?apikey='+encodeURIComponent(AWC_KEY) : '/api/automap?';
+  return prefix+'&mode=read&kind='+encodeURIComponent(kind)+'&item_id='+encodeURIComponent(id);
 }
 
 function _automapEndpoint(kind,id){
@@ -716,12 +717,18 @@ async function discoverItem(kind,id,btn){
   _panelSet(panel,_statusLine('Searching AnimeWorld...','discover'));
   btn.disabled=true;
   try{
-    const data=await _fetchJson(_discoverEndpoint(kind,id));
-    const links=(data.links||data.results||[]).map(l=>({link:l.link||l.url||_slugToUrl(l.aw_link||l.slug||''),eps:l.eps||l.aw_episode_count||0}));
+    const data=await _fetchJson(_discoverEndpoint(kind,id),{method:'POST',headers:_kh()});
+    const links=(data.candidates||[]).map(l=>({
+      link:l.url||_slugToUrl(l.aw_link||l.slug||''),
+      eps:l.aw_episode_count||l.eps||0,
+      score:l.confidence_score
+    }));
     if(!links||links.length===0){_panelSet(panel,_mutedHtml('No results found'));return;}
     let html='';
     for(const l of links){
-      html+=_discoverRow(l.link,l.eps+' eps',l.link);
+      let meta=l.eps+' eps';
+      if(typeof l.score==='number'){meta+=' | confidence: '+(l.score*100).toFixed(1)+'%';}
+      html+=_discoverRow(l.link,meta,l.link);
     }
     _panelSet(panel,html);
   }catch(e){

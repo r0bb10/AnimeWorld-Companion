@@ -371,6 +371,41 @@ def _select_show_winner(season: dict, season_scores: list[dict], alt_titles: lis
     return _tiebreak_candidates(season, tied, alt_titles=alt_titles)
 
 
+def _preaired_type_for_candidate(candidate: dict) -> str:
+    try:
+        score = float(candidate.get("confidence_score") or 0.0)
+    except (TypeError, ValueError):
+        score = 0.0
+    if score < settings.automap_confidence_threshold:
+        return ""
+    if candidate.get("aw_is_placeholder"):
+        return "placeholder"
+    if not str(candidate.get("aw_link") or "").strip():
+        return ""
+    if not str(candidate.get("aw_title") or "").strip():
+        return ""
+    try:
+        episode_count = int(candidate.get("aw_episode_count") or 0)
+    except (TypeError, ValueError):
+        episode_count = 0
+    if episode_count <= 0:
+        return ""
+    if not candidate.get("aw_release_datetime"):
+        return ""
+    if not str(candidate.get("aw_status") or "").strip():
+        return ""
+    return "prereleased"
+
+
+def _preaired_factors(candidate: dict, preaired_type: str) -> dict:
+    factors = dict(candidate.get("confidence_factors") or {})
+    factors["preaired"] = True
+    factors["preaired_type"] = preaired_type
+    factors["preaired_placeholder"] = preaired_type == "placeholder"
+    factors["preaired_prereleased"] = preaired_type == "prereleased"
+    return factors
+
+
 def _propagate_single_link(
     *,
     show_id: int,
@@ -616,11 +651,13 @@ def automap_show(show_id: int, season_number: int | None = None, force: bool = F
 
         if not season_has_aired:
             preaired = [
-                candidate for candidate in season_scores
-                if candidate.get("aw_is_placeholder") and candidate["confidence_score"] >= settings.automap_confidence_threshold
+                {**candidate, "preaired_type": preaired_type}
+                for candidate in season_scores
+                if (preaired_type := _preaired_type_for_candidate(candidate))
             ]
             if preaired:
                 best_preaired = preaired[0]
+                preaired_type = str(best_preaired["preaired_type"])
                 replace_show_mappings_auto(
                     show_id=show_id,
                     season_number=sn,
@@ -634,7 +671,7 @@ def automap_show(show_id: int, season_number: int | None = None, force: bool = F
                             "aw_status": best_preaired.get("aw_status", ""),
                             "aw_category": best_preaired.get("aw_category", ""),
                             "confidence_score": best_preaired["confidence_score"],
-                            "confidence_factors": json.dumps({**best_preaired["confidence_factors"], "preaired": True}),
+                            "confidence_factors": json.dumps(_preaired_factors(best_preaired, preaired_type)),
                             "linked_with_season": None,
                         }
                     ],
@@ -644,8 +681,8 @@ def automap_show(show_id: int, season_number: int | None = None, force: bool = F
                 reserved_links.add(best_preaired["aw_link"])
                 continue
             # Unaired seasons should never degrade into ambiguous "needs review".
-            # We either promote a verified placeholder match, or we skip them silently
-            # until AnimeWorld exposes a real placeholder/released page worth mapping.
+            # We either map a safe preair candidate, or skip silently until a
+            # placeholder/prereleased page with enough metadata appears.
             skipped_unaired.append(sn)
             continue
 

@@ -20,7 +20,7 @@ from ..core.log_events import (
     log_warning,
 )
 from ..core.logging import get_logger
-from ..domain.mapping_flags import factors_are_preaired, mapping_is_preaired
+from ..domain.mapping_flags import factors_are_preaired, mapping_is_preaired, mapping_is_preaired_placeholder
 from ..domain.release_window import has_started
 from ..integrations.animeworld_client import AnimeWorldClient
 from ..repositories.db import get_db
@@ -130,6 +130,10 @@ def _row_is_preaired(row: dict) -> bool:
     return mapping_is_preaired(row)
 
 
+def _row_is_preaired_placeholder(row: dict) -> bool:
+    return mapping_is_preaired_placeholder(row)
+
+
 def _touch_show_mapping(row_id: int, now: str) -> None:
     with get_db(write=True) as conn:
         conn.execute(
@@ -174,6 +178,11 @@ def _refresh_show_mapping_metadata(show: dict, season: dict, row: dict, slug_met
     score, factors = calculate_show_confidence(show, season_payload, candidate, want_dubbed=want_dubbed)
     if bool(factors.get("preaired_placeholder")):
         factors["preaired"] = True
+        factors["preaired_type"] = "placeholder"
+    elif _row_is_preaired(row) and not _has_aired(season) and not candidate.get("aw_is_placeholder"):
+        factors["preaired"] = True
+        factors["preaired_type"] = "prereleased"
+        factors["preaired_prereleased"] = True
 
     with get_db(write=True) as conn:
         conn.execute(
@@ -421,7 +430,7 @@ def sanitize_links_once() -> dict:
         if not isinstance(verification, dict):
             continue
         final_slug = str(verification.get("final_slug") or "").strip()
-        if final_slug and (final_slug != str(row.get("aw_link") or "").strip() or _row_is_preaired(row)):
+        if final_slug and (final_slug != str(row.get("aw_link") or "").strip() or _row_is_preaired_placeholder(row)):
             metadata_needed_slugs.add(final_slug)
     for row in movie_rows:
         verification = slug_results.get(str(row.get("aw_link") or "").strip())
@@ -455,7 +464,7 @@ def sanitize_links_once() -> dict:
             if bool(verification.get("is_soft_404")):
                 raise _Soft404MappingError(aw_link)
             new_slug = str(verification.get("final_slug") or aw_link).strip()
-            needs_refresh = new_slug != str(row.get("aw_link") or "").strip() or _row_is_preaired(row)
+            needs_refresh = new_slug != str(row.get("aw_link") or "").strip() or _row_is_preaired_placeholder(row)
             if needs_refresh:
                 metadata = slug_metadata.get(new_slug)
                 if isinstance(metadata, Exception):

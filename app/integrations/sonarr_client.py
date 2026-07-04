@@ -51,12 +51,6 @@ class SonarrClient(MediaManagerClient):
         payload = self.api.get(f"episode?seriesId={series_id}")
         return payload if isinstance(payload, list) else []
 
-    def fetch_season_episodes(self, series_id: int, season_number: int) -> list[dict]:
-        if not self.is_configured():
-            return []
-        payload = self.api.get(f"episode?seriesId={series_id}&seasonNumber={season_number}")
-        return payload if isinstance(payload, list) else []
-
     def unmonitor_episodes(self, episode_ids: list[int]) -> bool:
         if not self.is_configured() or not episode_ids:
             return False
@@ -84,19 +78,3 @@ class SonarrClient(MediaManagerClient):
             return True
         except requests.RequestException:
             return False
-
-    def unmonitor_season(self, series_id: int, season_number: int) -> bool:
-        if not self.is_configured():
-            return False
-        series = self.fetch_series_detail(series_id)
-        if not series:
-            return False
-        seasons = series.get("seasons") or []
-        found = False
-        for season in seasons:
-            if season.get("seasonNumber") == season_number:
-                season["monitored"] = False
-                found = True
-        if not found:
-            return False
-        return self.update_series(series_id, series)

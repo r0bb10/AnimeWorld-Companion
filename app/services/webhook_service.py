@@ -166,19 +166,6 @@ def _sonarr_webhook_episode_ids(payload: dict) -> list[int]:
     return episode_ids
 
 
-def _sonarr_webhook_series_and_season(payload: dict) -> tuple[int | None, int | None]:
-    series = payload.get("series") or {}
-    series_id = series.get("id")
-    season_number = None
-    for episode in payload.get("episodes") or []:
-        try:
-            season_number = int(episode.get("seasonNumber"))
-            break
-        except (TypeError, ValueError):
-            continue
-    return (int(series_id) if series_id is not None else None, season_number)
-
-
 def handle_import_webhook(normalized: dict, payload: dict) -> dict:
     manager = str(normalized.get("manager") or "")
     manager_entity_id = normalized.get("manager_entity_id")
@@ -217,13 +204,6 @@ def handle_import_webhook(normalized: dict, payload: dict) -> dict:
                     unmonitored += 1
             if episode_ids:
                 lines.append(f"unmonitored={unmonitored}/{len(episode_ids)}")
-
-                series_id, season_number = _sonarr_webhook_series_and_season(payload)
-                if series_id is not None and season_number is not None:
-                    season_episodes = sonarr_client.fetch_season_episodes(series_id, season_number)
-                    if season_episodes and all(not ep.get("monitored") for ep in season_episodes):
-                        if sonarr_client.unmonitor_season(series_id, season_number):
-                            lines.append(f"season_unmonitored={season_number}")
         elif manager == "radarr":
             radarr_client = RadarrClient()
             success = radarr_client.unmonitor_movie(manager_entity_id)

@@ -51,6 +51,20 @@ class SonarrClient(MediaManagerClient):
         payload = self.api.get(f"episode?seriesId={series_id}")
         return payload if isinstance(payload, list) else []
 
+    def has_episode_file(self, series_id: int, season_number: int, episode_number: int) -> bool | None:
+        if not self.is_configured():
+            return None
+        payload = self.api.get(f"episode?seriesId={series_id}")
+        if not isinstance(payload, list):
+            return None
+        for episode in payload:
+            if (
+                int(episode.get("seasonNumber") or -1) == season_number
+                and int(episode.get("episodeNumber") or -1) == episode_number
+            ):
+                return bool(episode.get("hasFile"))
+        return False
+
     def unmonitor_episodes(self, episode_ids: list[int]) -> bool:
         if not self.is_configured() or not episode_ids:
             return False

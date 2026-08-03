@@ -25,7 +25,9 @@ def list_downloads(limit: int = 100) -> list[dict]:
                 finished_at,
                 created_at,
                 sonarr_id,
-                radarr_id
+                radarr_id,
+                season_number,
+                episode_number
             FROM downloads
             ORDER BY created_at DESC
             LIMIT ?
@@ -54,7 +56,9 @@ def list_all_downloads() -> list[dict]:
                 finished_at,
                 created_at,
                 sonarr_id,
-                radarr_id
+                radarr_id,
+                season_number,
+                episode_number
             FROM downloads
             ORDER BY created_at DESC
             """
@@ -81,7 +85,9 @@ def get_download(download_id: str) -> dict | None:
                 finished_at,
                 created_at,
                 sonarr_id,
-                radarr_id
+                radarr_id,
+                season_number,
+                episode_number
             FROM downloads
             WHERE id = ?
             LIMIT 1
@@ -100,6 +106,8 @@ def create_download(
     part_path: str,
     sonarr_id: int | None = None,
     radarr_id: int | None = None,
+    season_number: int | None = None,
+    episode_number: int | None = None,
 ) -> dict:
     download_id = uuid4().hex
     created_at = datetime.now().timestamp()
@@ -121,9 +129,11 @@ def create_download(
                 finished_at,
                 created_at,
                 sonarr_id,
-                radarr_id
+                radarr_id,
+                season_number,
+                episode_number
             )
-            VALUES (?, ?, ?, ?, ?, ?, 0, 0, ?, NULL, NULL, NULL, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, 0, 0, ?, NULL, NULL, NULL, ?, ?, ?, ?, ?)
             """,
             (
                 url,
@@ -136,6 +146,8 @@ def create_download(
                 created_at,
                 sonarr_id,
                 radarr_id,
+                season_number,
+                episode_number,
             ),
         )
     return get_download(download_id) or {}
@@ -160,6 +172,28 @@ def update_download_status(download_id: str, status: str, error: str | None = No
             ),
         )
     return get_download(download_id)
+
+
+def update_download_status_if_current(
+    download_id: str,
+    *,
+    status: str,
+    current_statuses: tuple[str, ...],
+    finished_at: float | None = None,
+) -> dict | None:
+    if not current_statuses:
+        return None
+    placeholders = ", ".join("?" for _ in current_statuses)
+    with get_db(write=True) as conn:
+        cursor = conn.execute(
+            f"""
+            UPDATE downloads
+            SET status = ?, finished_at = COALESCE(?, finished_at)
+            WHERE id = ? AND status IN ({placeholders})
+            """,
+            (status, finished_at, download_id, *current_statuses),
+        )
+    return get_download(download_id) if cursor.rowcount else None
 
 
 def update_download_progress(
@@ -243,7 +277,9 @@ def list_completed_downloads() -> list[dict]:
                 finished_at,
                 created_at,
                 sonarr_id,
-                radarr_id
+                radarr_id,
+                season_number,
+                episode_number
             FROM downloads
             WHERE status = 'completed'
             ORDER BY created_at DESC

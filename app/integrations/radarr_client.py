@@ -45,6 +45,12 @@ class RadarrClient(MediaManagerClient):
         payload = self.api.get(f"movie/{movie_id}")
         return payload if isinstance(payload, dict) else None
 
+    def has_movie_file(self, movie_id: int) -> bool | None:
+        movie = self.fetch_movie_detail(movie_id)
+        if movie is None:
+            return None
+        return bool(movie.get("hasFile") or movie.get("movieFile"))
+
     def unmonitor_movie(self, movie_id: int) -> bool:
         if not self.is_configured():
             return False

@@ -221,7 +221,9 @@ CREATE TABLE IF NOT EXISTS downloads (
     finished_at      REAL,
     created_at       REAL NOT NULL,
     sonarr_id        INTEGER,
-    radarr_id        INTEGER
+    radarr_id        INTEGER,
+    season_number    INTEGER,
+    episode_number   INTEGER
 );
 
 CREATE INDEX IF NOT EXISTS idx_downloads_status  ON downloads(status);
@@ -282,6 +284,10 @@ def init_db() -> None:
             conn.execute("ALTER TABLE downloads ADD COLUMN radarr_id INTEGER")
         if "pause_reason" not in columns:
             conn.execute("ALTER TABLE downloads ADD COLUMN pause_reason TEXT DEFAULT 'none'")
+        if "season_number" not in columns:
+            conn.execute("ALTER TABLE downloads ADD COLUMN season_number INTEGER")
+        if "episode_number" not in columns:
+            conn.execute("ALTER TABLE downloads ADD COLUMN episode_number INTEGER")
         season_columns = {
             row["name"]
             for row in conn.execute("PRAGMA table_info(show_seasons)").fetchall()

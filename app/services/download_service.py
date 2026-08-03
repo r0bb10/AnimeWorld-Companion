@@ -17,6 +17,8 @@ from ..core.config import settings
 from ..core.log_events import extract_remote_filename, log_block, log_exception, log_info, log_warning
 from ..core.logging import get_logger
 from ..domain.media import MediaKind, MediaManager, NamingContext
+from ..integrations.radarr_client import RadarrClient
+from ..integrations.sonarr_client import SonarrClient
 from ..repositories.db import get_db
 from ..repositories.downloads import (
     clear_finished_downloads,
@@ -28,6 +30,7 @@ from ..repositories.downloads import (
     list_downloads,
     update_download_progress,
     update_download_status,
+    update_download_status_if_current,
 )
 from .naming_service import build_release_name
 
@@ -402,6 +405,8 @@ def create_fake_torrent(
             part_path=_part_path(release_name),
             sonarr_id=manager_id if manager == "sonarr" else None,
             radarr_id=manager_id if manager == "radarr" else None,
+            season_number=season if manager == "sonarr" else None,
+            episode_number=episode if manager == "sonarr" else None,
         )
         log_block(
             logger,
@@ -800,7 +805,11 @@ def _sonarr_episode_key(filename: str) -> tuple[int, int] | None:
 
 
 def _completed_download_candidates(manager: str, manager_entity_id: int) -> list[dict]:
-    entries = list_completed_downloads()
+    entries = [
+        entry
+        for entry in list_all_downloads()
+        if entry.get("status") in {"completed", "vanished"}
+    ]
     if manager == "sonarr":
         return [entry for entry in entries if int(entry.get("sonarr_id") or 0) == manager_entity_id]
     if manager == "radarr":
@@ -879,12 +888,10 @@ def find_completed_download_for_import_webhook(manager: str, manager_entity_id: 
 
 
 def mark_imported(download_id: str, *, emit_log: bool = True) -> dict | None:
-    entry = get_download(download_id)
-    if not entry or entry.get("status") != "completed":
-        return None
-    updated = update_download_progress(
+    updated = update_download_status_if_current(
         download_id,
         status="imported",
+        current_statuses=("completed", "vanished"),
         finished_at=datetime.now(UTC).timestamp(),
     )
     if updated and emit_log:
@@ -893,10 +900,11 @@ def mark_imported(download_id: str, *, emit_log: bool = True) -> dict | None:
 
 
 def mark_vanished(download_id: str, *, emit_log: bool = True) -> dict | None:
-    entry = get_download(download_id)
-    if not entry or entry.get("status") != "completed":
-        return None
-    updated = update_download_progress(download_id, status="vanished")
+    updated = update_download_status_if_current(
+        download_id,
+        status="vanished",
+        current_statuses=("completed",),
+    )
     if updated and emit_log:
         log_info(
             logger,
@@ -910,11 +918,35 @@ def mark_vanished(download_id: str, *, emit_log: bool = True) -> dict | None:
     return updated
 
 
+def _manager_imported(entry: dict) -> bool | None:
+    sonarr_id = entry.get("sonarr_id")
+    if sonarr_id is not None:
+        season_number = entry.get("season_number")
+        episode_number = entry.get("episode_number")
+        if season_number is None or episode_number is None:
+            parsed_episode = _sonarr_episode_key(str(entry.get("filename") or ""))
+            if not parsed_episode:
+                return None
+            season_number, episode_number = parsed_episode
+        return SonarrClient().has_episode_file(
+            int(sonarr_id),
+            int(season_number),
+            int(episode_number),
+        )
+
+    radarr_id = entry.get("radarr_id")
+    if radarr_id is not None:
+        return RadarrClient().has_movie_file(int(radarr_id))
+    return None
+
+
 def reconcile_vanished_downloads() -> dict:
     grace_seconds = 60
     now = datetime.now(UTC).timestamp()
     checked = 0
+    imported = 0
     vanished = 0
+    skipped = 0
 
     for entry in list_completed_downloads():
         checked += 1
@@ -929,13 +961,25 @@ def reconcile_vanished_downloads() -> dict:
         if final_path and os.path.exists(final_path):
             continue
 
+        manager_imported = _manager_imported(entry)
+        if manager_imported is True:
+            updated = mark_imported(str(entry.get("id") or ""), emit_log=False)
+            if updated:
+                imported += 1
+            continue
+        if manager_imported is None:
+            skipped += 1
+            continue
+
         updated = mark_vanished(str(entry.get("id") or ""))
         if updated:
             vanished += 1
 
     return {
         "checked": checked,
+        "imported": imported,
         "vanished": vanished,
+        "skipped": skipped,
         "grace_seconds": grace_seconds,
     }
 

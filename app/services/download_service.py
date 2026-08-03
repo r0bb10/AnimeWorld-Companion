@@ -12,6 +12,7 @@ import threading
 from urllib.parse import urlencode
 
 import requests
+from requests.exceptions import ChunkedEncodingError
 
 from ..core.config import settings
 from ..core.log_events import extract_remote_filename, log_block, log_exception, log_info, log_warning
@@ -61,7 +62,7 @@ def _retry_error_kind(exc: Exception) -> str:
         if "name resolution" in message or "nameresolutionerror" in message or "failed to resolve" in message:
             return "dns"
         return "connection"
-    if isinstance(exc, requests.ChunkedEncodingError):
+    if isinstance(exc, ChunkedEncodingError):
         return "incomplete_read"
     if isinstance(exc, requests.HTTPError):
         response = getattr(exc, "response", None)
@@ -73,7 +74,7 @@ def _retry_error_kind(exc: Exception) -> str:
 
 
 def _is_retryable_download_error(exc: Exception) -> bool:
-    if isinstance(exc, (requests.Timeout, requests.ConnectionError, requests.ChunkedEncodingError)):
+    if isinstance(exc, (requests.Timeout, requests.ConnectionError, ChunkedEncodingError)):
         return True
     if isinstance(exc, requests.HTTPError):
         response = getattr(exc, "response", None)
@@ -362,7 +363,7 @@ def create_fake_torrent(
     filename: str | None = None,
     release_source: str = "unknown",
     base_url: str | None = None,
-) -> tuple[dict, bytes, str]:
+) -> tuple[dict | None, bytes, str]:
     release_name = filename or build_release_name(
         _release_context(
             manager=manager,
@@ -727,7 +728,8 @@ def _download_worker(download_id: str) -> None:
             _download_threads.pop(download_id, None)
             _download_events.pop(download_id, None)
             _download_progress.pop(download_id, None)
-            if not get_download(download_id) or get_download(download_id).get("status") not in {"paused", "queued", "resuming", "downloading"}:
+            current = get_download(download_id)
+            if not current or current.get("status") not in {"paused", "queued", "resuming", "downloading"}:
                 _download_metrics.pop(download_id, None)
 
 
@@ -784,7 +786,7 @@ def pause_active_downloads(reason: str = "system", timeout_seconds: int = 30) ->
         requested = {
             download_id
             for download_id in requested
-            if get_download(download_id).get("status") == "downloading"
+            if (current := get_download(download_id)) and current.get("status") == "downloading"
         }
     return len(active)
 

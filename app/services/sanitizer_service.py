@@ -66,10 +66,7 @@ def _set_state(**updates) -> None:
 
 
 def _verify_slug(client: AnimeWorldClient, slug: str) -> dict:
-    details = client.verify_slug_details(slug)
-    details["final_slug"] = str(details.get("final_slug") or slug)
-    details["status_code"] = int(details.get("status_code") or 0)
-    return details
+    return dict(client.verify_slug_details(slug))
 
 
 def _is_transient_aw_error(exc: Exception) -> bool:

@@ -47,18 +47,20 @@ class MediaManagerClient:
         return self.profile.configured and self.api is not None
 
     def health(self) -> ManagerHealth:
-        if not self.is_configured():
+        api = self.api
+        if not self.is_configured() or api is None:
             return ManagerHealth(manager=self.manager, ok=False, error="not configured")
-        payload = self.api.get("system/status")
+        payload = api.get("system/status")
         if not payload:
             return ManagerHealth(manager=self.manager, ok=False, error="unreachable")
         version = payload.get("version", "") if isinstance(payload, dict) else ""
         return ManagerHealth(manager=self.manager, ok=True, version=version)
 
     def fetch_tags(self) -> dict[int, str]:
-        if not self.is_configured():
+        api = self.api
+        if not self.is_configured() or api is None:
             return {}
-        payload = self.api.get("tag")
+        payload = api.get("tag")
         if not isinstance(payload, list):
             return {}
         return {
@@ -68,9 +70,10 @@ class MediaManagerClient:
         }
 
     def fetch_wanted_missing(self) -> list[dict]:
-        if not self.is_configured():
+        api = self.api
+        if not self.is_configured() or api is None:
             return []
-        payload = self.api.get("wanted/missing")
+        payload = api.get("wanted/missing")
         if isinstance(payload, list):
             return payload
         if isinstance(payload, dict):

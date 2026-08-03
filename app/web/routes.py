@@ -166,7 +166,7 @@ def _webhook_item_label(normalized: dict, payload: dict) -> str:
 
 
 def _webhook_details(normalized: dict) -> dict:
-    details = {
+    details: dict[str, object] = {
         "manager": str(normalized.get("manager") or ""),
         "event_type": str(normalized.get("event_type") or ""),
         "event_family": str(normalized.get("event_family") or "unknown"),
@@ -174,7 +174,9 @@ def _webhook_details(normalized: dict) -> dict:
     manager_entity_id = normalized.get("manager_entity_id")
     if manager_entity_id is not None:
         details["manager_id"] = manager_entity_id
-    local_match = normalized.get("local_match") or {}
+    local_match = normalized.get("local_match")
+    if not isinstance(local_match, dict):
+        return details
     if local_match.get("id") is not None:
         details["local_match_id"] = local_match.get("id")
         details["matched_by"] = local_match.get("matched_by")

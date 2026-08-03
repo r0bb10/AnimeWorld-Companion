@@ -209,7 +209,7 @@ def calculate_show_confidence(show: dict, season: dict, candidate: dict, want_du
     manager_year = _season_year(show, season)
 
     season_number = int(season.get("season_number") or 0)
-    manager_first_aired = season.get("air_date_start") or (show.get("first_aired") if season_number == 1 else "")
+    manager_first_aired = str(season.get("air_date_start") or (show.get("first_aired") if season_number == 1 else "") or "")
 
     title = title_similarity_score(show.get("title", ""), manager_alts, candidate.get("aw_title", ""), candidate.get("aw_jtitle", ""))
     year = year_match_score(manager_year, candidate.get("aw_year"))

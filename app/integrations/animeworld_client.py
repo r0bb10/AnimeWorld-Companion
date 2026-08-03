@@ -4,10 +4,12 @@ from dataclasses import dataclass
 import re
 import threading
 import time
+from typing import TypedDict
 
 import requests
 from requests.adapters import HTTPAdapter
 from bs4 import BeautifulSoup
+from bs4.element import Tag
 
 from ..core.config import settings
 
@@ -26,7 +28,7 @@ _META_CACHE_TTL = 300
 _META_CACHE: dict[str, tuple[dict, list[dict], str, bool, float]] = {}
 _META_CACHE_LOCK = threading.Lock()
 _VERIFY_CACHE_TTL = 300
-_VERIFY_CACHE: dict[str, tuple[dict[str, object], float]] = {}
+_VERIFY_CACHE: dict[str, tuple["AnimeWorldVerification", float]] = {}
 _VERIFY_CACHE_LOCK = threading.Lock()
 _SESSION_LOCK = threading.Lock()
 _SESSION: requests.Session | None = None
@@ -39,6 +41,18 @@ _SOFT_404_META_MARKERS = ("questa pagina non esiste", "this page does not exist"
 class AnimeWorldHealth:
     ok: bool
     url: str
+
+
+class AnimeWorldVerification(TypedDict):
+    final_slug: str
+    status_code: int
+    is_soft_404: bool
+    is_placeholder: bool
+    has_episode_ids: bool
+    has_info_block: bool
+    title: str
+    meta_description: str
+    redirected_to_episode: bool
 
 
 def _session_base_url() -> str:
@@ -140,15 +154,18 @@ class AnimeWorldClient:
     def _extract_info(self, soup: BeautifulSoup) -> dict:
         info: dict[str, object] = {}
         info_div = soup.find("div", class_="info")
-        if info_div:
-            for dt, dd in zip(info_div.find_all("dt"), info_div.find_all("dd")):
-                key = dt.get_text(" ", strip=True).rstrip(":")
-                links = dd.find_all("a")
-                if links:
-                    values = [anchor.get_text(" ", strip=True) for anchor in links]
-                    info[key] = values[0] if len(values) == 1 else values
-                else:
-                    info[key] = dd.get_text(" ", strip=True)
+        if not isinstance(info_div, Tag):
+            return info
+        for dt, dd in zip(info_div.find_all("dt"), info_div.find_all("dd")):
+            if not isinstance(dt, Tag) or not isinstance(dd, Tag):
+                continue
+            key = dt.get_text(" ", strip=True).rstrip(":")
+            links = dd.find_all("a")
+            if links:
+                values = [anchor.get_text(" ", strip=True) for anchor in links]
+                info[key] = values[0] if len(values) == 1 else values
+            else:
+                info[key] = dd.get_text(" ", strip=True)
         return info
 
     def health(self) -> AnimeWorldHealth:
@@ -220,16 +237,18 @@ class AnimeWorldClient:
             poster_link = item.select_one("a.poster")
             image = item.select_one("img")
             status = item.select_one(".status div")
-            href = (name_link or poster_link).get("href", "") if (name_link or poster_link) else ""
+            link = name_link if isinstance(name_link, Tag) else poster_link if isinstance(poster_link, Tag) else None
+            href_value = link.get("href", "") if link else ""
+            href = href_value if isinstance(href_value, str) else ""
             full_url = href if href.startswith("http") else f"{self.base_url}{href}"
             results.append(
                 {
-                    "title": (name_link.get_text(" ", strip=True) if name_link else item.get_text(" ", strip=True)),
-                    "japanese_title": name_link.get("data-jtitle", "") if name_link else "",
+                    "title": (name_link.get_text(" ", strip=True) if isinstance(name_link, Tag) else item.get_text(" ", strip=True)),
+                    "japanese_title": str(name_link.get("data-jtitle", "")) if isinstance(name_link, Tag) else "",
                     "url": full_url,
                     "slug": self.url_to_slug(full_url),
-                    "poster": image.get("src", "") if image else "",
-                    "kind": status.get_text(" ", strip=True) if status else "",
+                    "poster": str(image.get("src", "")) if isinstance(image, Tag) else "",
+                    "kind": status.get_text(" ", strip=True) if isinstance(status, Tag) else "",
                 }
             )
         return results
@@ -298,7 +317,7 @@ class AnimeWorldClient:
             _META_CACHE[target] = (dict(info), [dict(item) for item in episodes], final_url, is_placeholder, now)
         return dict(info), [dict(item) for item in episodes], final_url, is_placeholder
 
-    def _verify_page_details(self, html: str, final_url: str, final_slug: str, status_code: int) -> dict[str, object]:
+    def _verify_page_details(self, html: str, final_url: str, final_slug: str, status_code: int) -> AnimeWorldVerification:
         text = html or ""
         title_match = re.search(r"<title[^>]*>(.*?)</title>", text, flags=re.IGNORECASE | re.DOTALL)
         title = " ".join((title_match.group(1) if title_match else "").split()).strip()
@@ -345,13 +364,13 @@ class AnimeWorldClient:
             "redirected_to_episode": redirected_to_episode,
         }
 
-    def verify_slug_details(self, slug_or_url: str) -> dict[str, object]:
+    def verify_slug_details(self, slug_or_url: str) -> AnimeWorldVerification:
         target = slug_or_url if slug_or_url.startswith("http") else self.slug_to_url(slug_or_url)
         now = time.monotonic()
         with _VERIFY_CACHE_LOCK:
             cached = _VERIFY_CACHE.get(target)
             if cached and now - cached[1] < _VERIFY_CACHE_TTL:
-                return dict(cached[0])
+                return cached[0].copy()
 
         response = self._session().get(target, timeout=15, allow_redirects=True)
         response.raise_for_status()
@@ -359,12 +378,12 @@ class AnimeWorldClient:
         final_slug = self.url_to_slug(final_url) or self.url_to_slug(target)
         details = self._verify_page_details(response.text, final_url, final_slug, int(response.status_code))
         with _VERIFY_CACHE_LOCK:
-            _VERIFY_CACHE[target] = (dict(details), now)
-        return dict(details)
+            _VERIFY_CACHE[target] = (details.copy(), now)
+        return details.copy()
 
     def verify_slug(self, slug_or_url: str) -> tuple[str, int]:
         details = self.verify_slug_details(slug_or_url)
-        return str(details.get("final_slug") or ""), int(details.get("status_code") or 0)
+        return details["final_slug"], details["status_code"]
 
     def get_file_info(self, episode_id: str) -> list[dict]:
         if not episode_id:

@@ -122,9 +122,9 @@ def _resolve_movie_rss_mapping(anime_slug: str) -> dict | None:
 
 
 def _parse_int(value: object | None) -> int | None:
+    if not isinstance(value, (str, int, float)):
+        return None
     try:
-        if value is None:
-            return None
         return int(value)
     except (TypeError, ValueError):
         return None

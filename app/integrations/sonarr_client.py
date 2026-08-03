@@ -28,33 +28,38 @@ class SonarrClient(MediaManagerClient):
         )
 
     def naming_config(self) -> dict:
-        if not self.is_configured():
+        api = self.api
+        if not self.is_configured() or api is None:
             return {}
-        payload = self.api.get("config/naming")
+        payload = api.get("config/naming")
         return payload if isinstance(payload, dict) else {}
 
     def fetch_series(self) -> list[dict]:
-        if not self.is_configured():
+        api = self.api
+        if not self.is_configured() or api is None:
             return []
-        payload = self.api.get("series")
+        payload = api.get("series")
         return payload if isinstance(payload, list) else []
 
     def fetch_series_detail(self, series_id: int) -> dict | None:
-        if not self.is_configured():
+        api = self.api
+        if not self.is_configured() or api is None:
             return None
-        payload = self.api.get(f"series/{series_id}")
+        payload = api.get(f"series/{series_id}")
         return payload if isinstance(payload, dict) else None
 
     def fetch_episodes(self, series_id: int) -> list[dict]:
-        if not self.is_configured():
+        api = self.api
+        if not self.is_configured() or api is None:
             return []
-        payload = self.api.get(f"episode?seriesId={series_id}")
+        payload = api.get(f"episode?seriesId={series_id}")
         return payload if isinstance(payload, list) else []
 
     def has_episode_file(self, series_id: int, season_number: int, episode_number: int) -> bool | None:
-        if not self.is_configured():
+        api = self.api
+        if not self.is_configured() or api is None:
             return None
-        payload = self.api.get(f"episode?seriesId={series_id}")
+        payload = api.get(f"episode?seriesId={series_id}")
         if not isinstance(payload, list):
             return None
         for episode in payload:

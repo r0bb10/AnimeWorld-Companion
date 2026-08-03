@@ -6,6 +6,7 @@ import json
 import logging
 import os
 import re
+from collections.abc import Mapping
 from urllib.parse import unquote, urlsplit
 
 from .config import settings
@@ -104,6 +105,8 @@ def _season_label(number: int) -> str:
 
 
 def _score_pct(value: float | int | None) -> str:
+    if value is None:
+        return "--"
     try:
         return f"{float(value) * 100:.1f}%"
     except (TypeError, ValueError):
@@ -177,7 +180,7 @@ def format_movie_automap_lines(mapping: dict | None) -> list[str]:
     return [f"{display_aw_link(mapping.get('aw_link'))} ({_score_pct(mapping.get('confidence_score'))}) ✓"]
 
 
-def extract_remote_filename(headers: dict, fallback_url: str = "") -> str:
+def extract_remote_filename(headers: Mapping[str, str], fallback_url: str = "") -> str:
     disposition = headers.get("Content-Disposition", "") or headers.get("content-disposition", "")
     if disposition:
         match = re.search(r"filename\\*=UTF-8''([^;]+)", disposition, flags=re.IGNORECASE)

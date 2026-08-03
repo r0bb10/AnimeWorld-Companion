@@ -56,8 +56,8 @@ def publish_library_stats_changed() -> None:
     publish_event("library_stats_changed", {})
 
 
-def publish_library_batch(name: str, status: str, **details) -> None:
-    payload = {"name": str(name), "status": str(status)}
+def publish_library_batch(name: str, status: str, **details: object) -> None:
+    payload: dict[str, object] = {"name": str(name), "status": str(status)}
     if details:
         payload["details"] = details
     publish_event("library_batch", payload)

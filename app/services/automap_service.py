@@ -201,12 +201,19 @@ def _detect_segment_chain(show: dict, season: dict, season_scores: list[dict], w
         if int(candidate.get("aw_episode_count") or 0) > 0
     ]
 
-    def fits_marker(candidate: dict, marker: dict, prev_release: datetime | None) -> bool:
+    def fits_marker(
+        candidate: dict,
+        marker: dict,
+        prev_release: datetime | None,
+        *,
+        is_final_segment: bool,
+    ) -> bool:
         count = int(candidate.get("aw_episode_count") or 0)
         target = int(marker.get("count") or 0)
         if abs(count - target) > 1:
             return False
-        if (candidate.get("aw_status") or "").lower() != "finito":
+        status = (candidate.get("aw_status") or "").lower()
+        if status != "finito" and not (is_final_segment and status == "in corso"):
             return False
         release = candidate.get("aw_release_datetime")
         if prev_release and release and release <= prev_release:
@@ -259,7 +266,12 @@ def _detect_segment_chain(show: dict, season: dict, season_scores: list[dict], w
                 continue
             if prev_audio and (candidate.get("aw_audio") or "").lower() != prev_audio:
                 continue
-            if not fits_marker(candidate, markers[index], prev_release):
+            if not fits_marker(
+                candidate,
+                markers[index],
+                prev_release,
+                is_final_segment=index == len(markers) - 1,
+            ):
                 continue
             chain.append(candidate)
             backtrack(index + 1, chain)

@@ -332,20 +332,26 @@ def _needs_show_mapping_refresh(show: dict, season: dict) -> bool:
         return False
 
     ordered_mappings = sorted(mappings, key=lambda item: int(item.get("part") or 0))
-    # Sanitizer should only repair clearly broken existing split mappings.
-    # It should not try to "upgrade" healthy single-link auto mappings into
-    # split-cour structures just because Sonarr exposes multiple segments.
-    if len(ordered_mappings) <= 1:
-        return False
-
     marker_counts = [int(item.get("count") or 0) for item in markers]
     mapping_counts = [int(item.get("aw_episode_count") or 0) for item in ordered_mappings]
+    season_total = int(season.get("episode_count") or 0)
+
+    # A single link remains valid when it covers Sonarr's full season, even if
+    # Sonarr later adds segment markers. Refresh only when it covers the first
+    # segment but no longer the complete season.
+    if len(ordered_mappings) <= 1:
+        mapping_count = mapping_counts[0] if mapping_counts else 0
+        return (
+            mapping_count > 0
+            and abs(mapping_count - marker_counts[0]) <= 1
+            and season_total > mapping_count + 1
+        )
+
     if len(marker_counts) != len(mapping_counts):
         return True
     if any(abs(left - right) > 1 for left, right in zip(marker_counts, mapping_counts)):
         return True
 
-    season_total = int(season.get("episode_count") or 0)
     if season_total and abs(sum(mapping_counts) - season_total) > 1:
         return True
     return False

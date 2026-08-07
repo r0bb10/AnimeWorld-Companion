@@ -49,6 +49,8 @@ _state = {
     "last_result": None,
 }
 _NETWORK_WORKERS = 6
+_ONGOING_REFRESH_HOURS = 6
+_ENDED_REFRESH_DAYS = 7
 
 
 class _Soft404MappingError(RuntimeError):
@@ -131,6 +133,37 @@ def _row_is_preaired_placeholder(row: dict) -> bool:
     return mapping_is_preaired_placeholder(row)
 
 
+def _parse_timestamp(value: str | None) -> datetime | None:
+    if not value:
+        return None
+    try:
+        return datetime.fromisoformat(str(value))
+    except (TypeError, ValueError):
+        return None
+
+
+def _is_finished_item(row: dict, item: dict | None) -> bool:
+    aw_status = str(row.get("aw_status") or "").casefold()
+    if aw_status == "finito":
+        return True
+    item_status = str(item.get("status") or "").casefold() if item else ""
+    return item_status in {"ended", "released"}
+
+
+def _metadata_refresh_due(row: dict, item: dict | None) -> bool:
+    updated = _parse_timestamp(row.get("updated_at"))
+    age_hours = (
+        (datetime.now(UTC) - updated).total_seconds() / 3600
+        if updated
+        else float("inf")
+    )
+    if _row_is_preaired(row):
+        return age_hours >= _ONGOING_REFRESH_HOURS
+    if _is_finished_item(row, item):
+        return age_hours >= (_ENDED_REFRESH_DAYS * 24)
+    return age_hours >= _ONGOING_REFRESH_HOURS
+
+
 def _touch_show_mapping(row_id: int, now: str) -> None:
     with get_db(write=True) as conn:
         conn.execute(
@@ -162,6 +195,27 @@ def _publish_library_change(kind: str, item_id: int) -> None:
     publish_library_stats_changed()
 
 
+def _metadata_change_lines(row: dict, candidate: dict, score: float) -> list[str]:
+    lines: list[str] = []
+    if candidate.get("aw_link") != row.get("aw_link"):
+        lines.append(
+            f"redirect={display_aw_link(row['aw_link'])} -> {display_aw_link(candidate['aw_link'])}"
+        )
+    if candidate.get("aw_status") != row.get("aw_status"):
+        lines.append(f"status={row.get('aw_status')} -> {candidate['aw_status']}")
+    if "aw_episode_count" in candidate and candidate["aw_episode_count"] != int(row.get("aw_episode_count") or 0):
+        lines.append(f"episodes={row.get('aw_episode_count')} -> {candidate['aw_episode_count']}")
+    if "aw_total_episodes" in candidate and candidate["aw_total_episodes"] != int(row.get("aw_total_episodes") or 0):
+        lines.append(f"total={row.get('aw_total_episodes')} -> {candidate['aw_total_episodes']}")
+    if round(score, 6) != round(float(row.get("confidence_score") or 0), 6):
+        lines.append(f"score={row.get('confidence_score')} -> {score:.3f}")
+    return lines
+
+
+def _mapping_changed(row: dict, candidate: dict, score: float, was_pre: bool, is_pre: bool) -> bool:
+    return was_pre != is_pre or bool(_metadata_change_lines(row, candidate, score))
+
+
 def _refresh_show_mapping_metadata(show: dict, season: dict, row: dict, slug_metadata: dict, now: str) -> bool:
     candidate = _candidate_from_slug_metadata(
         metadata=slug_metadata,
@@ -170,13 +224,19 @@ def _refresh_show_mapping_metadata(show: dict, season: dict, row: dict, slug_met
         category=str(row.get("aw_category") or ""),
         year=show.get("year"),
     )
-    season_payload = {**season, "has_aired": _has_aired(season)}
+    candidate_release = candidate.get("aw_release_datetime")
+    season_has_aired = _has_aired(season) or (
+        candidate_release is not None
+        and candidate_release < datetime.now(UTC)
+        and int(candidate.get("aw_episode_count") or 0) > 0
+    )
+    season_payload = {**season, "has_aired": season_has_aired}
     want_dubbed = resolve_show_language_preference(show)
     score, factors = calculate_show_confidence(show, season_payload, candidate, want_dubbed=want_dubbed)
     if bool(factors.get("preaired_placeholder")):
         factors["preaired"] = True
         factors["preaired_type"] = "placeholder"
-    elif _row_is_preaired(row) and not _has_aired(season) and not candidate.get("aw_is_placeholder"):
+    elif _row_is_preaired(row) and not season_has_aired and not candidate.get("aw_is_placeholder"):
         factors["preaired"] = True
         factors["preaired_type"] = "prereleased"
         factors["preaired_prereleased"] = True
@@ -212,14 +272,11 @@ def _refresh_show_mapping_metadata(show: dict, season: dict, row: dict, slug_met
         )
     was_pre = _row_is_preaired(row)
     is_pre = factors_are_preaired(factors)
-    changed = candidate["aw_link"] != row["aw_link"] or was_pre != is_pre
+    changed = _mapping_changed(row, candidate, score, was_pre, is_pre)
     if changed:
         _publish_library_change("show", int(row["show_id"]))
         lines = format_show_automap_lines(show, [int(row["season_number"])])
-        if candidate["aw_link"] != row["aw_link"]:
-            lines.append(
-                f"redirect={display_aw_link(row['aw_link'])} -> {display_aw_link(candidate['aw_link'])}"
-            )
+        lines.extend(_metadata_change_lines(row, candidate, score))
         if was_pre and not is_pre:
             lines.append("promoted=pre -> auto")
         log_block(
@@ -271,7 +328,9 @@ def _refresh_movie_mapping_metadata(movie: dict, row: dict, slug_metadata: dict,
                 row["id"],
             ),
         )
-    changed = candidate["aw_link"] != row["aw_link"]
+    was_pre = _row_is_preaired(row)
+    is_pre = factors_are_preaired(factors)
+    changed = _mapping_changed(row, candidate, score, was_pre, is_pre)
     if changed:
         _publish_library_change("movie", int(row["movie_id"]))
         lines = format_movie_automap_lines(
@@ -280,14 +339,14 @@ def _refresh_movie_mapping_metadata(movie: dict, row: dict, slug_metadata: dict,
                 "confidence_score": score,
             }
         )
+        lines.extend(_metadata_change_lines(row, candidate, score))
+        if was_pre and not is_pre:
+            lines.append("promoted=pre -> auto")
         log_block(
             logger,
             logging.INFO,
             str(movie.get("title") or row.get("aw_title") or "Movie"),
-            lines
-            + [f"redirect={display_aw_link(row['aw_link'])} -> {display_aw_link(candidate['aw_link'])}"]
-            if candidate["aw_link"] != row["aw_link"]
-            else lines,
+            lines,
             event_type="sanitizer.movie.changed",
             entity_kind="movie",
             entity_id=row.get("movie_id"),
@@ -371,7 +430,7 @@ def sanitize_links_once() -> dict:
     with get_db() as conn:
         show_rows = [dict(row) for row in conn.execute(
             """
-            SELECT asm.id, asm.show_id, asm.season_number, asm.aw_link, asm.aw_title, asm.aw_status, asm.aw_category, asm.confidence_factors, asm.link_check_failures
+            SELECT asm.id, asm.show_id, asm.season_number, asm.aw_link, asm.aw_title, asm.aw_status, asm.aw_category, asm.aw_episode_count, asm.aw_total_episodes, asm.confidence_score, asm.confidence_factors, asm.link_check_failures, asm.updated_at
             FROM aw_show_mappings asm
             JOIN show_seasons ss
               ON ss.show_id = asm.show_id
@@ -383,7 +442,7 @@ def sanitize_links_once() -> dict:
         ).fetchall()]
         movie_rows = [dict(row) for row in conn.execute(
             """
-            SELECT amm.id, amm.movie_id, amm.aw_link, amm.aw_title, amm.aw_status, amm.aw_category, amm.confidence_factors, amm.link_check_failures
+            SELECT amm.id, amm.movie_id, amm.aw_link, amm.aw_title, amm.aw_status, amm.aw_category, amm.confidence_score, amm.confidence_factors, amm.link_check_failures, amm.updated_at
             FROM aw_movie_mappings amm
             JOIN movies m ON m.id = amm.movie_id
             WHERE COALESCE(m.ignored, 0) = 0
@@ -435,6 +494,9 @@ def sanitize_links_once() -> dict:
         final_slug = str(verification.get("final_slug") or "").strip()
         if final_slug and (final_slug != str(row.get("aw_link") or "").strip() or _row_is_preaired_placeholder(row)):
             metadata_needed_slugs.add(final_slug)
+        show = show_details.get(int(row["show_id"]))
+        if _metadata_refresh_due(row, show):
+            metadata_needed_slugs.add(str(row.get("aw_link") or "").strip())
     for row in movie_rows:
         verification = slug_results.get(str(row.get("aw_link") or "").strip())
         if not isinstance(verification, dict):
@@ -442,6 +504,9 @@ def sanitize_links_once() -> dict:
         final_slug = str(verification.get("final_slug") or "").strip()
         if final_slug and final_slug != str(row.get("aw_link") or "").strip():
             metadata_needed_slugs.add(final_slug)
+        movie = movie_details.get(int(row["movie_id"]))
+        if _metadata_refresh_due(row, movie):
+            metadata_needed_slugs.add(str(row.get("aw_link") or "").strip())
 
     final_slugs = sorted(metadata_needed_slugs)
     slug_metadata: dict[str, dict | Exception] = {}
@@ -467,15 +532,19 @@ def sanitize_links_once() -> dict:
             if bool(verification.get("is_soft_404")):
                 raise _Soft404MappingError(aw_link)
             new_slug = str(verification.get("final_slug") or aw_link).strip()
-            needs_refresh = new_slug != str(row.get("aw_link") or "").strip() or _row_is_preaired_placeholder(row)
+            show = show_details.get(int(row["show_id"]))
+            season = _season_by_number(show or {}, int(row["season_number"]))
+            needs_refresh = (
+                new_slug != str(row.get("aw_link") or "").strip()
+                or _row_is_preaired_placeholder(row)
+                or _metadata_refresh_due(row, show)
+            )
             if needs_refresh:
                 metadata = slug_metadata.get(new_slug)
                 if isinstance(metadata, Exception):
                     raise metadata
                 if not metadata:
                     raise RuntimeError(f"Missing sanitizer metadata for {new_slug}")
-                show = show_details.get(int(row["show_id"]))
-                season = _season_by_number(show or {}, int(row["season_number"]))
                 if not show or not season:
                     continue
                 if _refresh_show_mapping_metadata(show, season, row, metadata, now):
@@ -539,14 +608,17 @@ def sanitize_links_once() -> dict:
             if bool(verification.get("is_soft_404")):
                 raise _Soft404MappingError(aw_link)
             new_slug = str(verification.get("final_slug") or aw_link).strip()
-            needs_refresh = new_slug != str(row.get("aw_link") or "").strip()
+            movie = movie_details.get(int(row["movie_id"]))
+            needs_refresh = (
+                new_slug != str(row.get("aw_link") or "").strip()
+                or _metadata_refresh_due(row, movie)
+            )
             if needs_refresh:
                 metadata = slug_metadata.get(new_slug)
                 if isinstance(metadata, Exception):
                     raise metadata
                 if not metadata:
                     raise RuntimeError(f"Missing sanitizer metadata for {new_slug}")
-                movie = movie_details.get(int(row["movie_id"]))
                 if not movie:
                     continue
                 if _refresh_movie_mapping_metadata(movie, row, metadata, now):

@@ -7,6 +7,7 @@ from datetime import UTC, datetime
 import json
 import logging
 import threading
+from typing import TypedDict
 
 import requests
 
@@ -195,6 +196,34 @@ def _publish_library_change(kind: str, item_id: int) -> None:
     publish_library_stats_changed()
 
 
+class _ChangeLogEntry(TypedDict):
+    title: str
+    lines: list[str]
+
+
+_show_change_log: dict[int, _ChangeLogEntry] = {}
+_movie_change_log: dict[int, _ChangeLogEntry] = {}
+
+
+def _clear_change_logs() -> None:
+    _show_change_log.clear()
+    _movie_change_log.clear()
+
+
+def _add_show_lines(show_id: int, title: str, lines: list[str]) -> None:
+    if not lines:
+        return
+    entry = _show_change_log.setdefault(show_id, {"title": title, "lines": []})
+    entry["lines"].extend(lines)
+
+
+def _add_movie_lines(movie_id: int, title: str, lines: list[str]) -> None:
+    if not lines:
+        return
+    entry = _movie_change_log.setdefault(movie_id, {"title": title, "lines": []})
+    entry["lines"].extend(lines)
+
+
 def _metadata_change_lines(row: dict, candidate: dict, score: float) -> list[str]:
     lines: list[str] = []
     if candidate.get("aw_link") != row.get("aw_link"):
@@ -216,7 +245,7 @@ def _mapping_changed(row: dict, candidate: dict, score: float, was_pre: bool, is
     return was_pre != is_pre or bool(_metadata_change_lines(row, candidate, score))
 
 
-def _refresh_show_mapping_metadata(show: dict, season: dict, row: dict, slug_metadata: dict, now: str) -> bool:
+def _refresh_show_mapping_metadata(show: dict, season: dict, row: dict, slug_metadata: dict, now: str) -> tuple[bool, list[str]]:
     candidate = _candidate_from_slug_metadata(
         metadata=slug_metadata,
         title=str(row.get("aw_title") or show.get("title") or ""),
@@ -273,26 +302,17 @@ def _refresh_show_mapping_metadata(show: dict, season: dict, row: dict, slug_met
     was_pre = _row_is_preaired(row)
     is_pre = factors_are_preaired(factors)
     changed = _mapping_changed(row, candidate, score, was_pre, is_pre)
+    lines: list[str] = []
     if changed:
         _publish_library_change("show", int(row["show_id"]))
         lines = format_show_automap_lines(show, [int(row["season_number"])])
         lines.extend(_metadata_change_lines(row, candidate, score))
         if was_pre and not is_pre:
             lines.append("promoted=pre -> auto")
-        log_block(
-            logger,
-            logging.INFO,
-            str(show.get("title") or row.get("aw_title") or "Show"),
-            lines,
-            event_type="sanitizer.show.changed",
-            entity_kind="show",
-            entity_id=row.get("show_id"),
-            entity_title=str(show.get("title") or row.get("aw_title") or "Show"),
-        )
-    return changed
+    return changed, lines
 
 
-def _refresh_movie_mapping_metadata(movie: dict, row: dict, slug_metadata: dict, now: str) -> bool:
+def _refresh_movie_mapping_metadata(movie: dict, row: dict, slug_metadata: dict, now: str) -> tuple[bool, list[str]]:
     candidate = _candidate_from_slug_metadata(
         metadata=slug_metadata,
         title=str(row.get("aw_title") or movie.get("title") or ""),
@@ -331,6 +351,7 @@ def _refresh_movie_mapping_metadata(movie: dict, row: dict, slug_metadata: dict,
     was_pre = _row_is_preaired(row)
     is_pre = factors_are_preaired(factors)
     changed = _mapping_changed(row, candidate, score, was_pre, is_pre)
+    lines: list[str] = []
     if changed:
         _publish_library_change("movie", int(row["movie_id"]))
         lines = format_movie_automap_lines(
@@ -342,17 +363,7 @@ def _refresh_movie_mapping_metadata(movie: dict, row: dict, slug_metadata: dict,
         lines.extend(_metadata_change_lines(row, candidate, score))
         if was_pre and not is_pre:
             lines.append("promoted=pre -> auto")
-        log_block(
-            logger,
-            logging.INFO,
-            str(movie.get("title") or row.get("aw_title") or "Movie"),
-            lines,
-            event_type="sanitizer.movie.changed",
-            entity_kind="movie",
-            entity_id=row.get("movie_id"),
-            entity_title=str(movie.get("title") or row.get("aw_title") or "Movie"),
-        )
-    return changed
+    return changed, lines
 
 
 def _fetch_slug_verification(slug: str) -> dict:
@@ -418,6 +429,7 @@ def sanitize_links_once() -> dict:
     now = datetime.now(UTC).isoformat()
     result = {"checked": 0, "updated": 0, "removed": 0, "failed": 0, "skipped": 0}
     show_seasons_to_refresh: set[tuple[int, int]] = set()
+    _clear_change_logs()
     log_info(logger, "sanitizer.started", "Sanitizer cycle started")
 
     health = client.health()
@@ -534,10 +546,14 @@ def sanitize_links_once() -> dict:
             new_slug = str(verification.get("final_slug") or aw_link).strip()
             show = show_details.get(int(row["show_id"]))
             season = _season_by_number(show or {}, int(row["season_number"]))
+            season_key = (int(row["show_id"]), int(row["season_number"]))
             needs_refresh = (
                 new_slug != str(row.get("aw_link") or "").strip()
                 or _row_is_preaired_placeholder(row)
-                or _metadata_refresh_due(row, show)
+                or (
+                    season_key not in show_seasons_to_refresh
+                    and _metadata_refresh_due(row, show)
+                )
             )
             if needs_refresh:
                 metadata = slug_metadata.get(new_slug)
@@ -547,8 +563,10 @@ def sanitize_links_once() -> dict:
                     raise RuntimeError(f"Missing sanitizer metadata for {new_slug}")
                 if not show or not season:
                     continue
-                if _refresh_show_mapping_metadata(show, season, row, metadata, now):
+                changed, lines = _refresh_show_mapping_metadata(show, season, row, metadata, now)
+                if changed:
                     result["updated"] += 1
+                    _add_show_lines(int(row["show_id"]), str(show.get("title") or row.get("aw_title") or "Show"), lines)
             else:
                 _touch_show_mapping(int(row["id"]), now)
         except Exception as exc:
@@ -621,8 +639,10 @@ def sanitize_links_once() -> dict:
                     raise RuntimeError(f"Missing sanitizer metadata for {new_slug}")
                 if not movie:
                     continue
-                if _refresh_movie_mapping_metadata(movie, row, metadata, now):
+                changed, lines = _refresh_movie_mapping_metadata(movie, row, metadata, now)
+                if changed:
                     result["updated"] += 1
+                    _add_movie_lines(int(row["movie_id"]), str(movie.get("title") or row.get("aw_title") or "Movie"), lines)
             else:
                 _touch_movie_mapping(int(row["id"]), now)
         except Exception as exc:
@@ -690,10 +710,17 @@ def sanitize_links_once() -> dict:
         if mappings:
             clear_show_sanitizer_retry(show_id, season_number)
             continue
-        response = automap_show(show_id, season_number=season_number, force=False)
+        response = automap_show(show_id, season_number=season_number, force=False, emit_logs=False)
         if response.get("status") in {"success", "partial"} and season_number in set(response.get("mapped_seasons") or []):
             clear_show_sanitizer_retry(show_id, season_number)
             result["updated"] += 1
+            refreshed = get_show_detail(show_id)
+            if refreshed:
+                _add_show_lines(
+                    show_id,
+                    str(refreshed.get("title") or show.get("title") or "Show"),
+                    format_show_automap_lines(refreshed, [season_number]),
+                )
 
     for retry in list_movie_sanitizer_retries():
         movie_id = int(retry["movie_id"])
@@ -707,10 +734,17 @@ def sanitize_links_once() -> dict:
         if movie.get("mapping"):
             clear_movie_sanitizer_retry(movie_id)
             continue
-        response = automap_movie(movie_id, force=False)
+        response = automap_movie(movie_id, force=False, emit_logs=False)
         if response.get("status") == "success":
             clear_movie_sanitizer_retry(movie_id)
             result["updated"] += 1
+            refreshed = get_movie_detail(movie_id)
+            if refreshed and refreshed.get("mapping"):
+                _add_movie_lines(
+                    movie_id,
+                    str(refreshed.get("title") or movie.get("title") or "Movie"),
+                    format_movie_automap_lines(refreshed["mapping"]),
+                )
 
     for show_id, season_number in sorted(show_seasons_to_refresh):
         show = get_show_detail(show_id)
@@ -721,17 +755,56 @@ def sanitize_links_once() -> dict:
             continue
         from .automap_service import automap_show
 
-        response = automap_show(show_id, season_number=season_number, force=True)
+        response = automap_show(show_id, season_number=season_number, force=True, emit_logs=False)
         if response.get("status") in {"success", "partial"}:
             result["updated"] += 1
-            log_info(
-                logger,
-                "sanitizer.show.refreshed",
-                "Refreshed stale auto mapping",
-                lines=[f"show_id={show_id} season={season_number} status={response.get('status')}"],
-                entity_kind="show",
-                entity_id=show_id,
-            )
+            refreshed = get_show_detail(show_id)
+            if refreshed:
+                refreshed_season = _season_by_number(refreshed, season_number)
+                old_parts = len(season.get("mappings") or [])
+                new_parts = len(refreshed_season.get("mappings") or []) if refreshed_season else 0
+                lines = format_show_automap_lines(refreshed, [season_number])
+                if old_parts and new_parts and old_parts != new_parts:
+                    lines.append(
+                        f"structure={old_parts} part{'s' if old_parts != 1 else ''} -> {new_parts} part{'s' if new_parts != 1 else ''}"
+                    )
+                elif old_parts or new_parts:
+                    lines.append("structure=rebuilt")
+                _add_show_lines(
+                    show_id,
+                    str(refreshed.get("title") or show.get("title") or "Show"),
+                    lines,
+                )
+
+    for show_id, entry in sorted(_show_change_log.items()):
+        lines = entry.get("lines", [])
+        if not lines:
+            continue
+        log_block(
+            logger,
+            logging.INFO,
+            str(entry.get("title") or "Show"),
+            lines,
+            event_type="sanitizer.show.changed",
+            entity_kind="show",
+            entity_id=show_id,
+            entity_title=str(entry.get("title") or "Show"),
+        )
+    for movie_id, entry in sorted(_movie_change_log.items()):
+        lines = entry.get("lines", [])
+        if not lines:
+            continue
+        log_block(
+            logger,
+            logging.INFO,
+            str(entry.get("title") or "Movie"),
+            lines,
+            event_type="sanitizer.movie.changed",
+            entity_kind="movie",
+            entity_id=movie_id,
+            entity_title=str(entry.get("title") or "Movie"),
+        )
+    _clear_change_logs()
 
     _set_state(last_result=result, last_error="", last_finished_at=now, running=False)
     log_block(

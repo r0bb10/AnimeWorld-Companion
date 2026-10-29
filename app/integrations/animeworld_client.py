@@ -12,6 +12,7 @@ from bs4 import BeautifulSoup
 from bs4.element import Tag
 
 from ..core.config import settings
+from .animeworld_access import AnimeWorldAccessError, request_animeworld
 
 _UA = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
@@ -41,6 +42,7 @@ _SOFT_404_META_MARKERS = ("questa pagina non esiste", "this page does not exist"
 class AnimeWorldHealth:
     ok: bool
     url: str
+    error: AnimeWorldAccessError | None = None
 
 
 class AnimeWorldVerification(TypedDict):
@@ -69,8 +71,7 @@ def _new_session() -> requests.Session:
 
 
 def _bootstrap_session(session: requests.Session, base_url: str) -> requests.Session:
-    response = session.get(base_url, timeout=15)
-    response.raise_for_status()
+    response = request_animeworld("GET", base_url, session=session, timeout=15)
     match = re.search(r'<meta[^>]+id="csrf-token"[^>]+content="([^"]+)"', response.text)
     if match:
         session.headers["csrf-token"] = match.group(1)
@@ -104,26 +105,21 @@ class AnimeWorldClient:
     def _post(self, path: str, **kwargs) -> requests.Response:
         session = self._session()
         try:
-            response = session.post(f"{self.base_url}{path}", timeout=15, **kwargs)
-            if response.status_code in {401, 403}:
-                raise requests.HTTPError(response=response)
-            return response
-        except (requests.HTTPError, requests.Timeout):
+            return request_animeworld("POST", f"{self.base_url}{path}", session=session, timeout=15, **kwargs)
+        except AnimeWorldAccessError as exc:
+            if exc.status_code not in {401, 403} and exc.kind != "timeout":
+                raise
             session = _reset_shared_session(self.base_url)
-            return session.post(f"{self.base_url}{path}", timeout=15, **kwargs)
+            return request_animeworld("POST", f"{self.base_url}{path}", session=session, timeout=15, **kwargs)
 
-    def _get_page_details(self, url: str) -> tuple[BeautifulSoup | None, str]:
+    def _get_page_details(self, url: str) -> tuple[BeautifulSoup, str]:
         now = time.time()
         with _PAGE_CACHE_LOCK:
             cached = _PAGE_CACHE.get(url)
             if cached and now - cached[2] < _PAGE_CACHE_TTL:
                 return cached[0], cached[1]
 
-        try:
-            response = self._session().get(url, timeout=15)
-            response.raise_for_status()
-        except requests.RequestException:
-            return None, url
+        response = request_animeworld("GET", url, session=self._session(), timeout=15)
 
         soup = BeautifulSoup(response.text, "html.parser")
         final_url = str(response.url or url)
@@ -131,7 +127,7 @@ class AnimeWorldClient:
             _PAGE_CACHE[url] = (soup, final_url, time.time())
         return soup, final_url
 
-    def _get_page(self, url: str) -> BeautifulSoup | None:
+    def _get_page(self, url: str) -> BeautifulSoup:
         soup, _ = self._get_page_details(url)
         return soup
 
@@ -172,11 +168,10 @@ class AnimeWorldClient:
         if not self.base_url:
             return AnimeWorldHealth(ok=False, url="")
         try:
-            response = self._session().get(self.base_url, timeout=8)
-            response.raise_for_status()
+            request_animeworld("GET", self.base_url, session=self._session(), timeout=8)
             return AnimeWorldHealth(ok=True, url=self.base_url)
-        except requests.RequestException:
-            return AnimeWorldHealth(ok=False, url=self.base_url)
+        except AnimeWorldAccessError as exc:
+            return AnimeWorldHealth(ok=False, url=self.base_url, error=exc)
 
     def slug_to_url(self, slug: str) -> str:
         return f"{self.base_url}/play/{slug.strip('/')}/"
@@ -190,7 +185,6 @@ class AnimeWorldClient:
 
     def _search_v2(self, query: str, limit: int | None = None) -> list[dict]:
         response = self._post("/api/search/v2", params={"keyword": query.strip()})
-        response.raise_for_status()
         payload = response.json()
         results = []
         items = payload.get("animes", [])
@@ -221,12 +215,13 @@ class AnimeWorldClient:
         return results
 
     def _search_scrape(self, query: str, limit: int | None = None) -> list[dict]:
-        response = self._session().get(
+        response = request_animeworld(
+            "GET",
             f"{self.base_url}/search",
+            session=self._session(),
             params={"keyword": query.strip()},
             timeout=15,
         )
-        response.raise_for_status()
         soup = BeautifulSoup(response.text, "html.parser")
         results = []
         items = soup.select(".film-list .item")
@@ -270,6 +265,8 @@ class AnimeWorldClient:
         for search_fn in (self._search_v2, self._search_scrape):
             try:
                 results = search_fn(normalized_query, limit)
+            except AnimeWorldAccessError:
+                raise
             except Exception:
                 results = []
             for item in results:
@@ -303,9 +300,6 @@ class AnimeWorldClient:
                 return dict(info), [dict(item) for item in episodes], final_url, is_placeholder
 
         soup, final_url = self._get_page_details(target)
-        if soup is None:
-            return {}, [], target, False
-
         info = self._extract_info(soup)
         episodes = self._extract_episodes(soup)
         final_url_normalized = final_url.rstrip("/")
@@ -372,8 +366,7 @@ class AnimeWorldClient:
             if cached and now - cached[1] < _VERIFY_CACHE_TTL:
                 return cached[0].copy()
 
-        response = self._session().get(target, timeout=15, allow_redirects=True)
-        response.raise_for_status()
+        response = request_animeworld("GET", target, session=self._session(), timeout=15, allow_redirects=True)
         final_url = str(response.url or target)
         final_slug = self.url_to_slug(final_url) or self.url_to_slug(target)
         details = self._verify_page_details(response.text, final_url, final_slug, int(response.status_code))
@@ -389,20 +382,29 @@ class AnimeWorldClient:
         if not episode_id:
             return []
         try:
-            response = self._session().get(
-                f"{self.base_url}/api/episode/info",
-                params={"id": episode_id, "alt": 0},
-                timeout=15,
-            )
-            if response.status_code in {401, 403}:
-                session = _reset_shared_session(self.base_url)
-                response = session.get(
+            session = self._session()
+            try:
+                response = request_animeworld(
+                    "GET",
                     f"{self.base_url}/api/episode/info",
+                    session=session,
                     params={"id": episode_id, "alt": 0},
                     timeout=15,
                 )
-            response.raise_for_status()
+            except AnimeWorldAccessError as exc:
+                if exc.status_code not in {401, 403}:
+                    raise
+                session = _reset_shared_session(self.base_url)
+                response = request_animeworld(
+                    "GET",
+                    f"{self.base_url}/api/episode/info",
+                    session=session,
+                    params={"id": episode_id, "alt": 0},
+                    timeout=15,
+                )
             data = response.json()
+        except AnimeWorldAccessError:
+            raise
         except Exception:
             return []
 

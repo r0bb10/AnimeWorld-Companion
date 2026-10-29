@@ -9,8 +9,9 @@ import threading
 import time
 
 from ..core.config import settings
-from ..core.log_events import log_block, log_exception, log_info
+from ..core.log_events import log_animeworld_error, log_block, log_exception, log_info
 from ..core.logging import get_logger
+from ..integrations.animeworld_access import AnimeWorldAccessError
 from .download_service import reconcile_vanished_downloads, restore_on_startup
 from .eligible_service import run_eligible_once
 from .rss_service import update_rss_cache
@@ -88,13 +89,16 @@ def _run_scheduled_worker(
             updates = {
                 "running": False,
                 "last_run_at": datetime.now(UTC).isoformat(),
-                "last_error": "",
+                "last_error": str(result.get("error") or "") if isinstance(result, dict) else "",
             }
             if result_updates:
                 updates.update(result_updates(result))
             _set_state(section, **updates)
         except Exception as exc:
-            log_exception(logger, failure_event_type, failure_message, details={"error": str(exc)})
+            if isinstance(exc, AnimeWorldAccessError):
+                log_animeworld_error(logger, failure_event_type, failure_message, exc)
+            else:
+                log_exception(logger, failure_event_type, failure_message, details={"error": str(exc)})
             updates = {
                 "running": False,
                 "last_run_at": datetime.now(UTC).isoformat(),

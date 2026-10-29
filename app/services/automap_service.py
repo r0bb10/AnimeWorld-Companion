@@ -8,8 +8,9 @@ import logging
 import threading
 
 from ..core.config import settings
-from ..core.log_events import format_movie_automap_lines, format_show_automap_lines, log_block, log_info, log_warning
+from ..core.log_events import format_movie_automap_lines, format_show_automap_lines, log_animeworld_error, log_block, log_info, log_warning
 from ..core.logging import get_logger
+from ..integrations.animeworld_access import AnimeWorldAccessError
 from ..domain.release_window import has_started
 from ..repositories.db import get_db
 from ..repositories.shows import get_show_detail
@@ -932,6 +933,10 @@ def _run_background(target, *args, **kwargs) -> dict:
                         details=summary,
                     )
                     publish_library_batch("automap", "finished", **summary)
+        except AnimeWorldAccessError as exc:
+            _set_state(last_error=str(exc), last_result={"status": "interrupted", "error": exc.details()})
+            log_animeworld_error(logger, "automap.library.interrupted", "Library automap interrupted", exc)
+            publish_library_batch("automap", "interrupted")
         except Exception as exc:
             _set_state(last_error=str(exc))
             raise

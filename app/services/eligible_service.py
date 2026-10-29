@@ -6,8 +6,9 @@ from datetime import UTC, datetime
 import logging
 
 from ..core.config import settings
-from ..core.log_events import format_movie_automap_lines, format_show_automap_lines, log_block, log_info
+from ..core.log_events import format_movie_automap_lines, format_show_automap_lines, log_animeworld_error, log_block, log_info
 from ..core.logging import get_logger
+from ..integrations.animeworld_access import AnimeWorldAccessError
 from ..repositories.db import get_db
 from ..repositories.movies import get_movie_detail
 from ..repositories.shows import get_show_detail
@@ -137,6 +138,8 @@ def run_eligible_once() -> dict:
     checked = 0
     mapped_show_seasons = 0
     mapped_movies = 0
+    access_error = None
+    current_target = None
 
     log_info(
         logger,
@@ -156,27 +159,33 @@ def run_eligible_once() -> dict:
         },
     )
 
-    for target in show_targets:
-        checked += 1
-        result = automap_show(
-            int(target["show_id"]),
-            season_number=int(target["season_number"]),
-            force=False,
-            emit_logs=False,
-        )
-        mapped = list(result.get("mapped_seasons") or [])
-        if mapped:
-            mapped_show_seasons += len(mapped)
-            _log_show_mapping(int(target["show_id"]), mapped)
+    try:
+        for target in show_targets:
+            current_target = target
+            result = automap_show(
+                int(target["show_id"]),
+                season_number=int(target["season_number"]),
+                force=False,
+                emit_logs=False,
+            )
+            checked += 1
+            mapped = list(result.get("mapped_seasons") or [])
+            if mapped:
+                mapped_show_seasons += len(mapped)
+                _log_show_mapping(int(target["show_id"]), mapped)
 
-    for target in movie_targets:
-        checked += 1
-        result = automap_movie(int(target["movie_id"]), force=False, emit_logs=False)
-        if result.get("status") == "success" and result.get("mapping"):
-            mapped_movies += 1
-            _log_movie_mapping(int(target["movie_id"]))
+        for target in movie_targets:
+            current_target = target
+            result = automap_movie(int(target["movie_id"]), force=False, emit_logs=False)
+            checked += 1
+            if result.get("status") == "success" and result.get("mapping"):
+                mapped_movies += 1
+                _log_movie_mapping(int(target["movie_id"]))
+    except AnimeWorldAccessError as exc:
+        access_error = exc
 
     result = {
+        "status": "interrupted" if access_error else "completed",
         "checked": checked,
         "show_targets": len(show_targets),
         "dated_show_targets": len(dated_show_targets),
@@ -186,6 +195,16 @@ def run_eligible_once() -> dict:
         "mapped_movies": mapped_movies,
         "finished_at": datetime.now(UTC).isoformat(),
     }
+    if access_error:
+        result["error"] = str(access_error)
+        result["upstream"] = access_error.details()
+        result["current_target"] = current_target
+        result["remaining"] = len(show_targets) + len(movie_targets) - checked
+        log_animeworld_error(
+            logger, "eligible.interrupted", "Eligible cycle interrupted", access_error, details=result,
+            lines=[f"checked={checked}", f"remaining={result['remaining']}", f"item={(current_target or {}).get('title', '')}"],
+        )
+        return result
     log_info(
         logger,
         "eligible.finished",

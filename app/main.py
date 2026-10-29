@@ -1,11 +1,12 @@
 """New application entrypoint for the clean rebuild."""
 
-from fastapi import FastAPI
-from fastapi.responses import PlainTextResponse
+from fastapi import FastAPI, Request
+from fastapi.responses import JSONResponse, PlainTextResponse
 
 from .core.lifecycle import lifespan
-from .core.log_events import log_debug
+from .core.log_events import log_animeworld_error, log_debug
 from .core.logging import configure_logging, get_logger
+from .integrations.animeworld_access import AnimeWorldAccessError
 from .web.docs import API_DESCRIPTION, OPENAPI_TAGS
 from .web.routes import api_router
 
@@ -25,6 +26,14 @@ def create_app() -> FastAPI:
         lifespan=lifespan,
     )
     app.include_router(api_router)
+
+    @app.exception_handler(AnimeWorldAccessError)
+    async def animeworld_access_error(request: Request, exc: AnimeWorldAccessError) -> JSONResponse:
+        log_animeworld_error(
+            get_logger("routes"), "animeworld.request.failed", "AnimeWorld request failed", exc,
+            details={"route": request.url.path},
+        )
+        return JSONResponse(status_code=503, content={"detail": str(exc), "upstream": exc.details()})
 
     @app.get(
         "/health",

@@ -10,6 +10,7 @@ from collections.abc import Mapping
 from urllib.parse import unquote, urlsplit
 
 from .config import settings
+from ..integrations.animeworld_access import AnimeWorldAccessError
 
 
 def _event_extra(
@@ -73,6 +74,22 @@ def log_warning(logger: logging.Logger, event_type: str, message: str, *, lines:
 
 def log_exception(logger: logging.Logger, event_type: str, message: str, *, details: dict | None = None, entity_kind: str | None = None, entity_id: str | int | None = None, entity_title: str | None = None) -> None:
     emit_event(logger, logging.ERROR, event_type, message, details=details, entity_kind=entity_kind, entity_id=entity_id, entity_title=entity_title, exc_info=True)
+
+
+def log_animeworld_error(
+    logger: logging.Logger,
+    event_type: str,
+    message: str,
+    error: AnimeWorldAccessError,
+    *,
+    details: dict | None = None,
+    lines: list[str] | None = None,
+) -> None:
+    status = f"{error.status_code} {error.reason}" if error.status_code is not None else error.reason
+    error_lines = [f"error={error.kind}", f"status={status}", f"endpoint={error.endpoint}"]
+    if error.retry_after:
+        error_lines.append(f"retry_after={error.retry_after}")
+    log_warning(logger, event_type, message, lines=[*error_lines, *(lines or [])], details={**(details or {}), **error.details()})
 
 
 def log_block(

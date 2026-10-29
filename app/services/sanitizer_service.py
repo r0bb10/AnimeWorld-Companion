@@ -17,6 +17,7 @@ from ..core.log_events import (
     format_movie_automap_lines,
     format_show_automap_lines,
     log_block,
+    log_animeworld_error,
     log_info,
     log_warning,
 )
@@ -24,6 +25,7 @@ from ..core.logging import get_logger
 from ..domain.mapping_flags import factors_are_preaired, mapping_is_preaired, mapping_is_preaired_placeholder
 from ..domain.release_window import has_started
 from ..integrations.animeworld_client import AnimeWorldClient
+from ..integrations.animeworld_access import AnimeWorldAccessError
 from ..repositories.db import get_db
 from ..repositories.mappings import (
     clear_movie_sanitizer_retry,
@@ -73,6 +75,8 @@ def _verify_slug(client: AnimeWorldClient, slug: str) -> dict:
 
 
 def _is_transient_aw_error(exc: Exception) -> bool:
+    if isinstance(exc, AnimeWorldAccessError):
+        return exc.kind != "not_found"
     if isinstance(exc, (requests.Timeout, requests.ConnectionError)):
         return True
     if isinstance(exc, requests.HTTPError):
@@ -425,16 +429,34 @@ def _needs_show_mapping_refresh(show: dict, season: dict) -> bool:
 
 
 def sanitize_links_once() -> dict:
+    result: dict = {"checked": 0, "updated": 0, "removed": 0, "failed": 0, "skipped": 0}
+    try:
+        return _sanitize_links_once(result)
+    except AnimeWorldAccessError as exc:
+        result.update(status="interrupted", error=str(exc), upstream=exc.details())
+        _set_state(last_result=result, last_error=str(exc), last_finished_at=datetime.now(UTC).isoformat(), running=False)
+        log_animeworld_error(
+            logger, "sanitizer.interrupted", "Sanitizer cycle interrupted", exc, details=result,
+            lines=[f"checked={result['checked']}", f"updated={result['updated']}", f"removed={result['removed']}"],
+        )
+        return result
+    finally:
+        _clear_change_logs()
+
+
+def _sanitize_links_once(result: dict) -> dict:
     client = AnimeWorldClient()
     now = datetime.now(UTC).isoformat()
-    result = {"checked": 0, "updated": 0, "removed": 0, "failed": 0, "skipped": 0}
     show_seasons_to_refresh: set[tuple[int, int]] = set()
     _clear_change_logs()
     log_info(logger, "sanitizer.started", "Sanitizer cycle started")
 
     health = client.health()
     if not health.ok:
+        if health.error:
+            raise health.error
         message = f"AnimeWorld unreachable: {health.url}"
+        result.update(status="interrupted", error=message)
         log_warning(logger, "sanitizer.skipped", "Sanitizer skipped", lines=[message])
         _set_state(last_result=result, last_error=message, last_finished_at=now, running=False)
         return result
@@ -573,6 +595,12 @@ def sanitize_links_once() -> dict:
             soft404 = isinstance(exc, _Soft404MappingError)
             if _is_transient_aw_error(exc):
                 result["skipped"] += 1
+                if isinstance(exc, AnimeWorldAccessError):
+                    log_animeworld_error(
+                        logger, "sanitizer.show.skipped", "Show mapping verification skipped", exc,
+                        details={"show_id": row["show_id"], "season_number": row["season_number"]},
+                    )
+                    continue
                 log_warning(
                     logger,
                     "sanitizer.show.skipped",
@@ -649,6 +677,12 @@ def sanitize_links_once() -> dict:
             soft404 = isinstance(exc, _Soft404MappingError)
             if _is_transient_aw_error(exc):
                 result["skipped"] += 1
+                if isinstance(exc, AnimeWorldAccessError):
+                    log_animeworld_error(
+                        logger, "sanitizer.movie.skipped", "Movie mapping verification skipped", exc,
+                        details={"movie_id": row["movie_id"]},
+                    )
+                    continue
                 log_warning(
                     logger,
                     "sanitizer.movie.skipped",
@@ -806,11 +840,12 @@ def sanitize_links_once() -> dict:
         )
     _clear_change_logs()
 
-    _set_state(last_result=result, last_error="", last_finished_at=now, running=False)
+    result["status"] = "partial" if result["failed"] or result["skipped"] else "completed"
+    _set_state(last_result=result, last_error="", last_finished_at=datetime.now(UTC).isoformat(), running=False)
     log_block(
         logger,
         logging.INFO,
-        "Sanitizer cycle complete",
+        "Sanitizer cycle completed with errors" if result["status"] == "partial" else "Sanitizer cycle complete",
         [
             f"checked={result['checked']}",
             f"updated={result['updated']}",

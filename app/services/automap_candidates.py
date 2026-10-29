@@ -7,6 +7,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 import re
 
 from ..integrations.animeworld_client import AnimeWorldClient
+from ..integrations.animeworld_access import AnimeWorldAccessError
 from .query_helper import build_query_variants, sanitize_search_title
 from .automap_scoring import parse_italian_date
 
@@ -140,6 +141,8 @@ def _enrich_unique(client: AnimeWorldClient, raw_results: list[dict], limit: int
         for future in as_completed(futures):
             try:
                 enriched.append(future.result())
+            except AnimeWorldAccessError:
+                raise
             except Exception:
                 continue
     enriched.sort(key=lambda item: item.get("aw_title") or item.get("title") or "")

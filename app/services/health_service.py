@@ -31,5 +31,6 @@ def build_health_report() -> dict:
         "animeworld": {
             "ok": animeworld_health.ok,
             "url": animeworld_health.url,
+            "error": animeworld_health.error.details() if animeworld_health.error else None,
         },
     }

@@ -13,12 +13,14 @@ from ..core.log_events import (
     format_movie_automap_lines,
     format_show_automap_lines,
     log_block,
+    log_animeworld_error,
     log_debug,
     log_exception,
     log_info,
     log_warning,
 )
 from ..core.logging import get_logger
+from ..integrations.animeworld_access import AnimeWorldAccessError
 from ..services.catalog_service import (
     build_catalog_snapshot,
     build_movie_snapshot,
@@ -916,6 +918,11 @@ def manager_webhook(
                         entity_title=entity_title,
                         details={"status": "sync_failed"},
                     )
+            except AnimeWorldAccessError as exc:
+                log_animeworld_error(
+                    logger, "webhook.add.interrupted", "Webhook automap interrupted", exc,
+                    details={"manager": manager, "manager_id": manager_entity_id, "item": entity_title},
+                )
             except Exception:
                 log_exception(
                     logger,

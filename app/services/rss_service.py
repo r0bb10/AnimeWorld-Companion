@@ -5,12 +5,11 @@ from __future__ import annotations
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import xml.etree.ElementTree as ET
 
-import requests
-
 from ..core.config import settings
-from ..core.log_events import log_debug, log_exception, log_info, log_warning
+from ..core.log_events import log_animeworld_error, log_debug, log_exception, log_info
 from ..core.logging import get_logger
 from ..integrations.animeworld_client import AnimeWorldClient
+from ..integrations.animeworld_access import AnimeWorldAccessError, request_animeworld
 from ..integrations.radarr_client import RadarrClient
 from ..integrations.sonarr_client import SonarrClient
 from ..repositories.db import get_db
@@ -357,17 +356,12 @@ def update_rss_cache(*, emit_cycle_logs: bool = False) -> dict:
         log_debug(logger, "runtime.rss.cycle.started", "RSS poll cycle started")
 
     try:
-        response = requests.get(url, timeout=15)
-        response.raise_for_status()
+        response = request_animeworld("GET", url, timeout=15)
         root = ET.fromstring(response.content)
-    except requests.ConnectionError:
-        log_warning(logger, "runtime.rss.skipped", "RSS poll skipped: AnimeWorld unreachable")
+    except AnimeWorldAccessError as exc:
+        log_animeworld_error(logger, "runtime.rss.failed", "RSS fetch failed", exc)
         root = None
-        error = "unreachable"
-    except requests.Timeout:
-        log_warning(logger, "runtime.rss.skipped", "RSS poll skipped: request timed out")
-        root = None
-        error = "timeout"
+        error = str(exc)
     except Exception as exc:
         log_exception(logger, "runtime.rss.failed", "RSS fetch failed", details={"error": str(exc)})
         root = None
@@ -388,10 +382,18 @@ def update_rss_cache(*, emit_cycle_logs: bool = False) -> dict:
             for future in as_completed(futures):
                 try:
                     cached += future.result()
+                except AnimeWorldAccessError as exc:
+                    log_animeworld_error(logger, "runtime.rss.item_failed", "RSS item resolution failed", exc)
+                    error = str(exc)
                 except Exception:
                     log_exception(logger, "runtime.rss.item_processing_failed", "RSS item processing failed")
 
-    internal_cached = _cache_manager_wanted_items()
+    try:
+        internal_cached = _cache_manager_wanted_items()
+    except AnimeWorldAccessError as exc:
+        log_animeworld_error(logger, "runtime.rss.internal_failed", "Wanted RSS resolution failed", exc)
+        internal_cached = 0
+        error = str(exc)
     total_cached = cached + internal_cached
     cleanup_rss_items(settings.rss_cache_retention_days)
     sources: list[str] = []

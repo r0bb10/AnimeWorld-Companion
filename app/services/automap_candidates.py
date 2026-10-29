@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from contextvars import copy_context
 
 import re
 
@@ -137,7 +138,7 @@ def _enrich_unique(client: AnimeWorldClient, raw_results: list[dict], limit: int
         unique = unique[:limit]
     enriched: list[dict] = []
     with ThreadPoolExecutor(max_workers=min(len(unique), 6) or 1) as pool:
-        futures = {pool.submit(_enrich_result, client, item): item for item in unique}
+        futures = {pool.submit(copy_context().run, _enrich_result, client, item): item for item in unique}
         for future in as_completed(futures):
             try:
                 enriched.append(future.result())

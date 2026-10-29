@@ -9,6 +9,7 @@ from ..core.config import settings
 from ..core.log_events import format_movie_automap_lines, format_show_automap_lines, log_animeworld_error, log_block, log_info
 from ..core.logging import get_logger
 from ..integrations.animeworld_access import AnimeWorldAccessError
+from ..integrations.animeworld_transport import animeworld_operation
 from ..repositories.db import get_db
 from ..repositories.movies import get_movie_detail
 from ..repositories.shows import get_show_detail
@@ -130,6 +131,7 @@ def _log_movie_mapping(movie_id: int) -> None:
     )
 
 
+@animeworld_operation("eligible")
 def run_eligible_once() -> dict:
     dated_show_targets = list_eligible_show_targets()
     dateless_show_targets = list_eligible_dateless_show_targets()

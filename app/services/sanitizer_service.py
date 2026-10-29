@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from contextvars import copy_context
 from datetime import UTC, datetime
 import json
 import logging
@@ -26,6 +27,7 @@ from ..domain.mapping_flags import factors_are_preaired, mapping_is_preaired, ma
 from ..domain.release_window import has_started
 from ..integrations.animeworld_client import AnimeWorldClient
 from ..integrations.animeworld_access import AnimeWorldAccessError
+from ..integrations.animeworld_transport import animeworld_operation
 from ..repositories.db import get_db
 from ..repositories.mappings import (
     clear_movie_sanitizer_retry,
@@ -428,6 +430,7 @@ def _needs_show_mapping_refresh(show: dict, season: dict) -> bool:
     return False
 
 
+@animeworld_operation("sanitizer")
 def sanitize_links_once() -> dict:
     result: dict = {"checked": 0, "updated": 0, "removed": 0, "failed": 0, "skipped": 0}
     try:
@@ -512,7 +515,7 @@ def _sanitize_links_once(result: dict) -> dict:
     all_slugs = sorted({str(row.get("aw_link") or "").strip() for row in show_rows + movie_rows if str(row.get("aw_link") or "").strip()})
     if all_slugs:
         with ThreadPoolExecutor(max_workers=min(_NETWORK_WORKERS, len(all_slugs))) as executor:
-            future_map = {executor.submit(_fetch_slug_verification, slug): slug for slug in all_slugs}
+            future_map = {executor.submit(copy_context().run, _fetch_slug_verification, slug): slug for slug in all_slugs}
             for future in as_completed(future_map):
                 slug = future_map[future]
                 try:
@@ -546,7 +549,7 @@ def _sanitize_links_once(result: dict) -> dict:
     slug_metadata: dict[str, dict | Exception] = {}
     if final_slugs:
         with ThreadPoolExecutor(max_workers=min(_NETWORK_WORKERS, len(final_slugs))) as executor:
-            future_map = {executor.submit(_fetch_slug_metadata, slug): slug for slug in final_slugs}
+            future_map = {executor.submit(copy_context().run, _fetch_slug_metadata, slug): slug for slug in final_slugs}
             for future in as_completed(future_map):
                 slug = future_map[future]
                 try:

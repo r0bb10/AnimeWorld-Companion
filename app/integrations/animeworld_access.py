@@ -1,10 +1,19 @@
 """AnimeWorld request failures shared by clients and services."""
 
 from http import HTTPStatus
+from concurrent.futures import Future
+import json
+import threading
 
 import requests
 
-from .animeworld_transport import AnimeWorldRequestBlocked, mount_animeworld_transport, safe_endpoint
+from .animeworld_transport import (
+    AnimeWorldRequestBlocked, animeworld_operation, animeworld_request, audit,
+    mount_animeworld_transport, request_context, safe_endpoint,
+)
+
+_FLIGHTS_LOCK = threading.Lock()
+_FLIGHTS: dict[tuple, tuple[Future, str]] = {}
 
 
 class AnimeWorldAccessError(requests.RequestException):
@@ -50,6 +59,35 @@ class AnimeWorldAccessError(requests.RequestException):
 
 
 def request_animeworld(method: str, url: str, *, session: requests.Session | None = None, **kwargs) -> requests.Response:
+    with animeworld_operation(threading.current_thread().name), animeworld_request():
+        if method.upper() not in {"GET", "HEAD"} or kwargs.get("stream") or "data" in kwargs or "json" in kwargs:
+            return _request_animeworld(method, url, session=session, **kwargs)
+        key = (method.upper(), url, id(session), json.dumps(kwargs, sort_keys=True, default=str))
+        future: Future[requests.Response] = Future()
+        with _FLIGHTS_LOCK:
+            existing = _FLIGHTS.get(key)
+            if existing is None:
+                _FLIGHTS[key] = (future, request_context()["logical_request_id"])
+        if existing is not None:
+            future, owner_id = existing
+            audit("animeworld.http.coalesced", {
+                **request_context(), "owner_logical_request_id": owner_id,
+                "method": method.upper(), "endpoint": safe_endpoint(url), "sent": False,
+            })
+            return future.result()
+        try:
+            response = _request_animeworld(method, url, session=session, **kwargs)
+            future.set_result(response)
+            return response
+        except BaseException as exc:
+            future.set_exception(exc)
+            raise
+        finally:
+            with _FLIGHTS_LOCK:
+                del _FLIGHTS[key]
+
+
+def _request_animeworld(method: str, url: str, *, session: requests.Session | None = None, **kwargs) -> requests.Response:
     try:
         if session is None:
             with requests.Session() as standalone:

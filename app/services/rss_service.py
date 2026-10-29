@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from contextvars import copy_context
 import xml.etree.ElementTree as ET
 
 from ..core.config import settings
@@ -10,6 +11,7 @@ from ..core.log_events import log_animeworld_error, log_debug, log_exception, lo
 from ..core.logging import get_logger
 from ..integrations.animeworld_client import AnimeWorldClient
 from ..integrations.animeworld_access import AnimeWorldAccessError, request_animeworld
+from ..integrations.animeworld_transport import animeworld_operation
 from ..integrations.radarr_client import RadarrClient
 from ..integrations.sonarr_client import SonarrClient
 from ..repositories.db import get_db
@@ -340,6 +342,7 @@ def _process_rss_item(fields: dict, client: AnimeWorldClient) -> int:
     return cached
 
 
+@animeworld_operation("rss")
 def update_rss_cache(*, emit_cycle_logs: bool = False) -> dict:
     if not settings.rss_enabled:
         return {"enabled": False, "cached": 0}
@@ -378,7 +381,7 @@ def update_rss_cache(*, emit_cycle_logs: bool = False) -> dict:
                 log_exception(logger, "runtime.rss.item_parse_failed", "RSS item parse failed")
 
         with ThreadPoolExecutor(max_workers=5) as pool:
-            futures = {pool.submit(_process_rss_item, fields, client): fields for fields in fields_list}
+            futures = {pool.submit(copy_context().run, _process_rss_item, fields, client): fields for fields in fields_list}
             for future in as_completed(futures):
                 try:
                     cached += future.result()

@@ -39,7 +39,11 @@ async def lifespan(app):
     )
     init_db()
     traffic.start()
-    audit("animeworld.http.policy", traffic.snapshot())
+    audit("animeworld.http.policy", {
+        **traffic.snapshot(), "health_cache_seconds": settings.aw_health_cache_seconds,
+        "audit_enabled": settings.aw_request_audit_enabled,
+        "audit_retention_days": settings.aw_request_audit_retention_days,
+    })
     start_sse_streams()
     start_background_workers()
     yield

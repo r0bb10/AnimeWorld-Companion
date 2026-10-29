@@ -1,8 +1,10 @@
 """AnimeWorld search helpers."""
 
 from ..integrations.animeworld_client import AnimeWorldClient
+from ..integrations.animeworld_transport import animeworld_operation
 
 
+@animeworld_operation("search.portal")
 def search_animeworld(query: str, limit: int = 10) -> dict:
     client = AnimeWorldClient()
     return {

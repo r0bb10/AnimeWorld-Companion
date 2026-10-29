@@ -9,6 +9,7 @@ from ..core.log_events import log_debug
 from ..core.logging import get_logger
 from ..domain.media import MediaKind, MediaManager, NamingContext
 from ..integrations.animeworld_client import AnimeWorldClient
+from ..integrations.animeworld_transport import animeworld_operation
 from ..repositories.movies import get_movie_detail
 from ..repositories.shows import get_show_detail
 from .download_service import build_download_url
@@ -153,6 +154,7 @@ def _series_items(show: dict, season_number: int, episode_number: int) -> list[d
     return results
 
 
+@animeworld_operation("search.show")
 def build_show_search_items(query: str, season_number: int | None, episode_number: int | None, tvdb_id: int | None = None) -> list[dict]:
     from ..repositories.shows import find_show_by_title, find_show_by_tvdb_id
 
@@ -210,6 +212,7 @@ def build_show_search_items(query: str, season_number: int | None, episode_numbe
     return items
 
 
+@animeworld_operation("search.movie")
 def build_movie_search_items(query: str, tmdb_id: int | None = None, imdb_id: str = "") -> list[dict]:
     from ..repositories.movies import find_movie_by_external_ids, find_movie_by_title
 

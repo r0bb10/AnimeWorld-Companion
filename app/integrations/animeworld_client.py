@@ -13,7 +13,7 @@ from bs4.element import Tag
 
 from ..core.config import settings
 from .animeworld_access import AnimeWorldAccessError, request_animeworld
-from .animeworld_transport import mount_animeworld_transport
+from .animeworld_transport import animeworld_operation, audit, mount_animeworld_transport, request_context, safe_endpoint, traffic
 
 _UA = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
@@ -34,6 +34,9 @@ _VERIFY_CACHE: dict[str, tuple["AnimeWorldVerification", float]] = {}
 _VERIFY_CACHE_LOCK = threading.Lock()
 _SESSION_LOCK = threading.Lock()
 _SESSION: requests.Session | None = None
+_CDN_SESSION: requests.Session | None = None
+_HEALTH_CACHE: dict[str, tuple["AnimeWorldHealth", float, int]] = {}
+_HEALTH_CACHE_LOCK = threading.Lock()
 _POOL_MAXSIZE = 64
 _SOFT_404_TITLE_MARKERS = ("pagina non trovata", "page not found")
 _SOFT_404_META_MARKERS = ("questa pagina non esiste", "this page does not exist")
@@ -62,13 +65,16 @@ def _session_base_url() -> str:
     return settings.aw_base_url.rstrip("/")
 
 
+def _audit_cache_hit(cache: str, url: str) -> None:
+    audit("animeworld.cache.hit", {**request_context(), "cache": cache, "endpoint": safe_endpoint(url)})
+
+
 def _new_session() -> requests.Session:
     session = requests.Session()
     session.headers["User-Agent"] = _UA
     adapter = HTTPAdapter(pool_connections=_POOL_MAXSIZE, pool_maxsize=_POOL_MAXSIZE, max_retries=0)
     session.mount("http://", adapter)
     session.mount("https://", adapter)
-    mount_animeworld_transport(session, _session_base_url())
     return session
 
 
@@ -89,11 +95,22 @@ def _get_shared_session(base_url: str) -> requests.Session:
         return _SESSION
 
 
-def _reset_shared_session(base_url: str) -> requests.Session:
+def _reset_shared_session(base_url: str, previous: requests.Session) -> requests.Session:
     global _SESSION
     with _SESSION_LOCK:
+        if _SESSION is not None and _SESSION is not previous:
+            return _SESSION
+        audit("animeworld.session.refresh", request_context())
         _SESSION = _bootstrap_session(_new_session(), base_url)
         return _SESSION
+
+
+def _get_cdn_session() -> requests.Session:
+    global _CDN_SESSION
+    with _SESSION_LOCK:
+        if _CDN_SESSION is None:
+            _CDN_SESSION = _new_session()
+        return _CDN_SESSION
 
 
 class AnimeWorldClient:
@@ -112,7 +129,8 @@ class AnimeWorldClient:
         except AnimeWorldAccessError as exc:
             if exc.kind == "cooldown" or (exc.status_code != 401 and exc.kind != "timeout"):
                 raise
-            session = _reset_shared_session(self.base_url)
+            audit("animeworld.http.retry", {**request_context(), "cause": exc.kind, "status_code": exc.status_code})
+            session = _reset_shared_session(self.base_url, session)
             return request_animeworld("POST", f"{self.base_url}{path}", session=session, timeout=15, **kwargs)
 
     def _get_page_details(self, url: str) -> tuple[BeautifulSoup, str]:
@@ -120,6 +138,7 @@ class AnimeWorldClient:
         with _PAGE_CACHE_LOCK:
             cached = _PAGE_CACHE.get(url)
             if cached and now - cached[2] < _PAGE_CACHE_TTL:
+                _audit_cache_hit("page", url)
                 return cached[0], cached[1]
 
         response = request_animeworld("GET", url, session=self._session(), timeout=15)
@@ -167,14 +186,24 @@ class AnimeWorldClient:
                 info[key] = dd.get_text(" ", strip=True)
         return info
 
+    @animeworld_operation("health")
     def health(self) -> AnimeWorldHealth:
         if not self.base_url:
             return AnimeWorldHealth(ok=False, url="")
-        try:
-            request_animeworld("GET", self.base_url, session=self._session(), timeout=8)
-            return AnimeWorldHealth(ok=True, url=self.base_url)
-        except AnimeWorldAccessError as exc:
-            return AnimeWorldHealth(ok=False, url=self.base_url, error=exc)
+        with _HEALTH_CACHE_LOCK:
+            now = time.monotonic()
+            generation = traffic.snapshot()["rejection_generation"]
+            cached = _HEALTH_CACHE.get(self.base_url)
+            if cached and now - cached[1] < settings.aw_health_cache_seconds and cached[2] == generation:
+                audit("animeworld.health.cached", {**request_context(), "ok": cached[0].ok})
+                return AnimeWorldHealth(ok=cached[0].ok, url=cached[0].url, error=cached[0].error)
+            try:
+                request_animeworld("GET", self.base_url, session=self._session(), timeout=8)
+                health = AnimeWorldHealth(ok=True, url=self.base_url)
+            except AnimeWorldAccessError as exc:
+                health = AnimeWorldHealth(ok=False, url=self.base_url, error=exc)
+            _HEALTH_CACHE[self.base_url] = (health, time.monotonic(), generation)
+            return health
 
     def slug_to_url(self, slug: str) -> str:
         return f"{self.base_url}/play/{slug.strip('/')}/"
@@ -260,6 +289,7 @@ class AnimeWorldClient:
         with _SEARCH_CACHE_LOCK:
             cached = _SEARCH_CACHE.get(cache_key)
             if cached and now - cached[1] < _SEARCH_CACHE_TTL:
+                _audit_cache_hit("search", self.base_url + "/search")
                 return [dict(item) for item in cached[0]]
 
         merged: list[dict] = []
@@ -299,6 +329,7 @@ class AnimeWorldClient:
         with _META_CACHE_LOCK:
             cached = _META_CACHE.get(target)
             if cached and now - cached[4] < _META_CACHE_TTL:
+                _audit_cache_hit("metadata", target)
                 info, episodes, final_url, is_placeholder, _ = cached
                 return dict(info), [dict(item) for item in episodes], final_url, is_placeholder
 
@@ -367,6 +398,7 @@ class AnimeWorldClient:
         with _VERIFY_CACHE_LOCK:
             cached = _VERIFY_CACHE.get(target)
             if cached and now - cached[1] < _VERIFY_CACHE_TTL:
+                _audit_cache_hit("verification", target)
                 return cached[0].copy()
 
         response = request_animeworld("GET", target, session=self._session(), timeout=15, allow_redirects=True)
@@ -397,7 +429,8 @@ class AnimeWorldClient:
             except AnimeWorldAccessError as exc:
                 if exc.kind == "cooldown" or exc.status_code != 401:
                     raise
-                session = _reset_shared_session(self.base_url)
+                audit("animeworld.http.retry", {**request_context(), "cause": exc.kind, "status_code": exc.status_code})
+                session = _reset_shared_session(self.base_url, session)
                 response = request_animeworld(
                     "GET",
                     f"{self.base_url}/api/episode/info",
@@ -420,7 +453,7 @@ class AnimeWorldClient:
         total_bytes = 0
         last_modified = None
         try:
-            head = self._session().head(cdn_url, timeout=8, allow_redirects=True)
+            head = _get_cdn_session().head(cdn_url, timeout=8, allow_redirects=True)
             total_bytes = int(head.headers.get("Content-Length", 0))
             last_modified = head.headers.get("Last-Modified")
         except Exception:

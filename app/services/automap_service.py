@@ -11,6 +11,7 @@ from ..core.config import settings
 from ..core.log_events import format_movie_automap_lines, format_show_automap_lines, log_animeworld_error, log_block, log_info, log_warning
 from ..core.logging import get_logger
 from ..integrations.animeworld_access import AnimeWorldAccessError
+from ..integrations.animeworld_transport import animeworld_operation
 from ..domain.release_window import has_started
 from ..repositories.db import get_db
 from ..repositories.shows import get_show_detail
@@ -486,6 +487,7 @@ def _propagate_single_link(
     reserved_links.add(best["aw_link"])
 
 
+@animeworld_operation("automap.movie")
 def automap_movie(movie_id: int, force: bool = False, *, emit_logs: bool = True) -> dict:
     if _automap_stop_requested():
         return {"status": "cancelled", "movie_id": movie_id}
@@ -555,6 +557,7 @@ def automap_movie(movie_id: int, force: bool = False, *, emit_logs: bool = True)
     return {"status": "success", "movie_id": movie_id, "mapping": mapping, "candidates": candidates[:5]}
 
 
+@animeworld_operation("automap.movie.preview")
 def automap_movie_preview(movie_id: int) -> dict:
     movie = get_movie_detail(movie_id)
     if not movie:
@@ -581,6 +584,7 @@ def automap_movie_preview(movie_id: int) -> dict:
     }
 
 
+@animeworld_operation("automap.show")
 def automap_show(show_id: int, season_number: int | None = None, force: bool = False, *, emit_logs: bool = True) -> dict:
     if _automap_stop_requested():
         return {
@@ -833,6 +837,7 @@ def automap_show(show_id: int, season_number: int | None = None, force: bool = F
     }
 
 
+@animeworld_operation("automap.show.preview")
 def automap_show_preview(show_id: int, season_number: int | None = None) -> dict:
     show = get_show_detail(show_id)
     if not show:
@@ -948,6 +953,7 @@ def _run_background(target, *args, **kwargs) -> dict:
     return {"status": "started"}
 
 
+@animeworld_operation("automap.library")
 def automap_all(force: bool = False) -> dict:
     with get_db() as conn:
         if force:

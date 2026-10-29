@@ -17,6 +17,7 @@ from requests.adapters import HTTPAdapter
 from ..core.config import settings
 
 _operation: ContextVar[tuple[str, str] | None] = ContextVar("animeworld_operation", default=None)
+_logical_request: ContextVar[str] = ContextVar("animeworld_logical_request", default="")
 
 
 def audit(event_type: str, details: dict) -> None:
@@ -27,11 +28,28 @@ def audit(event_type: str, details: dict) -> None:
 
 @contextmanager
 def animeworld_operation(source: str):
+    if _operation.get() is not None:
+        yield
+        return
     token = _operation.set((source, uuid4().hex))
     try:
         yield
     finally:
         _operation.reset(token)
+
+
+@contextmanager
+def animeworld_request():
+    token = _logical_request.set(uuid4().hex)
+    try:
+        yield
+    finally:
+        _logical_request.reset(token)
+
+
+def request_context() -> dict:
+    source, operation_id = _operation.get() or (threading.current_thread().name, "")
+    return {"source": source, "operation_id": operation_id, "logical_request_id": _logical_request.get()}
 
 
 def safe_endpoint(url: str) -> str:
@@ -95,17 +113,18 @@ class AnimeWorldTrafficController:
         with self._condition:
             return {
                 "interval_ms": round(self.interval * 1000), "max_in_flight": self.limit,
+                "cooldown_seconds": self.cooldown,
                 "active": self._active, "waiting": len(self._queue), "requests": self._sequence,
                 "cooldown_remaining_seconds": round(max(0, self._blocked_until - time.monotonic()), 3),
                 "recovery_probe": self._probe,
+                "rejection_generation": self._rejection_generation,
             }
 
     def acquire(self, method: str, url: str) -> dict:
         ticket = object()
         queued = time.monotonic()
-        source, operation_id = _operation.get() or (threading.current_thread().name, "")
-        details: dict = {"request_id": uuid4().hex, "run_id": self._run_id, "source": source,
-                   "operation_id": operation_id, "method": method, "endpoint": safe_endpoint(url)}
+        details: dict = {"request_id": uuid4().hex, "run_id": self._run_id, **request_context(),
+                         "method": method, "endpoint": safe_endpoint(url)}
         with self._condition:
             self._queue.append(ticket)
             try:

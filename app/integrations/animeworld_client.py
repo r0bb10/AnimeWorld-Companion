@@ -13,6 +13,7 @@ from bs4.element import Tag
 
 from ..core.config import settings
 from .animeworld_access import AnimeWorldAccessError, request_animeworld
+from .animeworld_transport import mount_animeworld_transport
 
 _UA = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
@@ -67,10 +68,12 @@ def _new_session() -> requests.Session:
     adapter = HTTPAdapter(pool_connections=_POOL_MAXSIZE, pool_maxsize=_POOL_MAXSIZE, max_retries=0)
     session.mount("http://", adapter)
     session.mount("https://", adapter)
+    mount_animeworld_transport(session, _session_base_url())
     return session
 
 
 def _bootstrap_session(session: requests.Session, base_url: str) -> requests.Session:
+    mount_animeworld_transport(session, base_url)
     response = request_animeworld("GET", base_url, session=session, timeout=15)
     match = re.search(r'<meta[^>]+id="csrf-token"[^>]+content="([^"]+)"', response.text)
     if match:
@@ -107,7 +110,7 @@ class AnimeWorldClient:
         try:
             return request_animeworld("POST", f"{self.base_url}{path}", session=session, timeout=15, **kwargs)
         except AnimeWorldAccessError as exc:
-            if exc.status_code not in {401, 403} and exc.kind != "timeout":
+            if exc.kind == "cooldown" or (exc.status_code != 401 and exc.kind != "timeout"):
                 raise
             session = _reset_shared_session(self.base_url)
             return request_animeworld("POST", f"{self.base_url}{path}", session=session, timeout=15, **kwargs)
@@ -392,7 +395,7 @@ class AnimeWorldClient:
                     timeout=15,
                 )
             except AnimeWorldAccessError as exc:
-                if exc.status_code not in {401, 403}:
+                if exc.kind == "cooldown" or exc.status_code != 401:
                     raise
                 session = _reset_shared_session(self.base_url)
                 response = request_animeworld(

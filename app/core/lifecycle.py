@@ -6,6 +6,7 @@ from .config import settings
 from .log_events import log_info
 from .logging import get_logger, shutdown_logging
 from ..repositories.schema import init_db
+from ..integrations.animeworld_transport import audit, traffic
 from ..services.events_service import start_sse_streams, stop_sse_streams
 from ..services.background_service import start_background_workers, stop_background_workers
 from ..services.download_service import pause_active_downloads
@@ -37,10 +38,13 @@ async def lifespan(app):
         lines=lines,
     )
     init_db()
+    traffic.start()
+    audit("animeworld.http.policy", traffic.snapshot())
     start_sse_streams()
     start_background_workers()
     yield
     stop_sse_streams()
+    traffic.stop()
     pause_active_downloads(reason="system")
     stop_background_workers()
     log_info(logger, "lifecycle.stop", "AWC rebuild foundation stopping")

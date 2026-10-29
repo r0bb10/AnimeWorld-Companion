@@ -81,8 +81,17 @@ def prune_log_events(retention_days: int) -> int:
         return 0
     with get_log_db(write=True) as conn:
         cursor = conn.execute(
-            "DELETE FROM log_events WHERE datetime(created_at) < datetime('now', ?)",
+            "DELETE FROM log_events WHERE logger != 'animeworld.audit' AND datetime(created_at) < datetime('now', ?)",
             (f"-{days} day",),
+        )
+    return int(cursor.rowcount or 0)
+
+
+def prune_animeworld_audit(retention_days: int) -> int:
+    with get_log_db(write=True) as conn:
+        cursor = conn.execute(
+            "DELETE FROM log_events WHERE logger = 'animeworld.audit' AND datetime(created_at) < datetime('now', ?)",
+            (f"-{max(1, retention_days)} day",),
         )
     return int(cursor.rowcount or 0)
 

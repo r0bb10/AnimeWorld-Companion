@@ -1,19 +1,22 @@
 """AnimeWorld request failures shared by clients and services."""
 
 from http import HTTPStatus
-from urllib.parse import urlsplit, urlunsplit
 
 import requests
+
+from .animeworld_transport import AnimeWorldRequestBlocked, mount_animeworld_transport, safe_endpoint
 
 
 class AnimeWorldAccessError(requests.RequestException):
     def __init__(self, error: requests.RequestException, endpoint: str):
         response = error.response
         self.status_code = response.status_code if response is not None else None
-        parts = urlsplit(endpoint)
-        self.endpoint = urlunsplit((parts.scheme, parts.netloc, parts.path, "", ""))
+        self.endpoint = safe_endpoint(endpoint)
         self.retry_after = response.headers.get("Retry-After") if response is not None else None
-        if self.status_code in {401, 403}:
+        if isinstance(error, AnimeWorldRequestBlocked):
+            self.kind = "cooldown"
+            self.retry_after = error.retry_after
+        elif self.status_code in {401, 403}:
             self.kind = "access_denied"
         elif self.status_code == 429:
             self.kind = "rate_limited"
@@ -48,7 +51,12 @@ class AnimeWorldAccessError(requests.RequestException):
 
 def request_animeworld(method: str, url: str, *, session: requests.Session | None = None, **kwargs) -> requests.Response:
     try:
-        response = session.request(method, url, **kwargs) if session is not None else requests.request(method, url, **kwargs)
+        if session is None:
+            with requests.Session() as standalone:
+                mount_animeworld_transport(standalone, url)
+                response = standalone.request(method, url, **kwargs)
+        else:
+            response = session.request(method, url, **kwargs)
         response.raise_for_status()
         return response
     except requests.RequestException as exc:

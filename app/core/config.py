@@ -29,6 +29,16 @@ def _csv(name: str, default: str = "") -> tuple[str, ...]:
     return tuple(part.strip() for part in raw.split(",") if part.strip())
 
 
+def _positive_int(name: str, default: int) -> int:
+    try:
+        value = int(_get(name, str(default)))
+    except ValueError:
+        raise RuntimeError(f"{name} must be a positive integer") from None
+    if value <= 0:
+        raise RuntimeError(f"{name} must be a positive integer")
+    return value
+
+
 def _resolve_database_path() -> str:
     configured = _get("AWC_DATABASE_PATH", "/config/database.db")
     repo_root = Path(__file__).resolve().parents[2]
@@ -99,6 +109,12 @@ def _normalize_manager_url(raw_url: str) -> str:
 @dataclass(frozen=True)
 class Settings:
     aw_base_url: str
+    aw_request_interval_ms: int
+    aw_max_in_flight: int
+    aw_access_cooldown_seconds: int
+    aw_health_cache_seconds: int
+    aw_request_audit_enabled: bool
+    aw_request_audit_retention_days: int
     awc_api_key: str
     awc_port: int
     awc_url: str
@@ -136,6 +152,12 @@ class Settings:
 def load_settings() -> Settings:
     return Settings(
         aw_base_url=_get("AW_BASE_URL"),
+        aw_request_interval_ms=_positive_int("AW_REQUEST_INTERVAL_MS", 50),
+        aw_max_in_flight=_positive_int("AW_MAX_IN_FLIGHT", 8),
+        aw_access_cooldown_seconds=_positive_int("AW_ACCESS_COOLDOWN_SECONDS", 300),
+        aw_health_cache_seconds=_positive_int("AW_HEALTH_CACHE_SECONDS", 60),
+        aw_request_audit_enabled=_get("AW_REQUEST_AUDIT_ENABLED", "true").lower() == "true",
+        aw_request_audit_retention_days=_positive_int("AW_REQUEST_AUDIT_RETENTION_DAYS", 7),
         awc_api_key=_get("AWC_API_KEY"),
         awc_port=_int("AWC_PORT", 7004),
         awc_url=_get("AWC_URL"),

@@ -7,10 +7,11 @@ import logging
 from logging.handlers import QueueHandler, QueueListener
 from queue import SimpleQueue
 import sys
+import time
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from .config import settings
-from ..repositories.log_history import init_log_db, insert_log_event, prune_log_events
+from ..repositories.log_history import init_log_db, insert_log_event, prune_animeworld_audit, prune_log_events
 
 _VALID_LEVELS = {"CRITICAL", "ERROR", "WARNING", "INFO", "DEBUG", "NOTSET"}
 _DEBUG_ONLY_UVICORN_MESSAGES = (
@@ -28,6 +29,7 @@ class SQLiteLogHandler(logging.Handler):
     def __init__(self, level: int) -> None:
         super().__init__(level=level)
         self._formatter = logging.Formatter()
+        self._last_audit_prune = time.monotonic()
 
     def emit(self, record: logging.LogRecord) -> None:
         try:
@@ -47,6 +49,9 @@ class SQLiteLogHandler(logging.Handler):
                 entity_title=str(getattr(record, "awc_entity_title", "") or "") or None,
                 traceback=traceback,
             )
+            if record.name == "animeworld.audit" and time.monotonic() - self._last_audit_prune >= 3600:
+                prune_animeworld_audit(settings.aw_request_audit_retention_days)
+                self._last_audit_prune = time.monotonic()
         except Exception:
             self.handleError(record)
 
@@ -120,17 +125,27 @@ def configure_logging() -> None:
     handler.addFilter(RecordRewriteFilter())
     root.addHandler(handler)
 
-    if settings.log_db_enabled:
+    audit_logger = logging.getLogger("animeworld.audit")
+    audit_logger.handlers.clear()
+    audit_logger.propagate = False
+    audit_logger.setLevel(logging.INFO)
+    if settings.log_db_enabled or settings.aw_request_audit_enabled:
         init_log_db()
         prune_log_events(settings.log_db_retention_days)
+        prune_animeworld_audit(settings.aw_request_audit_retention_days)
         queue: SimpleQueue = SimpleQueue()
-        queue_handler = QueueHandler(queue)
-        queue_handler.setLevel(level)
-        queue_handler.addFilter(RecordRewriteFilter())
-        root.addHandler(queue_handler)
-        sqlite_handler = SQLiteLogHandler(level=level)
+        if settings.log_db_enabled:
+            queue_handler = QueueHandler(queue)
+            queue_handler.setLevel(level)
+            queue_handler.addFilter(RecordRewriteFilter())
+            root.addHandler(queue_handler)
+        if settings.aw_request_audit_enabled:
+            audit_logger.addHandler(QueueHandler(queue))
+        sqlite_handler = SQLiteLogHandler(level=logging.DEBUG)
         _QUEUE_LISTENER = QueueListener(queue, sqlite_handler, respect_handler_level=True)
         _QUEUE_LISTENER.start()
+    else:
+        audit_logger.addHandler(logging.NullHandler())
 
     for logger_name in ("uvicorn", "uvicorn.error", "uvicorn.access"):
         uvicorn_logger = logging.getLogger(logger_name)

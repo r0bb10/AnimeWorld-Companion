@@ -21,6 +21,7 @@ from ..core.log_events import (
 )
 from ..core.logging import get_logger
 from ..integrations.animeworld_access import AnimeWorldAccessError
+from ..integrations.animeworld_transport import traffic
 from ..services.catalog_service import (
     build_catalog_snapshot,
     build_movie_snapshot,
@@ -632,6 +633,7 @@ def api_status(_: str = Depends(require_api_key)) -> dict:
         "radarr_configured": bool(settings.radarr_url and settings.radarr_api_key),
         "sync": sync_status(),
         "runtime": runtime_state(),
+        "animeworld_traffic": traffic.snapshot(),
         "automap": automap_status(),
         "sanitizer": sanitizer,
         "links": sanitizer,

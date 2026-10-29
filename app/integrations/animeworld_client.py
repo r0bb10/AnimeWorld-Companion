@@ -80,11 +80,15 @@ def _new_session() -> requests.Session:
 
 def _bootstrap_session(session: requests.Session, base_url: str) -> requests.Session:
     mount_animeworld_transport(session, base_url)
-    response = request_animeworld("GET", base_url, session=session, timeout=15)
-    match = re.search(r'<meta[^>]+id="csrf-token"[^>]+content="([^"]+)"', response.text)
-    if match:
-        session.headers["csrf-token"] = match.group(1)
-    return session
+    try:
+        response = request_animeworld("GET", base_url, session=session, timeout=15)
+        match = re.search(r'<meta[^>]+id="csrf-token"[^>]+content="([^"]+)"', response.text)
+        if match:
+            session.headers["csrf-token"] = match.group(1)
+        return session
+    except BaseException:
+        session.close()
+        raise
 
 
 def _get_shared_session(base_url: str) -> requests.Session:

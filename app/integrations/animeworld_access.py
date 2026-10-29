@@ -8,7 +8,7 @@ import threading
 import requests
 
 from .animeworld_transport import (
-    AnimeWorldRequestBlocked, animeworld_operation, animeworld_request, audit,
+    AnimeWorldHTTPAdapter, AnimeWorldRequestBlocked, animeworld_operation, animeworld_request, audit,
     mount_animeworld_transport, request_context, safe_endpoint,
 )
 
@@ -94,6 +94,15 @@ def _request_animeworld(method: str, url: str, *, session: requests.Session | No
                 mount_animeworld_transport(standalone, url)
                 response = standalone.request(method, url, **kwargs)
         else:
+            if isinstance(session, requests.Session):
+                prepared = requests.PreparedRequest()
+                prepared.prepare_url(url, None)
+                if not isinstance(session.get_adapter(str(prepared.url)), AnimeWorldHTTPAdapter):
+                    audit("animeworld.http.refused", {
+                        **request_context(), "endpoint": safe_endpoint(url), "sent": False,
+                        "reason": "outside_controlled_portal_origin",
+                    })
+                    raise requests.RequestException("AnimeWorld URL is outside the controlled portal origin")
             response = session.request(method, url, **kwargs)
         response.raise_for_status()
         return response

@@ -112,6 +112,7 @@ class AnimeWorldTrafficController:
     def snapshot(self) -> dict:
         with self._condition:
             return {
+                "run_id": self._run_id,
                 "interval_ms": round(self.interval * 1000), "max_in_flight": self.limit,
                 "cooldown_seconds": self.cooldown,
                 "active": self._active, "waiting": len(self._queue), "requests": self._sequence,
@@ -189,7 +190,8 @@ traffic = AnimeWorldTrafficController(
 
 
 class AnimeWorldHTTPAdapter(HTTPAdapter):
-    def __init__(self, controller: AnimeWorldTrafficController = traffic):
+    def __init__(self, controller: AnimeWorldTrafficController | None = None):
+        controller = controller if controller is not None else traffic
         super().__init__(pool_connections=controller.limit, pool_maxsize=controller.limit, max_retries=0)
         self.controller = controller
 

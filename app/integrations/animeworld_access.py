@@ -48,6 +48,10 @@ class AnimeWorldAccessError(requests.RequestException):
         status = f"{self.status_code} {self.reason}" if self.status_code is not None else self.reason
         super().__init__(f"AnimeWorld: {status} ({self.endpoint})", response=response)
 
+    @property
+    def blocks_requests(self) -> bool:
+        return self.kind == "cooldown" or self.status_code in {403, 429}
+
     def details(self) -> dict:
         return {
             "kind": self.kind,

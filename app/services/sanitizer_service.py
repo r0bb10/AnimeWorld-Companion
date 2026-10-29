@@ -79,16 +79,52 @@ def _verify_slug(client: AnimeWorldClient, slug: str) -> dict:
 def _is_transient_aw_error(exc: Exception) -> bool:
     if isinstance(exc, AnimeWorldAccessError):
         return exc.kind != "not_found"
-    if isinstance(exc, (requests.Timeout, requests.ConnectionError)):
-        return True
     if isinstance(exc, requests.HTTPError):
         status = getattr(getattr(exc, "response", None), "status_code", None)
-        if status is None:
-            return True
-        return int(status) >= 500 or int(status) == 429
-    if isinstance(exc, requests.RequestException):
-        return True
-    return False
+        return status not in {404, 410}
+    return isinstance(exc, requests.RequestException)
+
+
+def _as_access_error(error: requests.RequestException) -> AnimeWorldAccessError:
+    if isinstance(error, AnimeWorldAccessError):
+        return error
+    response = error.response
+    endpoint = str(response.url or settings.aw_base_url) if response is not None else settings.aw_base_url
+    return AnimeWorldAccessError(error, endpoint)
+
+
+def _skip_item_error(result: dict, error: requests.RequestException, *, phase: str, kind: str, target: dict) -> None:
+    access_error = _as_access_error(error)
+    if access_error.blocks_requests:
+        raise access_error
+    result["skipped"] += 1
+    failure = {"phase": phase, "target_kind": kind, "target": target, "error_kind": type(error).__name__}
+    failure["upstream"] = access_error.details()
+    log_animeworld_error(logger, f"sanitizer.{kind}.skipped", "Sanitizer item skipped", access_error, details=failure)
+    result["failures"].append(failure)
+
+
+def _collect_slug_results(slugs: list[str], fetch) -> dict[str, dict | Exception]:
+    results: dict[str, dict | Exception] = {}
+    if not slugs:
+        return results
+    with ThreadPoolExecutor(max_workers=min(_NETWORK_WORKERS, len(slugs))) as executor:
+        futures = {executor.submit(copy_context().run, fetch, slug): slug for slug in slugs}
+        try:
+            for future in as_completed(futures):
+                slug = futures[future]
+                try:
+                    results[slug] = future.result()
+                except requests.RequestException as exc:
+                    error = _as_access_error(exc)
+                    if error.blocks_requests:
+                        raise error
+                    results[slug] = exc
+        except BaseException:
+            for future in futures:
+                future.cancel()
+            raise
+    return results
 
 
 def _has_aired(season: dict) -> bool:
@@ -214,6 +250,19 @@ _movie_change_log: dict[int, _ChangeLogEntry] = {}
 def _clear_change_logs() -> None:
     _show_change_log.clear()
     _movie_change_log.clear()
+
+
+def _flush_change_logs() -> None:
+    for kind, changes in (("show", _show_change_log), ("movie", _movie_change_log)):
+        for item_id, entry in sorted(changes.items()):
+            lines = entry.get("lines", [])
+            if lines:
+                title = str(entry.get("title") or kind.title())
+                log_block(
+                    logger, logging.INFO, title, lines, event_type=f"sanitizer.{kind}.changed",
+                    entity_kind=kind, entity_id=item_id, entity_title=title,
+                )
+    _clear_change_logs()
 
 
 def _add_show_lines(show_id: int, title: str, lines: list[str]) -> None:
@@ -432,7 +481,7 @@ def _needs_show_mapping_refresh(show: dict, season: dict) -> bool:
 
 @animeworld_operation("sanitizer")
 def sanitize_links_once() -> dict:
-    result: dict = {"checked": 0, "updated": 0, "removed": 0, "failed": 0, "skipped": 0}
+    result: dict = {"checked": 0, "updated": 0, "removed": 0, "failed": 0, "skipped": 0, "failures": []}
     try:
         return _sanitize_links_once(result)
     except AnimeWorldAccessError as exc:
@@ -443,26 +492,26 @@ def sanitize_links_once() -> dict:
             lines=[f"checked={result['checked']}", f"updated={result['updated']}", f"removed={result['removed']}"],
         )
         return result
+    except Exception as exc:
+        result.update(status="failed", error=str(exc))
+        _set_state(last_result=result, last_error=str(exc), last_finished_at=datetime.now(UTC).isoformat(), running=False)
+        raise
     finally:
-        _clear_change_logs()
+        _flush_change_logs()
 
 
 def _sanitize_links_once(result: dict) -> dict:
     client = AnimeWorldClient()
     now = datetime.now(UTC).isoformat()
     show_seasons_to_refresh: set[tuple[int, int]] = set()
+    failed_show_seasons: set[tuple[int, int]] = set()
+    failed_movie_ids: set[int] = set()
     _clear_change_logs()
     log_info(logger, "sanitizer.started", "Sanitizer cycle started")
 
     health = client.health()
     if not health.ok:
-        if health.error:
-            raise health.error
-        message = f"AnimeWorld unreachable: {health.url}"
-        result.update(status="interrupted", error=message)
-        log_warning(logger, "sanitizer.skipped", "Sanitizer skipped", lines=[message])
-        _set_state(last_result=result, last_error=message, last_finished_at=now, running=False)
-        return result
+        _skip_item_error(result, health.error or requests.ConnectionError(), phase="health", kind="health", target={})
 
     with get_db() as conn:
         show_rows = [dict(row) for row in conn.execute(
@@ -511,17 +560,8 @@ def _sanitize_links_once(result: dict) -> dict:
     show_details = {show_id: get_show_detail(show_id) for show_id in sorted(show_ids)}
     movie_details = {movie_id: get_movie_detail(movie_id) for movie_id in sorted(movie_ids)}
 
-    slug_results: dict[str, dict | Exception] = {}
     all_slugs = sorted({str(row.get("aw_link") or "").strip() for row in show_rows + movie_rows if str(row.get("aw_link") or "").strip()})
-    if all_slugs:
-        with ThreadPoolExecutor(max_workers=min(_NETWORK_WORKERS, len(all_slugs))) as executor:
-            future_map = {executor.submit(copy_context().run, _fetch_slug_verification, slug): slug for slug in all_slugs}
-            for future in as_completed(future_map):
-                slug = future_map[future]
-                try:
-                    slug_results[slug] = future.result()
-                except Exception as exc:
-                    slug_results[slug] = exc
+    slug_results = _collect_slug_results(all_slugs, _fetch_slug_verification)
 
     metadata_needed_slugs: set[str] = set()
     for row in show_rows:
@@ -546,21 +586,13 @@ def _sanitize_links_once(result: dict) -> dict:
             metadata_needed_slugs.add(str(row.get("aw_link") or "").strip())
 
     final_slugs = sorted(metadata_needed_slugs)
-    slug_metadata: dict[str, dict | Exception] = {}
-    if final_slugs:
-        with ThreadPoolExecutor(max_workers=min(_NETWORK_WORKERS, len(final_slugs))) as executor:
-            future_map = {executor.submit(copy_context().run, _fetch_slug_metadata, slug): slug for slug in final_slugs}
-            for future in as_completed(future_map):
-                slug = future_map[future]
-                try:
-                    slug_metadata[slug] = future.result()
-                except Exception as exc:
-                    slug_metadata[slug] = exc
+    slug_metadata = _collect_slug_results(final_slugs, _fetch_slug_metadata)
 
     for row in show_rows:
         result["checked"] += 1
         aw_link = str(row.get("aw_link") or "").strip()
         verification = slug_results.get(aw_link)
+        phase = "verification"
         try:
             if isinstance(verification, Exception):
                 raise verification
@@ -569,6 +601,10 @@ def _sanitize_links_once(result: dict) -> dict:
             if bool(verification.get("is_soft_404")):
                 raise _Soft404MappingError(aw_link)
             new_slug = str(verification.get("final_slug") or aw_link).strip()
+            metadata = slug_metadata.get(new_slug)
+            if isinstance(metadata, Exception):
+                phase = "metadata"
+                raise metadata
             show = show_details.get(int(row["show_id"]))
             season = _season_by_number(show or {}, int(row["season_number"]))
             season_key = (int(row["show_id"]), int(row["season_number"]))
@@ -581,9 +617,7 @@ def _sanitize_links_once(result: dict) -> dict:
                 )
             )
             if needs_refresh:
-                metadata = slug_metadata.get(new_slug)
-                if isinstance(metadata, Exception):
-                    raise metadata
+                phase = "metadata"
                 if not metadata:
                     raise RuntimeError(f"Missing sanitizer metadata for {new_slug}")
                 if not show or not season:
@@ -595,24 +629,16 @@ def _sanitize_links_once(result: dict) -> dict:
             else:
                 _touch_show_mapping(int(row["id"]), now)
         except Exception as exc:
+            failed_show_seasons.add((int(row["show_id"]), int(row["season_number"])))
             soft404 = isinstance(exc, _Soft404MappingError)
-            if _is_transient_aw_error(exc):
-                result["skipped"] += 1
-                if isinstance(exc, AnimeWorldAccessError):
-                    log_animeworld_error(
-                        logger, "sanitizer.show.skipped", "Show mapping verification skipped", exc,
-                        details={"show_id": row["show_id"], "season_number": row["season_number"]},
-                    )
-                    continue
-                log_warning(
-                    logger,
-                    "sanitizer.show.skipped",
-                    "Show mapping verification skipped",
-                    lines=[f"{display_aw_link(row['aw_link'])} (transient AnimeWorld error)"],
-                    entity_kind="show",
-                    entity_id=row.get("show_id"),
+            if isinstance(exc, requests.RequestException) and _is_transient_aw_error(exc):
+                _skip_item_error(
+                    result, exc, phase=phase, kind="show",
+                    target={"show_id": row["show_id"], "season_number": row["season_number"]},
                 )
                 continue
+            if not soft404 and not isinstance(exc, requests.RequestException):
+                raise
             failures = int(row["link_check_failures"] or 0) + 1
             reason_suffix = " [not-found page]" if soft404 else ""
             if failures >= 2:
@@ -649,6 +675,7 @@ def _sanitize_links_once(result: dict) -> dict:
         result["checked"] += 1
         aw_link = str(row.get("aw_link") or "").strip()
         verification = slug_results.get(aw_link)
+        phase = "verification"
         try:
             if isinstance(verification, Exception):
                 raise verification
@@ -657,15 +684,17 @@ def _sanitize_links_once(result: dict) -> dict:
             if bool(verification.get("is_soft_404")):
                 raise _Soft404MappingError(aw_link)
             new_slug = str(verification.get("final_slug") or aw_link).strip()
+            metadata = slug_metadata.get(new_slug)
+            if isinstance(metadata, Exception):
+                phase = "metadata"
+                raise metadata
             movie = movie_details.get(int(row["movie_id"]))
             needs_refresh = (
                 new_slug != str(row.get("aw_link") or "").strip()
                 or _metadata_refresh_due(row, movie)
             )
             if needs_refresh:
-                metadata = slug_metadata.get(new_slug)
-                if isinstance(metadata, Exception):
-                    raise metadata
+                phase = "metadata"
                 if not metadata:
                     raise RuntimeError(f"Missing sanitizer metadata for {new_slug}")
                 if not movie:
@@ -677,24 +706,15 @@ def _sanitize_links_once(result: dict) -> dict:
             else:
                 _touch_movie_mapping(int(row["id"]), now)
         except Exception as exc:
+            failed_movie_ids.add(int(row["movie_id"]))
             soft404 = isinstance(exc, _Soft404MappingError)
-            if _is_transient_aw_error(exc):
-                result["skipped"] += 1
-                if isinstance(exc, AnimeWorldAccessError):
-                    log_animeworld_error(
-                        logger, "sanitizer.movie.skipped", "Movie mapping verification skipped", exc,
-                        details={"movie_id": row["movie_id"]},
-                    )
-                    continue
-                log_warning(
-                    logger,
-                    "sanitizer.movie.skipped",
-                    "Movie mapping verification skipped",
-                    lines=[f"{display_aw_link(row['aw_link'])} (transient AnimeWorld error)"],
-                    entity_kind="movie",
-                    entity_id=row.get("movie_id"),
+            if isinstance(exc, requests.RequestException) and _is_transient_aw_error(exc):
+                _skip_item_error(
+                    result, exc, phase=phase, kind="movie", target={"movie_id": row["movie_id"]},
                 )
                 continue
+            if not soft404 and not isinstance(exc, requests.RequestException):
+                raise
             failures = int(row["link_check_failures"] or 0) + 1
             reason_suffix = " [not-found page]" if soft404 else ""
             if failures >= 2:
@@ -745,9 +765,17 @@ def _sanitize_links_once(result: dict) -> dict:
             continue
         mappings = list(season.get("mappings") or [])
         if mappings:
-            clear_show_sanitizer_retry(show_id, season_number)
+            if (show_id, season_number) not in failed_show_seasons:
+                clear_show_sanitizer_retry(show_id, season_number)
             continue
-        response = automap_show(show_id, season_number=season_number, force=False, emit_logs=False)
+        try:
+            response = automap_show(show_id, season_number=season_number, force=False, emit_logs=False)
+        except requests.RequestException as exc:
+            failed_show_seasons.add((show_id, season_number))
+            _skip_item_error(
+                result, exc, phase="retry", kind="show", target={"show_id": show_id, "season_number": season_number},
+            )
+            continue
         if response.get("status") in {"success", "partial"} and season_number in set(response.get("mapped_seasons") or []):
             clear_show_sanitizer_retry(show_id, season_number)
             result["updated"] += 1
@@ -769,9 +797,14 @@ def _sanitize_links_once(result: dict) -> dict:
             clear_movie_sanitizer_retry(movie_id)
             continue
         if movie.get("mapping"):
-            clear_movie_sanitizer_retry(movie_id)
+            if movie_id not in failed_movie_ids:
+                clear_movie_sanitizer_retry(movie_id)
             continue
-        response = automap_movie(movie_id, force=False, emit_logs=False)
+        try:
+            response = automap_movie(movie_id, force=False, emit_logs=False)
+        except requests.RequestException as exc:
+            _skip_item_error(result, exc, phase="retry", kind="movie", target={"movie_id": movie_id})
+            continue
         if response.get("status") == "success":
             clear_movie_sanitizer_retry(movie_id)
             result["updated"] += 1
@@ -784,6 +817,8 @@ def _sanitize_links_once(result: dict) -> dict:
                 )
 
     for show_id, season_number in sorted(show_seasons_to_refresh):
+        if (show_id, season_number) in failed_show_seasons:
+            continue
         show = get_show_detail(show_id)
         if not show:
             continue
@@ -792,7 +827,13 @@ def _sanitize_links_once(result: dict) -> dict:
             continue
         from .automap_service import automap_show
 
-        response = automap_show(show_id, season_number=season_number, force=True, emit_logs=False)
+        try:
+            response = automap_show(show_id, season_number=season_number, force=True, emit_logs=False)
+        except requests.RequestException as exc:
+            _skip_item_error(
+                result, exc, phase="structure", kind="show", target={"show_id": show_id, "season_number": season_number},
+            )
+            continue
         if response.get("status") in {"success", "partial"}:
             result["updated"] += 1
             refreshed = get_show_detail(show_id)
@@ -813,38 +854,12 @@ def _sanitize_links_once(result: dict) -> dict:
                     lines,
                 )
 
-    for show_id, entry in sorted(_show_change_log.items()):
-        lines = entry.get("lines", [])
-        if not lines:
-            continue
-        log_block(
-            logger,
-            logging.INFO,
-            str(entry.get("title") or "Show"),
-            lines,
-            event_type="sanitizer.show.changed",
-            entity_kind="show",
-            entity_id=show_id,
-            entity_title=str(entry.get("title") or "Show"),
-        )
-    for movie_id, entry in sorted(_movie_change_log.items()):
-        lines = entry.get("lines", [])
-        if not lines:
-            continue
-        log_block(
-            logger,
-            logging.INFO,
-            str(entry.get("title") or "Movie"),
-            lines,
-            event_type="sanitizer.movie.changed",
-            entity_kind="movie",
-            entity_id=movie_id,
-            entity_title=str(entry.get("title") or "Movie"),
-        )
-    _clear_change_logs()
+    _flush_change_logs()
 
     result["status"] = "partial" if result["failed"] or result["skipped"] else "completed"
-    _set_state(last_result=result, last_error="", last_finished_at=datetime.now(UTC).isoformat(), running=False)
+    if result["status"] == "partial":
+        result["error"] = f"Sanitizer completed with {result['failed']} failed and {result['skipped']} skipped checks"
+    _set_state(last_result=result, last_error=result.get("error", ""), last_finished_at=datetime.now(UTC).isoformat(), running=False)
     log_block(
         logger,
         logging.INFO,

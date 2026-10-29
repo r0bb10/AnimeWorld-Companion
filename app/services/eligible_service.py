@@ -140,6 +140,7 @@ def run_eligible_once() -> dict:
     checked = 0
     mapped_show_seasons = 0
     mapped_movies = 0
+    failures: list[dict] = []
     access_error = None
     current_target = None
 
@@ -161,34 +162,44 @@ def run_eligible_once() -> dict:
         },
     )
 
-    try:
-        for target in show_targets:
-            current_target = target
-            result = automap_show(
-                int(target["show_id"]),
-                season_number=int(target["season_number"]),
-                force=False,
-                emit_logs=False,
+    targets = [("show", target) for target in show_targets] + [("movie", target) for target in movie_targets]
+    for kind, target in targets:
+        current_target = target
+        try:
+            if kind == "show":
+                item_result = automap_show(
+                    int(target["show_id"]), season_number=int(target["season_number"]),
+                    force=False, emit_logs=False,
+                )
+            else:
+                item_result = automap_movie(int(target["movie_id"]), force=False, emit_logs=False)
+        except AnimeWorldAccessError as exc:
+            if exc.blocks_requests:
+                access_error = exc
+                break
+            failure = {"target_kind": kind, "target": target, "error": str(exc), "upstream": exc.details()}
+            failures.append(failure)
+            log_animeworld_error(
+                logger, "eligible.item.failed", "Eligible item failed", exc, details=failure,
+                lines=[f"item={target.get('title', '')}"],
             )
-            checked += 1
-            mapped = list(result.get("mapped_seasons") or [])
-            if mapped:
-                mapped_show_seasons += len(mapped)
-                _log_show_mapping(int(target["show_id"]), mapped)
-
-        for target in movie_targets:
-            current_target = target
-            result = automap_movie(int(target["movie_id"]), force=False, emit_logs=False)
-            checked += 1
-            if result.get("status") == "success" and result.get("mapping"):
+        else:
+            if kind == "show":
+                mapped = list(item_result.get("mapped_seasons") or [])
+                if mapped:
+                    mapped_show_seasons += len(mapped)
+                    _log_show_mapping(int(target["show_id"]), mapped)
+            elif item_result.get("status") == "success" and item_result.get("mapping"):
                 mapped_movies += 1
                 _log_movie_mapping(int(target["movie_id"]))
-    except AnimeWorldAccessError as exc:
-        access_error = exc
+        checked += 1
 
     result = {
-        "status": "interrupted" if access_error else "completed",
+        "status": "interrupted" if access_error else "partial" if failures else "completed",
         "checked": checked,
+        "failed": len(failures),
+        "failures": failures,
+        "remaining": len(targets) - checked,
         "show_targets": len(show_targets),
         "dated_show_targets": len(dated_show_targets),
         "dateless_show_targets": len(dateless_show_targets),
@@ -201,27 +212,23 @@ def run_eligible_once() -> dict:
         result["error"] = str(access_error)
         result["upstream"] = access_error.details()
         result["current_target"] = current_target
-        result["remaining"] = len(show_targets) + len(movie_targets) - checked
         log_animeworld_error(
             logger, "eligible.interrupted", "Eligible cycle interrupted", access_error, details=result,
             lines=[f"checked={checked}", f"remaining={result['remaining']}", f"item={(current_target or {}).get('title', '')}"],
         )
         return result
+    if failures:
+        result["error"] = f"Eligible cycle completed with {len(failures)} failed targets"
     log_info(
         logger,
         "eligible.finished",
-        "Eligible cycle finished",
+        "Eligible cycle completed with failures" if failures else "Eligible cycle finished",
         lines=[
             f"checked={checked}",
+            f"failed={len(failures)}",
             f"mapped_show_seasons={mapped_show_seasons}",
             f"mapped_movies={mapped_movies}",
         ],
-        details={
-            "checked": checked,
-            "dated_show_targets": len(dated_show_targets),
-            "dateless_show_targets": len(dateless_show_targets),
-            "mapped_show_seasons": mapped_show_seasons,
-            "mapped_movies": mapped_movies,
-        },
+        details=result,
     )
     return result
